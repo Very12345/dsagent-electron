@@ -1,6 +1,6 @@
 {
   "name": "dsagent-electron",
-  "version": "5.0.1",
+  "version": "5.0.2",
   "description": "DeepSeek Local Agent - Electron desktop app",
   "main": "main.js",
   "bin": {
