@@ -94,6 +94,7 @@ class QQBotClient {
                 {
                     file_type: 4,  // 4 表示普通文件
                     file_data: base64Data,
+					file_name: "测试.pdf",
                     url: "",
                     srv_send_msg: false
                 },
@@ -107,6 +108,7 @@ class QQBotClient {
             );
             
             console.log('[Upload] 上传成功');
+			console.log(response.data);
             return response.data;
         } catch (error) {
             console.error('[Upload] 上传失败:', error.response?.data || error.message);

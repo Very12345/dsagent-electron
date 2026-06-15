@@ -299,6 +299,7 @@ class QQBotClient extends EventEmitter {
                 {
                     file_type: 1,
                     file_data: base64Data,
+                    file_name: path.basename(filePath),
                     url: "",
                     srv_send_msg: false
                 },
@@ -461,6 +462,7 @@ class QQBotClient extends EventEmitter {
                 {
                     file_type: fileType,
                     file_data: base64Data,
+                    file_name: path.basename(filePath),
                     url: "",
                     srv_send_msg: false
                 },
