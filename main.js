@@ -2745,7 +2745,6 @@ app.whenReady().then(() => {
 // 更新事件
 autoUpdater.on('update-available', (info) => {
     if (mainWindow) {
-        mainWindow.webContents.send('update-available', info);
         dialog.showMessageBox(mainWindow, {
             type: 'info',
             title: '发现新版本',
@@ -2762,11 +2761,25 @@ autoUpdater.on('update-available', (info) => {
 });
 
 autoUpdater.on('download-progress', (progress) => {
+    // 发送进度到 agent 视图前端
+    if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+        agentView.webContents.send('update-progress', {
+            percent: Math.round(progress.percent),
+            bytesPerSecond: progress.bytesPerSecond,
+            transferred: progress.transferred,
+            total: progress.total
+        });
+    }
+    // 同时也发到主窗口
     if (mainWindow) mainWindow.webContents.send('update-progress', progress);
 });
 
 autoUpdater.on('update-downloaded', () => {
     if (mainWindow) {
+        // 通知前端进度完成
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('update-downloaded');
+        }
         dialog.showMessageBox(mainWindow, {
             type: 'info',
             title: '更新已下载',

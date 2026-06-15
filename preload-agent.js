@@ -119,4 +119,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('agent-show-continue-confirm', (event, data) => callback(data));
     },
     agentContinueResponse: (response) => ipcRenderer.send('agent-continue-response', response),
+
+    // 自动更新进度
+    onUpdateProgress: (callback) => {
+        ipcRenderer.on('update-progress', (event, data) => callback(data));
+    },
+    onUpdateDownloaded: (callback) => {
+        ipcRenderer.on('update-downloaded', () => callback());
+    },
 });
