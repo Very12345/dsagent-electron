@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: system-ui, 'Segoe UI', sans-serif;
+    background: #1e1e2e;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 2px;
+    gap: 2px;
+    user-select: none;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+body.light { background: #e8e8f0; }
+
+/* 分组标签 */
+.group-label {
+    font-size: 7px;
+    color: #5a5a7a;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 4px 0 1px 0;
+    width: 100%;
+    text-align: center;
+}
+body.light .group-label { color: #9999bb; }
+
+/* 视图/工具按钮 */
+.view-btn {
+    width: 48px;
+    height: 38px;
+    border: 2px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    transition: all .2s ease;
+    position: relative;
+    flex-shrink: 0;
+}
+.view-btn .icon { font-size: 16px; line-height: 1; }
+.view-btn .label { font-size: 8px; color: #6a6a8a; line-height: 1; font-weight: 500; }
+.view-btn:hover { background: rgba(14,165,233,.08); }
+.view-btn:hover .label { color: #8a8aaa; }
+.view-btn.active { border-color: #0ea5e9; background: rgba(14,165,233,.15); }
+.view-btn.active .label { color: #8ce; }
+.view-btn .badge {
+    position: absolute;
+    top: -1px; right: -1px;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    display: none;
+    border: 1px solid #1e1e2e;
+}
+.view-btn .badge.on { display: block; }
+.view-btn .badge.ds-gen { background: #22d3ee; animation: pulse 1s infinite; }
+.view-btn .badge.qw-gen { background: #fbbf24; animation: pulse 1s infinite; }
+body.light .view-btn .label { color: #8888aa; }
+body.light .view-btn:hover .label { color: #6666aa; }
+body.light .view-btn.active { border-color: #0ea5e9; background: rgba(14,165,233,.12); }
+body.light .view-btn.active .label { color: #0d7377; }
+
+/* 间隔线 */
+.sep { width: 28px; height: 1px; background: #2a2a4a; margin: 3px 0; flex-shrink: 0; }
+body.light .sep { background: #d0d0d8; }
+
+/* 确认模式小按钮组 */
+.confirm-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    align-items: center;
+    margin: 2px 0;
+}
+.confirm-btn {
+    width: 48px;
+    height: 24px;
+    border: 1px solid #3a3a5a;
+    border-radius: 5px;
+    background: transparent;
+    color: #6a6a8a;
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: 500;
+    text-align: center;
+    transition: all .2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.confirm-btn:hover { border-color: #0ea5e9; color: #8a8aaa; }
+.confirm-btn.on { border-color: #0ea5e9; background: rgba(14,165,233,.15); color: #8ce; }
+body.light .confirm-btn { border-color: #c0c0d8; color: #8888aa; }
+body.light .confirm-btn.on { border-color: #0ea5e9; background: rgba(14,165,233,.12); color: #0d7377; }
+
+/* 工具按钮（说明/导入） */
+.tool-btn {
+    width: 48px;
+    height: 30px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(14,165,233,.08);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    color: #7a7aaa;
+    transition: all .2s;
+    flex-shrink: 0;
+}
+.tool-btn:hover { background: rgba(14,165,233,.18); color: #a0a0d0; }
+.tool-btn.hidden { display: none; }
+body.light .tool-btn { background: rgba(14,165,233,.06); color: #8888aa; }
+body.light .tool-btn:hover { background: rgba(14,165,233,.12); color: #6666aa; }
+
+/* 主题切换 */
+.theme-btn {
+    width: 48px;
+    height: 30px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all .2s;
+    flex-shrink: 0;
+    margin-top: auto;
+}
+.theme-btn:hover { background: rgba(255,255,255,.06); }
+body.light .theme-btn:hover { background: rgba(0,0,0,.06); }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .3; }
+}
+</style>
+</head>
+<body>
+    <!-- 视图按钮 -->
+    <div class="group-label">视图</div>
+    <button class="view-btn active" data-view="deepseek" onclick="switchView('deepseek')" title="DeepSeek">
+        <span class="icon">🔍</span>
+        <span class="label">DS</span>
+        <span class="badge ds-gen" id="b-ds"></span>
+    </button>
+    <button class="view-btn" data-view="qwen" onclick="switchView('qwen')" title="Qwen">
+        <span class="icon">🌊</span>
+        <span class="label">QW</span>
+        <span class="badge qw-gen" id="b-qw"></span>
+    </button>
+    <button class="view-btn" data-view="agent" onclick="switchView('agent')" title="Agent">
+        <span class="icon">🤖</span>
+        <span class="label">AG</span>
+    </button>
+    <button class="view-btn" data-view="follow" onclick="switchView('follow')" title="跟随">
+        <span class="icon">👁</span>
+        <span class="label">FL</span>
+    </button>
+
+    <div class="sep"></div>
+    <div class="group-label">工具</div>
+
+    <!-- 说明按钮（仅 DeepSeek 视图下显示） -->
+    <button class="tool-btn" id="intro-btn" onclick="showIntro()" title="查看使用说明">💡</button>
+
+    <!-- 导入技能 -->
+    <button class="tool-btn" onclick="importSkills()" title="从文件导入技能">📥</button>
+
+    <div class="sep"></div>
+    <div class="group-label">审核</div>
+
+    <!-- 确认模式 -->
+    <div class="confirm-group">
+        <button class="confirm-btn on" data-mode="smart" onclick="setConfirmMode('smart')">智能</button>
+        <button class="confirm-btn" data-mode="strict" onclick="setConfirmMode('strict')">严格</button>
+        <button class="confirm-btn" data-mode="loose" onclick="setConfirmMode('loose')">宽松</button>
+    </div>
+
+    <!-- 主题切换 -->
+    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="切换主题">🌙</button>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        var currentView = 'deepseek';
+        var currentConfirmMode = 'smart';
+        var currentTheme = 'dark';
+
+        // ====== 视图切换 ======
+        function switchView(view) {
+            currentView = view;
+            document.querySelectorAll('.view-btn').forEach(function(b) {
+                b.classList.toggle('active', b.getAttribute('data-view') === view);
+            });
+            // 说明按钮可见性
+            document.getElementById('intro-btn').classList.toggle('hidden', view !== 'deepseek');
+            ipcRenderer.send('ctrl-view-select', view);
+        }
+
+        // ====== 说明 ======
+        function showIntro() {
+            ipcRenderer.send('ctrl-show-intro');
+        }
+
+        // ====== 导入技能 ======
+        function importSkills() {
+            ipcRenderer.send('ctrl-import-skills');
+        }
+
+        // ====== 确认模式 ======
+        function setConfirmMode(mode) {
+            currentConfirmMode = mode;
+            document.querySelectorAll('.confirm-btn').forEach(function(b) {
+                b.classList.toggle('on', b.getAttribute('data-mode') === mode);
+            });
+            ipcRenderer.send('ctrl-set-confirm-mode', mode);
+        }
+
+        // ====== 主题切换 ======
+        function toggleTheme() {
+            var newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            currentTheme = newTheme;
+            document.getElementById('theme-btn').textContent = newTheme === 'dark' ? '🌙' : '☀️';
+            document.body.classList.toggle('light', newTheme === 'light');
+            // 通过主进程广播给所有视图
+            ipcRenderer.send('ctrl-set-theme', newTheme);
+        }
+
+        // ====== 接收状态同步 ======
+        ipcRenderer.on('ctrl-viewbar-status', (event, data) => {
+            if (data.currentView && data.currentView !== currentView) {
+                currentView = data.currentView;
+                document.querySelectorAll('.view-btn').forEach(function(b) {
+                    b.classList.toggle('active', b.getAttribute('data-view') === currentView);
+                });
+                document.getElementById('intro-btn').classList.toggle('hidden', currentView !== 'deepseek');
+            }
+            if (data.confirmMode && data.confirmMode !== currentConfirmMode) {
+                currentConfirmMode = data.confirmMode;
+                document.querySelectorAll('.confirm-btn').forEach(function(b) {
+                    b.classList.toggle('on', b.getAttribute('data-mode') === currentConfirmMode);
+                });
+            }
+            // 生成状态指示器
+            document.getElementById('b-ds').classList.toggle('on', data.dsState === 'generating');
+            document.getElementById('b-qw').classList.toggle('on', data.qwenState === 'generating');
+            // 主题同步
+            if (data.theme && data.theme !== currentTheme) {
+                currentTheme = data.theme;
+                document.getElementById('theme-btn').textContent = currentTheme === 'dark' ? '🌙' : '☀️';
+                document.body.classList.toggle('light', currentTheme === 'light');
+            }
+        });
+
+        // 主题同步（来自主进程广播）
+        ipcRenderer.on('ctrl-theme', (event, theme) => {
+            currentTheme = theme;
+            document.getElementById('theme-btn').textContent = theme === 'dark' ? '🌙' : '☀️';
+            document.body.classList.toggle('light', theme === 'light');
+        });
+    </script>
+</body>
+</html>

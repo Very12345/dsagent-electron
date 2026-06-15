@@ -1,0 +1,2748 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSA</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* 聊天区内所有图片长边不超过 250px */
+#chat-area img {
+    max-width: 250px !important;
+    max-height: 250px !important;
+    object-fit: contain;
+    border-radius: 8px;
+}
+body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ============ 浅色主题 ============ */
+body.light-theme {
+    background: #f0f0f5;
+    color: #1e1e1e;
+}
+body.light-theme #header { background: linear-gradient(135deg, #e8e8f0 0%, #f5f5f5 100%); border-color: #d0d0d8; }
+body.light-theme #header h2 { background: linear-gradient(135deg, #0ea5e9, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+body.light-theme #bottom-panel { background: #e8e8f0; border-color: #d0d0d8; }
+body.light-theme #chat-container { background: #f5f5f8; }
+body.light-theme .msg-assistant { background: #fff; border-color: #ddd; color: #000; box-shadow: 0 1px 4px rgba(0,0,0,.04); }
+body.light-theme .msg-user { background: rgba(14,165,233,.08); border-color: rgba(14,165,233,.18); color: #1a5a5d; }
+body.light-theme .msg-tool { background: #eeeef8; border-color: #ccccee; color: #444; }
+body.light-theme .msg-result { background: #e8f5e8; border-color: #c8e8c8; color: #2e7d2e; }
+body.light-theme #prompt-input { background: #fff; color: #000; border-color: #d0d0d8; }
+body.light-theme #confirm-modal > div { background: #f0f0f5 !important; border-color: #d0d0d8 !important; }
+body.light-theme #confirm-modal-text { color: #333 !important; }
+body.light-theme #confirm-modal-cancel { border-color: #d0d0d8 !important; color: #666 !important; }
+body.light-theme .mode-btn { border-color: #c0c0d8; color: #666688; }
+body.light-theme .mode-btn:hover { border-color: #0ea5e9; color: #0ea5e9; background: rgba(14,165,233,.06); }
+body.light-theme .mode-btn.active { background: rgba(14,165,233,.12); color: #0d7377; border-color: #0d7377; }
+body.light-theme #history-panel { background: #e8e8f0; border-color: #d0d0d8; }
+body.light-theme #history-panel .panel-title { color: #8888aa; border-color: #d0d0d8; }
+body.light-theme .history-item { border-color: #ddd8e8; }
+body.light-theme .history-item:hover { background: rgba(14,165,233,.05); }
+body.light-theme .history-item.active { background: rgba(14,165,233,.1); }
+body.light-theme .history-item .hi-title { color: #222; }
+body.light-theme .msg-assistant strong { color: #000; }
+body.light-theme .msg-assistant code { background: #f0f0f0; color: #000; }
+body.light-theme #chat-area .empty-msg { color: #aaa; }
+body.light-theme .msg-label { color: #999; }
+body.light-theme .switch { background: #c0c0d0; }
+body.light-theme .switch.on { background: #0ea5e9; }
+body.light-theme .toggle-row label { color: #555; }
+
+/* ============ Header ============ */
+#header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #16213e 0%, #1a1a2e 100%);
+    border-bottom: 1px solid #2a2a4a;
+    flex-shrink: 0;
+    box-shadow: 0 2px 12px rgba(0,0,0,.3);
+    z-index: 10;
+}
+#header h2 { font-size: 18px; font-weight: 700; color: #e0e0e0; letter-spacing: 2px; background: linear-gradient(135deg, #0ea5e9, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+#header-actions { display: flex; gap: 10px; align-items: center; }
+
+/* Header buttons */
+#new-chat-btn {
+    padding: 7px 18px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: all .2s ease;
+    letter-spacing: .3px;
+}
+#new-chat-btn {
+    background: #059669;
+    color: #fff;
+}
+#new-chat-btn:hover { background: #047857; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(5,150,105,.3); }
+#new-chat-btn:disabled { background: #444; color: #888; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* Custom scrollbar */
+#chat-area::-webkit-scrollbar, #history-list::-webkit-scrollbar { width: 6px; }
+#chat-area::-webkit-scrollbar-track, #history-list::-webkit-scrollbar-track { background: transparent; }
+#chat-area::-webkit-scrollbar-thumb, #history-list::-webkit-scrollbar-thumb {
+    background: #3a3a5a;
+    border-radius: 3px;
+}
+#chat-area::-webkit-scrollbar-thumb:hover, #history-list::-webkit-scrollbar-thumb:hover { background: #5a5a7a; }
+
+/* ============ Main layout ============ */
+#main-layout {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+}
+
+/* ============ History panel ============ */
+#history-panel {
+    width: 220px;
+    min-width: 220px;
+    background: #1e1e38;
+    border-right: 1px solid #2a2a4a;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+#history-panel .panel-title {
+    padding: 14px 14px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6a6a8a;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid #2a2a4a;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+#history-panel .panel-title .hist-refresh {
+    cursor: pointer;
+    font-size: 15px;
+    color: #6a6a8a;
+    transition: color .2s;
+    border-radius: 4px;
+    padding: 2px;
+}
+#history-panel .panel-title .hist-refresh:hover { color: #0ea5e9; background: rgba(14,165,233,.1); }
+#history-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+.history-item { position: relative; padding: 11px 14px; cursor: pointer; font-size: 13px;
+    border-left: 3px solid transparent; border-bottom: 1px solid #252545;
+    transition: all .15s ease; }
+.history-item:hover { background: rgba(14,165,233,.05); border-left-color: #0ea5e9; }
+.history-item.active { background: rgba(14,165,233,.12); border-left-color: #0ea5e9; }
+.history-item .hi-title { font-weight: 500; color: #d0d0e0; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 20px; }
+.history-item .hi-meta { font-size: 11px; color: #6a6a8a; }
+.history-item .hi-delete {
+    position: absolute; top: 8px; right: 8px; display: none;
+    font-size: 12px; color: #888; cursor: pointer;
+    width: 20px; height: 20px; line-height: 20px; text-align: center;
+    border-radius: 4px; transition: all .15s;
+}
+.history-item:hover .hi-delete { display: block; }
+.history-item .hi-delete:hover { background: #4a1a1a; color: #f66; }
+body.light-theme .history-item .hi-delete:hover { background: #ffeeee; color: #d44; }
+.history-expired-badge {
+    display: inline-block; font-size: 11px; color: #e88;
+    background: #3a1a1a; padding: 2px 8px; border-radius: 4px;
+    margin-left: 8px;
+}
+body.light-theme .history-expired-badge { background: #ffeeee; color: #c44; }
+.history-empty {
+    padding: 24px 14px;
+    text-align: center;
+    color: #555;
+    font-size: 13px;
+}
+
+/* ============ Chat container (chat area + loading indicator) ============ */
+#chat-container {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #16162a;
+}
+
+/* ============ Chat area ============ */
+#chat-area {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 24px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+#chat-area .empty-msg {
+    text-align: center;
+    color: #5a5a7a;
+    margin-top: 80px;
+    font-size: 14px;
+    font-style: italic;
+}
+
+/* ============ Bottom panel ============ */
+#bottom-panel {
+    flex-shrink: 0;
+    background: #1e1e36;
+    border-top: 1px solid #2a2a4a;
+    padding: 12px 24px 14px;
+}
+#init-btn-row {
+    margin-bottom: 10px;
+}
+#init-btn {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(135deg, #0d7377, #0ea5e9);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: .5px;
+    transition: all .2s ease;
+}
+#init-btn:hover { opacity: .9; transform: translateY(-1px); box-shadow: 0 3px 12px rgba(14,165,233,.25); }
+#init-btn:disabled { background: #3a3a5a; color: #6a6a8a; cursor: not-allowed; transform: none; box-shadow: none; }
+#init-status { margin-bottom: 8px; }
+
+/* Mode selector */
+.mode-selector { display: flex; gap: 10px; margin-bottom: 12px; }
+.mode-btn {
+    flex: 1;
+    padding: 10px 8px;
+    border: 1px solid #3a3a6a;
+    border-radius: 8px;
+    background: transparent;
+    color: #8a8aaa;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: center;
+    transition: all .2s ease;
+}
+.mode-btn:hover { border-color: #0ea5e9; color: #c0d0f0; background: rgba(14,165,233,.08); }
+.mode-btn.active { background: rgba(14,165,233,.15); color: #8ce; border-color: #0ea5e9; }
+
+/* Deep think toggle */
+.toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 0; }
+.toggle-row label { margin-bottom: 0; cursor: pointer; font-size: 13px; color: #aaa; }
+.switch {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    background: #555;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background .2s;
+    flex-shrink: 0;
+}
+.switch.on { background: #0d7377; }
+.switch::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform .2s;
+}
+.switch.on::after { transform: translateX(16px); }
+
+/* Prompt input */
+#prompt-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+#prompt-input {
+    flex: 1;
+    padding: 11px 16px;
+    border: 1px solid #3a3a5a;
+    border-radius: 10px;
+    background: #222240;
+    color: #e0e0e0;
+    font-size: 14px;
+    resize: none;
+    font-family: inherit;
+    line-height: 1.5;
+    transition: border-color .2s, box-shadow .2s;
+}
+#prompt-input:focus { outline: none; border-color: #0ea5e9; box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
+#prompt-input::placeholder { color: #5a5a7a; }
+#send-prompt-btn {
+    padding: 11px 24px;
+    background: linear-gradient(135deg, #0d7377, #0ea5e9);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all .2s ease;
+    align-self: flex-end;
+    letter-spacing: .3px;
+}
+#send-prompt-btn:hover { opacity: .9; transform: translateY(-1px); box-shadow: 0 3px 12px rgba(14,165,233,.25); }
+#send-prompt-btn:disabled { background: #3a3a5a; color: #6a6a8a; cursor: not-allowed; transform: none; box-shadow: none; }
+#send-prompt-btn.stop-btn { background: linear-gradient(135deg, #dc2626, #ef4444); }
+#send-prompt-btn.stop-btn:hover { box-shadow: 0 3px 12px rgba(239,68,68,.25); }
+
+/* ============ Messages ============ */
+.msg-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 10px;
+    animation: fadeIn .2s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.msg-user, .msg-assistant, .msg-tool, .msg-result {
+    padding: 12px 16px;
+    border-radius: 10px;
+    line-height: 1.6;
+    max-width: 100%;
+    word-wrap: break-word;
+}
+.msg-user {
+    background: rgba(14,165,233,.1);
+    border: 1px solid rgba(14,165,233,.2);
+    align-self: flex-end;
+    color: #b8d8f0;
+    max-width: 85%;
+    margin-left: auto;
+}
+.msg-assistant {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    color: #000;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+.msg-assistant p { margin: 0 0 6px 0; }
+.msg-assistant p:last-child { margin-bottom: 0; }
+.msg-assistant h1, .msg-assistant h2, .msg-assistant h3,
+.msg-assistant h4, .msg-assistant h5, .msg-assistant h6 {
+    margin: 10px 0 4px 0;
+    color: #000;
+    font-weight: 600;
+}
+.msg-assistant h1 { font-size: 20px; }
+.msg-assistant h2 { font-size: 18px; }
+.msg-assistant h3 { font-size: 16px; }
+.msg-assistant h4, .msg-assistant h5, .msg-assistant h6 { font-size: 14px; }
+.msg-assistant ul, .msg-assistant ol { margin: 6px 0; padding-left: 24px; }
+.msg-assistant li { margin: 3px 0; }
+.msg-assistant strong { color: #000; font-weight: 700; }
+.msg-assistant code {
+    background: #eee;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    color: #000;
+}
+.msg-assistant pre {
+    background: #eee;
+    padding: 8px 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 6px 0;
+    border: 1px solid #ddd;
+    line-height: 1.45;
+}
+.msg-assistant pre code {
+    background: none;
+    padding: 0;
+    color: #000;
+    font-size: 13px;
+}
+.msg-assistant a { color: #000; text-decoration: underline; }
+.msg-assistant a:hover { text-decoration: underline; }
+.msg-assistant .path-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    background: #2a2a4e;
+    border: 1px solid #4a4a7e;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #b0b0e8;
+    cursor: pointer;
+    margin: 0 2px;
+}
+body.light-theme .msg-assistant .path-chip {
+    background: #e0e0f0;
+    border-color: #c0c0d8;
+    color: #444;
+}
+.msg-assistant .math-inline {
+    padding: 0 2px;
+    color: #000;
+    font-family: 'Cambria Math', 'Latin Modern Math', serif;
+}
+.msg-assistant .math-block {
+    display: block;
+    text-align: center;
+    padding: 8px 12px;
+    margin: 8px 0;
+    background: #eee;
+    border-radius: 6px;
+    color: #000;
+    font-family: 'Cambria Math', 'Latin Modern Math', serif;
+    font-size: 15px;
+    overflow-x: auto;
+}
+.msg-assistant table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0;
+    font-size: 13px;
+    color: #000;
+}
+.msg-assistant th, .msg-assistant td {
+    border: 1px solid #ccc;
+    padding: 6px 10px;
+    text-align: left;
+}
+.msg-assistant th {
+    background: #e0e0e0;
+    font-weight: 600;
+}
+.msg-assistant td {
+    background: #fafafa;
+}
+.msg-assistant table tr:nth-child(even) td {
+    background: #f0f0f0;
+}
+.msg-tool {
+    background: #24243e;
+    border: 1px solid #3a3a6a;
+    color: #b0b0e8;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    margin-left: 20px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    line-height: 1.5;
+    max-width: 100%;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+.msg-result {
+    background: #1a2e1a;
+    border: 1px solid #2a5a2a;
+    color: #8cc88c;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    margin-left: 20px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    line-height: 1.5;
+    max-width: 100%;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+.msg-label {
+    font-size: 11px;
+    color: #666;
+    padding: 2px 16px;
+    font-weight: 500;
+}
+
+/* Loading indicator - 动态创建，复用 .msg-group/.msg-assistant/.spinner 样式 */
+#loading-indicator {
+    flex-shrink: 0;
+}
+
+/* ============ 文件附件栏 ============ */
+#file-panel {
+    margin: 4px 0;
+    padding: 4px 8px;
+    background: rgba(0,0,0,.15);
+    border-radius: 6px;
+    border: 1px solid #3a3a5a;
+}
+#file-panel-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #8888cc;
+}
+#file-panel-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+.file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: #2a2a4e;
+    border: 1px solid #4a4a7e;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #b0b0e8;
+    max-width: 200px;
+    cursor: default;
+}
+.file-chip .chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.file-chip .chip-remove {
+    cursor: pointer;
+    color: #e07070;
+    font-size: 12px;
+    padding: 0 2px;
+}
+.file-chip .chip-remove:hover { color: #ff4040; }
+.file-chip.chip-image {
+    background: #2a3a2a;
+    border-color: #4a7e4a;
+    color: #8cc88c;
+}
+body.light-theme #file-panel {
+    background: rgba(0,0,0,.04);
+    border-color: #d0d0d8;
+}
+body.light-theme .file-chip {
+    background: #e0e0f0;
+    border-color: #c0c0d8;
+    color: #444;
+}
+body.light-theme .file-chip.chip-image {
+    background: #e0f0e0;
+    border-color: #c0d8c0;
+    color: #2e7d2e;
+}
+body.light-theme #loading-indicator {
+    /* inherits global .msg-assistant background from parent */
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse-glow {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px #ccaa44; }
+    50% { opacity: 0.4; box-shadow: 0 0 0px transparent; }
+}
+@keyframes loading-dots {
+    0% { content: ''; }
+    25% { content: '.'; }
+    50% { content: '..'; }
+    75% { content: '...'; }
+}
+.tool-pulse { animation: pulse-glow 1.2s ease-in-out infinite; }
+
+/* ==================== 工作流程折叠区（原生<details>/<summary>） ==================== */
+.workflow-wrap {
+    margin: 8px 0;
+    border: 1px solid #3a3a5a;
+    border-radius: 10px;
+    background: rgba(30,30,50,.5);
+}
+.workflow-wrap.light { border-color: #d0d0d8; background: rgba(240,240,245,.5); }
+.workflow-wrap summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: #8888cc;
+    user-select: none;
+    list-style: none; /* 移除默认三角 */
+}
+.workflow-wrap summary::-webkit-details-marker { display: none; } /* Chrome 默认三角隐藏 */
+.workflow-wrap summary::before { content: '▶'; font-size: 11px; width: 14px; text-align: center; }
+.workflow-wrap[open] summary::before { content: '▼'; }
+.workflow-wrap summary:hover { background: rgba(255,255,255,.04); }
+.workflow-wrap.light summary:hover { background: rgba(0,0,0,.04); }
+.workflow-wrap summary .badge {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 400;
+    color: #6a6a8a;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.06);
+}
+.workflow-wrap.light .badge { background: rgba(0,0,0,.06); color: #666; }
+.workflow-wrap .wf-body { padding: 0; }
+.workflow-wrap .wf-body > .msg-group:first-child { margin-top: 0; }
+.workflow-wrap .wf-body > .msg-group:last-child { margin-bottom: 0; }
+</style>
+</head>
+<body>
+<div id="header">
+    <h2>DSA</h2>
+    <div id="header-actions">
+        <button id="new-chat-btn" onclick="showNewChatModal()">+ 新对话</button>
+    </div>
+</div>
+
+<div id="main-layout">
+    <!-- 历史对话面板 -->
+    <div id="history-panel">
+        <div class="panel-title">
+            历史对话
+            <span class="hist-refresh" onclick="loadHistoryList()" title="刷新">&#x21bb;</span>
+        </div>
+        <div id="history-list">
+            <div class="history-empty">没有历史对话</div>
+        </div>
+    </div>
+
+    <div id="chat-container">
+        <div id="chat-area">
+            <div class="empty-msg">点击「+新对话」开始新对话</div>
+        </div>
+    </div>
+</div>
+
+<div id="bottom-panel">
+    <!-- 初始化前：模式选择 + 开始按钮 -->
+    <div id="pre-init-section">
+        <div id="init-btn-row">
+            <button id="init-btn" onclick="showNewChatModal()">开始新对话</button>
+        </div>
+    </div>
+
+    <!-- 初始化后：模式标签 + 输入框 -->
+    <div id="post-init-section" style="display:none;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-size:12px;color:#888;" id="mode-label">专家模式</span>
+            <!-- 状态栏 -->
+            <div id="status-bar" style="flex:1;display:flex;gap:4px;overflow:hidden;font-size:11px;color:#6a6a8a;min-height:16px;flex-wrap:wrap;"></div>
+        </div>
+        <div id="prompt-row">
+            <textarea id="prompt-input" rows="2" placeholder="输入消息..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendPrompt()}" onfocus="this._focused=true" onblur="this._focused=false"></textarea>
+            <button id="send-prompt-btn" onclick="sendPrompt()">发送</button>
+        </div>
+    </div>
+        <div id="file-panel">
+            <div id="file-panel-bar" style="display:none;">
+                <span id="file-panel-label">📎 附件</span>
+                <span id="file-panel-count" style="font-size:11px;color:#888;"></span>
+                <button id="file-panel-clear" style="margin-left:auto;padding:2px 8px;font-size:11px;color:#aaa;background:transparent;border:1px solid #555;border-radius:4px;cursor:pointer;">清除</button>
+            </div>
+            <div id="file-panel-items"></div>
+            <div id="file-panel-dropzone" style="font-size:11px;color:#666;padding:6px 8px;border:1px dashed #444;border-radius:4px;margin-top:0;text-align:center;cursor:default;user-select:none;">
+                <span>拖拽文件到此处</span>
+                <span style="margin:0 4px;color:#555;">|</span>
+                <span id="file-upload-btn" style="color:#8888cc;cursor:pointer;text-decoration:underline;">选择文件</span>
+                <span style="margin:0 4px;color:#555;">|</span>
+                <span style="color:#666;">或粘贴图片</span>
+            </div>
+        </div>
+        <div class="toggle-row" style="margin:8px 0 4px 0;">
+        <div id="deepthink-switch" class="switch on" onclick="toggleDeepThink()"></div>
+        <label onclick="toggleDeepThink()">深度思考</label>
+        <span id="readtools-badge" style="margin-left:auto;font-size:11px;color:#6a6a8a;cursor:pointer;padding:2px 8px;border-radius:8px;background:rgba(255,255,255,.05);user-select:none;" onclick="toggleReadToolsPopup()" title="已阅读文档的工具">📖 <span id="readtools-count">0</span></span>
+    </div>
+
+    <!-- readTools 调试面板 -->
+    <div id="readtools-popup" style="display:none;margin:4px 0;padding:8px 10px;background:#1a1a30;border:1px solid #3a3a5a;border-radius:8px;font-size:12px;color:#b0b0d0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-weight:600;color:#8888cc;">已读文档</span>
+            <button onclick="syncReadTools()" style="margin-left:auto;padding:2px 8px;font-size:10px;background:transparent;border:1px solid #3a3a6a;border-radius:4px;color:#8a8aaa;cursor:pointer;">从历史同步</button>
+            <button onclick="refreshReadToolsDisplay()" style="padding:2px 6px;font-size:10px;background:transparent;border:1px solid #3a3a6a;border-radius:4px;color:#8a8aaa;cursor:pointer;">刷新</button>
+        </div>
+        <div id="readtools-list" style="max-height:120px;overflow-y:auto;line-height:1.8;color:#ccc;">
+            <span style="color:#666;">加载中...</span>
+        </div>
+    </div>
+
+    <!-- QQ 托管切换 -->
+    <div class="toggle-row" style="margin:8px 0 4px 0;display:flex;align-items:center;gap:8px;">
+        <div id="qqbot-switch" class="switch" onclick="toggleQQBot()" style="flex-shrink:0;"></div>
+        <label onclick="toggleQQBot()" style="cursor:pointer;font-size:12px;">🤖 QQ 托管</label>
+        <span id="qqbot-status-text" style="font-size:11px;color:#6a6a8a;margin-left:auto;">未启动</span>
+    </div>
+
+    <!-- QQ 托管配置面板 -->
+    <div id="qqbot-panel" style="display:none;margin:4px 0;padding:8px 10px;background:#1a1a30;border:1px solid #3a3a5a;border-radius:8px;font-size:12px;">
+        <!-- 机器人选择（自定义 dropdown 避免 Electron 原生 select 白屏） -->
+        <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;">
+            <span style="color:#888;white-space:nowrap;">选择 Bot</span>
+            <div style="position:relative;flex:1;">
+                <div id="qqbot-robot-display" onclick="toggleQQBotDropdown()" style="padding:5px 8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:12px;cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;">
+                    <span id="qqbot-robot-text" style="color:#666;">-- 选择已保存的 Bot --</span>
+                    <span style="font-size:10px;color:#666;">▾</span>
+                </div>
+                <div id="qqbot-robot-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#1a1a30;border:1px solid #3a3a5a;border-radius:6px;z-index:100;max-height:180px;overflow-y:auto;"></div>
+            </div>
+            <button onclick="showQQBotEditModal(null)" style="padding:4px 10px;background:transparent;border:1px solid #3a3a6a;border-radius:4px;color:#8a8aaa;cursor:pointer;font-size:11px;">+新建</button>
+            <button id="qqbot-edit-btn" onclick="showQQBotEditModal(getSelectedQQBot())" style="display:none;padding:4px 10px;background:transparent;border:1px solid #3a3a6a;border-radius:4px;color:#8a8aaa;cursor:pointer;font-size:11px;">编辑</button>
+            <button id="qqbot-del-btn" onclick="doDeleteQQBot()" style="display:none;padding:4px 10px;background:transparent;border:1px solid #6e3a3a;border-radius:4px;color:#e88;cursor:pointer;font-size:11px;">删除</button>
+        </div>
+        <!-- 启动/停止 -->
+        <div style="display:flex;gap:8px;align-items:center;">
+            <button id="qqbot-start-btn" onclick="doStartQQBot()" style="flex:1;padding:6px 0;background:linear-gradient(135deg,#0d7377,#0ea5e9);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;">启动</button>
+            <button id="qqbot-stop-btn" onclick="doStopQQBot()" style="display:none;flex:1;padding:6px 0;background:#6e2a2a;color:#e88;border:1px solid #a44;border-radius:6px;cursor:pointer;font-size:12px;">停止</button>
+        </div>
+        <div id="qqbot-verify-section" style="display:none;margin-top:6px;padding:8px;background:#1a3a1a;border:1px solid #3a6e3a;border-radius:6px;text-align:center;">
+            <div style="font-size:11px;color:#8bc88b;margin-bottom:4px;">✅ 校验码（请在手机上发送此码）</div>
+            <div id="qqbot-verify-code" style="font-size:24px;font-weight:bold;color:#5cf;letter-spacing:4px;font-family:monospace;">0000</div>
+        </div>
+        <div id="qqbot-authorized-section" style="display:none;margin-top:6px;padding:6px 8px;background:#152815;border:1px solid #3a7a3a;border-radius:6px;">
+            <span style="color:#5a9a5a;">✅ 已授权 </span><span id="qqbot-authorized-openid" style="color:#8cc;font-family:monospace;"></span>
+        </div>
+        <div id="qqbot-queue-info" style="display:none;margin-top:4px;font-size:11px;color:#6a6a8a;">等待队列: <span id="qqbot-queue-count">0</span></div>
+    </div>
+
+    <!-- Robot 编辑弹窗 -->
+    <div id="qqbot-edit-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+        <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:24px;max-width:380px;width:90%;margin:20px;">
+            <h3 style="margin:0 0 16px;color:#e0e0f0;font-size:15px;" id="qqbot-edit-title">新建 Bot</h3>
+            <input id="qqbot-edit-name" placeholder="名称（如：我的机器人）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+            <input id="qqbot-edit-appid" placeholder="AppID" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+            <input id="qqbot-edit-secret" type="password" placeholder="ClientSecret" style="width:100%;padding:8px 10px;margin-bottom:16px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+            <div style="display:flex;gap:10px;">
+                <button onclick="document.getElementById('qqbot-edit-modal').style.display='none'" style="flex:1;padding:10px 0;background:transparent;color:#8a8aaa;border:1px solid #3a3a6a;border-radius:8px;cursor:pointer;font-size:13px;">取消</button>
+                <button id="qqbot-edit-save" onclick="doSaveQQBot()" style="flex:1;padding:10px 0;background:linear-gradient(135deg,#0d7377,#0ea5e9);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="init-status" style="display:none;padding:8px;background:#1a3a1a;border-radius:4px;font-size:12px;color:#8bc88b;">
+        <span id="init-status-text">正在初始化对话...</span>
+    </div>
+</div>
+
+<!-- 确认弹窗（DOM 弹窗，替代原生 confirm 以避免焦点丢失） -->
+<div id="confirm-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:28px 24px;max-width:400px;width:90%;margin:20px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+        <p id="confirm-modal-text" style="margin:0 0 24px;color:#e0e0f0;font-size:15px;line-height:1.6;text-align:center;"></p>
+        <div style="display:flex;gap:12px;justify-content:center;">
+            <button id="confirm-modal-cancel" style="padding:10px 24px;background:transparent;color:#8a8aaa;border:1px solid #3a3a6a;border-radius:10px;cursor:pointer;font-size:14px;transition:all .2s;min-width:100px;">取消</button>
+            <button id="confirm-modal-ok" style="padding:10px 24px;background:linear-gradient(135deg,#0d7377,#0ea5e9);color:#fff;border:none;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600;transition:all .2s;min-width:100px;">确定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 频率限制弹窗 -->
+<div id="ratelimit-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:#222240;border:1px solid #cc6644;border-radius:16px;padding:28px 24px;max-width:420px;width:90%;margin:20px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+        <p style="margin:0 0 8px;color:#e8a040;font-size:15px;font-weight:600;text-align:center;">⚠️ 消息发送过于频繁</p>
+        <p id="ratelimit-wait" style="margin:0 0 20px;color:#b0b0d0;font-size:13px;text-align:center;">已等待 <span id="ratelimit-seconds" style="color:#e8a040;font-weight:600;">0</span> 秒</p>
+        <div style="display:flex;gap:12px;justify-content:center;">
+            <button id="ratelimit-cancel" style="padding:10px 24px;background:transparent;color:#8a8aaa;border:1px solid #3a3a6a;border-radius:10px;cursor:pointer;font-size:14px;min-width:100px;">取消</button>
+            <button id="ratelimit-confirm" style="padding:10px 24px;background:linear-gradient(135deg,#cc6633,#e8a040);color:#fff;border:none;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600;min-width:100px;">重试发送</button>
+        </div>
+    </div>
+</div>
+
+<!-- 新建对话模式选择弹窗 -->
+<div id="newchat-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:32px 28px;max-width:420px;width:92%;margin:20px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+        <h3 id="ncm-title" style="margin:0 0 4px;color:#e0e0f0;font-size:22px;font-weight:700;text-align:center;">新建对话</h3>
+        <p id="ncm-desc" style="margin:0 0 24px;color:#8a8aaa;font-size:13px;text-align:center;">选择对话模式以开始</p>
+        <div id="newchat-modal-modes" style="display:flex;gap:14px;margin-bottom:28px;">
+            <button class="ncm-mode active" data-mode="expert" style="flex:1;padding:18px 10px;border:2px solid #0ea5e9;border-radius:12px;background:rgba(14,165,233,.1);color:#c0e0ff;cursor:pointer;font-size:14px;text-align:center;transition:all .2s ease;display:flex;flex-direction:column;gap:6px;">
+                <span style="font-size:24px;">🔍</span>
+                <span style="font-weight:700;font-size:15px;">专家模式</span>
+                <span style="font-size:11px;color:#7a9aba;line-height:1.4;">深度思考，逐步推理<br>适合复杂问题分析</span>
+            </button>
+            <button class="ncm-mode" data-mode="quick" style="flex:1;padding:18px 10px;border:2px solid #3a3a6a;border-radius:12px;background:transparent;color:#8a8aaa;cursor:pointer;font-size:14px;text-align:center;transition:all .2s ease;display:flex;flex-direction:column;gap:6px;">
+                <span style="font-size:24px;">⚡</span>
+                <span style="font-weight:700;font-size:15px;">快速模式</span>
+                <span style="font-size:11px;color:#5a5a7a;line-height:1.4;">快速响应，简洁回答<br>适合日常问答查询</span>
+            </button>
+        </div>
+        <div style="display:flex;gap:12px;">
+            <button id="newchat-modal-cancel" style="flex:1;padding:12px 0;background:transparent;color:#8a8aaa;border:1px solid #3a3a6a;border-radius:10px;cursor:pointer;font-size:14px;transition:all .2s;">取消</button>
+            <button id="newchat-modal-confirm" style="flex:1.5;padding:12px 0;background:linear-gradient(135deg,#0d7377,#0ea5e9);color:#fff;border:none;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600;letter-spacing:.5px;transition:all .2s;">开始对话</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ==================== 危险命令确认（嵌入工具卡片） ====================
+var pendingConfirmMessageId = null;
+
+window.electronAPI.onAgentShowConfirm(function(data) {
+    pendingConfirmMessageId = data._messageId;
+    var area = document.getElementById('chat-area');
+
+    // 找到第一个仍显示"执行中"的工具卡片（按创建顺序）
+    var cards = area.querySelectorAll('.tool-card');
+    var targetCard = null;
+    for (var ci = 0; ci < cards.length; ci++) {
+        var statusEl = cards[ci].querySelector('.tool-status');
+        if (statusEl && statusEl.textContent.indexOf('执行中') !== -1) {
+            targetCard = cards[ci];
+            break;
+        }
+    }
+
+    if (!targetCard) {
+        // 兜底：在聊天区底部创建确认栏
+        var empty = area.querySelector('.empty-msg');
+        if (empty) empty.remove();
+        var fallback = document.createElement('div');
+        fallback.style.cssText = 'margin:8px 20px;padding:10px 14px;background:#2a1a1a;border:1px solid #6e3a3a;border-radius:8px;';
+        fallback.textContent = (data.cmdDisplay || data.cmd || data.lang || '');
+        area.appendChild(fallback);
+        var btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:10px;margin:6px 20px;';
+        btnRow.appendChild(createConfirmBtn(data, function() { fallback.remove(); btnRow.remove(); }));
+        btnRow.appendChild(createCancelBtn(data, function() { fallback.remove(); btnRow.remove(); }));
+        area.appendChild(btnRow);
+        setTimeout(function() { area.scrollTop = area.scrollHeight; }, 50);
+        return;
+    }
+
+    // 在目标卡片的结果区添加确认/取消按钮
+    var resSec = targetCard.querySelector('.tool-section-result');
+    if (!resSec) return;
+    resSec.style.display = '';
+    resSec.style.background = '#2a1a1a';
+    // 清空并显示命令内容
+    resSec.innerHTML = '';
+    var cmdLabel = document.createElement('div');
+    cmdLabel.style.cssText = 'font-size:11px;color:#e8b0b0;margin-bottom:6px;';
+    cmdLabel.textContent = (data.cmdDisplay || data.cmd || data.lang || '');
+    resSec.appendChild(cmdLabel);
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:10px;';
+    (function(card, rs, sh, sb) {
+        btnRow.appendChild(createConfirmBtn(data, function() {
+            // 确认后：清空结果区，显示状态文本，折叠卡片
+            rs.innerHTML = '<span style="color:#5a9a5a;font-size:12px;">✅ 已确认执行</span>';
+            if (sh && sb) { sb.style.display = 'none'; if (sh.querySelector('.tool-arrow')) sh.querySelector('.tool-arrow').style.transform = 'rotate(-90deg)'; }
+        }));
+        btnRow.appendChild(createCancelBtn(data, function() {
+            rs.innerHTML = '<span style="color:#e8b0b0;font-size:12px;">❌ 已取消</span>';
+            if (sh && sb) { sb.style.display = 'none'; if (sh.querySelector('.tool-arrow')) sh.querySelector('.tool-arrow').style.transform = 'rotate(-90deg)'; }
+        }));
+    })(targetCard, resSec, header, body);
+    resSec.appendChild(btnRow);
+    // 更新状态
+    var statusEl = targetCard.querySelector('.tool-status');
+    if (statusEl) statusEl.innerHTML = '<span style="color:#e8b0b0;">⚠ 待确认</span>';
+    // 展开卡片以便看到按钮
+    var header = targetCard.querySelector('.tool-card-header');
+    var body = targetCard.querySelector('.tool-card-body');
+    if (body && body.style.display === 'none') {
+        body.style.display = '';
+        if (header) {
+            var arrow = header.querySelector('.tool-arrow');
+            if (arrow) arrow.style.transform = 'rotate(0deg)';
+            header.style.background = '#252545';
+        }
+    }
+    setTimeout(function() { area.scrollTop = area.scrollHeight; }, 50);
+});
+
+// ==================== 频率限制弹窗 ====================
+var pendingRateLimitMessageId = null;
+var ratelimitTimer = null;
+window.electronAPI.onAgentShowRateLimit(function(data) {
+    pendingRateLimitMessageId = data._messageId;
+    var modal = document.getElementById('ratelimit-modal');
+    var secEl = document.getElementById('ratelimit-seconds');
+    if (!modal || !secEl) return;
+
+    var seconds = data.waitSeconds || 0;
+    secEl.textContent = seconds;
+    modal.style.display = 'flex';
+
+    // 每秒更新等待时间
+    if (ratelimitTimer) clearInterval(ratelimitTimer);
+    ratelimitTimer = setInterval(function() {
+        seconds++;
+        secEl.textContent = seconds;
+    }, 1000);
+});
+
+document.getElementById('ratelimit-confirm').onclick = function() {
+    if (ratelimitTimer) { clearInterval(ratelimitTimer); ratelimitTimer = null; }
+    document.getElementById('ratelimit-modal').style.display = 'none';
+    if (pendingRateLimitMessageId) {
+        window.electronAPI.agentRateLimitResponse({ _messageId: pendingRateLimitMessageId, confirmed: true });
+        pendingRateLimitMessageId = null;
+    }
+};
+document.getElementById('ratelimit-cancel').onclick = function() {
+    if (ratelimitTimer) { clearInterval(ratelimitTimer); ratelimitTimer = null; }
+    document.getElementById('ratelimit-modal').style.display = 'none';
+    if (pendingRateLimitMessageId) {
+        window.electronAPI.agentRateLimitResponse({ _messageId: pendingRateLimitMessageId, confirmed: false });
+        pendingRateLimitMessageId = null;
+    }
+};
+
+function createConfirmBtn(data, onDone) {
+    var btn = document.createElement('button');
+    btn.textContent = '✅ 执行';
+    btn.style.cssText = 'padding:6px 18px;background:#c0392b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;';
+    btn.onclick = function() {
+        if (pendingConfirmMessageId) {
+            window.electronAPI.agentConfirmResponse({ _messageId: pendingConfirmMessageId, confirmed: true });
+            pendingConfirmMessageId = null;
+        }
+        onDone();
+    };
+    return btn;
+}
+
+function createCancelBtn(data, onDone) {
+    var btn = document.createElement('button');
+    btn.textContent = '❌ 取消';
+    btn.style.cssText = 'padding:6px 18px;background:#555;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;';
+    btn.onclick = function() {
+        if (pendingConfirmMessageId) {
+            window.electronAPI.agentConfirmResponse({ _messageId: pendingConfirmMessageId, confirmed: false });
+            pendingConfirmMessageId = null;
+        }
+        onDone();
+    };
+    return btn;
+}
+
+let agentMode = 'expert';
+let agentDeepThink = true;
+let conversationId = Date.now();
+let initCompleted = false;
+let currentTheme = 'dark';
+// 历史对话追踪
+let currentHistoryId = null;
+let currentHistoryMessages = [];
+let currentSubSessions = [];
+let currentHistoryDeepseekUrl = null;
+let currentHistoryExpired = false;
+// 更新发送按钮状态（根据 isGenerating + isExecutingTasks 综合决定）
+function updateSendBtn() {
+    var btn = document.getElementById('send-prompt-btn');
+    if (!btn) return;
+    if (isGenerating || isExecutingTasks) {
+        btn.textContent = '⏹ 停止';
+        btn.disabled = false;
+        btn.classList.add('stop-btn');
+    } else {
+        btn.textContent = '发送';
+        btn.disabled = false;
+        btn.classList.remove('stop-btn');
+    }
+}
+
+// 生成状态（用于停止按钮）
+let isGenerating = false;
+let isExecutingTasks = false;
+let isInWorkflow = false;
+let workflowWrappers = []; // 多个 <details>，每轮一个
+function getCurrentWorkflowWrapper() { return workflowWrappers[workflowWrappers.length - 1] || null; }
+let currentRootDir = ''; // 用于解析本地图片路径
+
+// 初始化时获取根目录
+window.electronAPI.getRootDir().then(function(dir) { currentRootDir = dir || ''; });
+
+// ==================== 主题同步 ====================
+window.electronAPI.onAgentTheme(function(theme) {
+    currentTheme = theme;
+    if (theme === 'light') {
+        document.body.classList.add('light-theme');
+    } else {
+        document.body.classList.remove('light-theme');
+    }
+    // 同步 workflow wrapper 主题（所有 details 元素）
+    workflowWrappers.forEach(function(w) {
+        if (theme === 'light') w.classList.add('light');
+        else w.classList.remove('light');
+    });
+});
+
+// ==================== 历史对话同步刷新 ====================
+window.electronAPI.onRefreshHistory(function() {
+    loadHistoryList();
+});
+
+// ==================== 恢复上次历史对话 ====================
+window.electronAPI.onRestoreHistory(function(historyId) {
+    if (historyId) {
+        loadHistoryConversation(historyId);
+    }
+});
+
+// ==================== 历史对话管理 ====================
+function loadHistoryList() {
+    var listEl = document.getElementById('history-list');
+    listEl.innerHTML = '<div class="history-empty">加载中...</div>';
+    window.electronAPI.historyList().then(function(res) {
+        if (!res.success || !res.histories || res.histories.length === 0) {
+            listEl.innerHTML = '<div class="history-empty">没有历史对话</div>';
+            return;
+        }
+        listEl.innerHTML = '';
+        res.histories.forEach(function(h) {
+            var item = document.createElement('div');
+            item.className = 'history-item' + (h.id === currentHistoryId ? ' active' : '');
+            item.innerHTML = '<div class="hi-title">' + escapeHtml(h.title || '(无标题)') + '</div>'
+                + '<div class="hi-meta">' + formatTime(h.updatedAt) + ' | ' + h.messageCount + '条'
+                + (h.subSessionCount > 0 ? ' +' + h.subSessionCount + '子' : '') + '</div>'
+                + '<span class="hi-delete" title="删除此对话">&#x2715;</span>';
+            var deleteBtn = item.querySelector('.hi-delete');
+            deleteBtn.addEventListener('click', async function(e) {
+                e.stopPropagation();
+                if (!await confirmModal('确定删除此历史对话？')) return;
+                // 加载历史详情，获取 deepseekUrl
+                var detailRes = await window.electronAPI.historyLoad(h.id);
+                var deepseekUrl = (detailRes && detailRes.success && detailRes.history) ? detailRes.history.deepseekUrl : '';
+                if (deepseekUrl && await confirmModal('是否同时也删除 DeepSeek 上的原始对话？')) {
+                    await window.electronAPI.agentDeleteDeepseekConversation(deepseekUrl);
+                }
+                deleteHistoryItem(h.id);
+            });
+            item.onclick = function() { loadHistoryConversation(h.id); };
+            listEl.appendChild(item);
+        });
+    }).catch(function() {
+        listEl.innerHTML = '<div class="history-empty">加载失败</div>';
+    });
+}
+
+function getConversationTitle() {
+    // 取第一条用户消息作为标题
+    for (var i = 0; i < currentHistoryMessages.length; i++) {
+        var m = currentHistoryMessages[i];
+        if (m.role === 'user' && m.content) {
+            var txt = m.content.replace(/```[\s\S]*?```/g, '').trim();
+            return txt.substring(0, 30) + (txt.length > 30 ? '...' : '');
+        }
+    }
+    return '(无标题)';
+}
+
+function saveCurrentHistory() {
+    if (!currentHistoryId) return;
+    // 没有消息时不保存（避免产生"(无标题)"的空对话）
+    if (!currentHistoryMessages || currentHistoryMessages.length === 0) return;
+    var title = getConversationTitle();
+    window.electronAPI.getReadTools().then(function(tools) {
+        var historyData = {
+            id: currentHistoryId,
+            mode: agentMode,
+            deepthink: agentDeepThink,
+            deepseekUrl: currentHistoryDeepseekUrl || '',
+            createdAt: currentHistoryId,
+            updatedAt: new Date().toISOString(),
+            title: title,
+            messages: currentHistoryMessages,
+            subSessions: currentSubSessions,
+            readTools: tools || [],
+            workflowCollapsed: (function() { var c = getCurrentWorkflowWrapper(); return c && c.tagName === 'DETAILS' ? !c.hasAttribute('open') : false; })()
+        };
+        window.electronAPI.historySave(historyData);
+        // 刷新侧边栏，更新标题和时间
+        loadHistoryList();
+    });
+}
+
+function loadHistoryConversation(id) {
+    // 如果已经是当前对话，不重复渲染，只恢复 DeepSeek 会话
+    if (currentHistoryId === id) {
+        if (currentHistoryDeepseekUrl) {
+            window.electronAPI.historyRestoreConversation(currentHistoryDeepseekUrl);
+        }
+        loadHistoryList(); // 刷新高亮
+        return;
+    }
+
+    var btn = document.getElementById('send-prompt-btn');
+    btn.disabled = true;
+    currentHistoryExpired = false;
+
+    window.electronAPI.historyLoad(id).then(function(res) {
+        if (!res.success || !res.history) return;
+        var h = res.history;
+
+        // 清除当前状态
+        var area = document.getElementById('chat-area');
+        area.innerHTML = '';
+        hideLoading();
+        workflowWrappers = []; // 需要重建
+
+        // 恢复到初始化后状态
+        initCompleted = true;
+        agentMode = h.mode || 'expert';
+        agentDeepThink = h.deepthink !== false;
+        document.getElementById('deepthink-switch').classList.toggle('on', agentDeepThink);
+        document.getElementById('pre-init-section').style.display = 'none';
+        document.getElementById('post-init-section').style.display = 'block';
+        document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : '快速模式';
+
+        currentHistoryId = h.id;
+        conversationId = parseInt(h.id) || Date.now();
+        currentHistoryMessages = h.messages || [];
+        currentSubSessions = h.subSessions || [];
+        currentHistoryDeepseekUrl = h.deepseekUrl || '';
+
+        // 通知主进程保存当前历史对话 ID
+        window.electronAPI.setLastHistoryId(h.id);
+
+        // 重置生成状态
+        isGenerating = false;
+
+        // ======== 渲染消息（workflow 容器在渲染过程中按需创建） ========
+        renderHistoryMessages(area, h.messages || [], h.workflowCollapsed);
+
+        // ======== 然后异步校验 DeepSeek 会话有效性 ========
+        if (currentHistoryDeepseekUrl) {
+            // 添加同步提示（不影响已渲染的消息）
+            var syncEl = document.createElement('div');
+            syncEl.style.cssText = 'text-align:center;padding:6px;margin:4px 0 8px;color:#888;font-size:12px;';
+            syncEl.textContent = '⏳ 同步对话中...';
+            area.appendChild(syncEl);
+            scrollToBottom();
+
+            window.electronAPI.historyRestoreConversation(currentHistoryDeepseekUrl).then(function(restoreRes) {
+                // 如果期间切换了对话，忽略这次回调（避免竞态）
+                var currentArea = document.getElementById('chat-area');
+                if (!currentArea || currentArea !== area || currentHistoryId !== h.id) return;
+                // DeepSeek 页面加载完毕，此时设置 readTools 才不会被重载覆盖
+                if (h.readTools && h.readTools.length > 0) {
+                    window.electronAPI.setReadTools(h.readTools);
+                }
+                // 刷新 readTools 显示
+                setTimeout(refreshReadToolsDisplay, 1500);
+                if (syncEl.parentNode) syncEl.remove();
+                if (restoreRes && restoreRes.valid) {
+                    currentHistoryExpired = false;
+                    btn.disabled = false;
+                    btn.textContent = '发送';
+                    setTimeout(function() { document.getElementById('prompt-input').focus(); }, 300);
+                } else {
+                    // 检查是否已有失效标记，避免重复
+                    if (currentArea.querySelector('[data-role="expired-badge"]')) return;
+                    currentHistoryExpired = true;
+                    btn.disabled = true;
+                    btn.textContent = '失效';
+                    var expiredBadge = document.createElement('div');
+                    expiredBadge.setAttribute('data-role', 'expired-badge');
+                    expiredBadge.style.cssText = 'text-align:center;padding:8px;margin:8px 0;color:#e88;background:#3a1a1a;border-radius:8px;font-size:13px;';
+                    expiredBadge.textContent = '⚠️ 此对话在 DeepSeek 上已过期或不存在，无法继续发送消息';
+                    currentArea.appendChild(expiredBadge);
+                    scrollToBottom();
+                }
+            }).catch(function() {
+                var currentArea = document.getElementById('chat-area');
+                if (!currentArea || currentArea !== area || currentHistoryId !== h.id) return;
+                if (syncEl.parentNode) syncEl.remove();
+                if (currentArea.querySelector('[data-role="expired-badge"]')) return;
+                currentHistoryExpired = true;
+                btn.disabled = true;
+                var expiredBadge = document.createElement('div');
+                expiredBadge.setAttribute('data-role', 'expired-badge');
+                expiredBadge.style.cssText = 'text-align:center;padding:8px;margin:8px 0;color:#e88;background:#3a1a1a;border-radius:8px;font-size:13px;';
+                expiredBadge.textContent = '⚠️ 此对话已失效，无法继续发送消息';
+                currentArea.appendChild(expiredBadge);
+                scrollToBottom();
+            });
+        } else {
+            // 没有 URL，直接标记为失效
+            currentHistoryExpired = true;
+            btn.disabled = true;
+            if (!area.querySelector('[data-role="expired-badge"]')) {
+                var expiredBadge = document.createElement('div');
+                expiredBadge.setAttribute('data-role', 'expired-badge');
+                expiredBadge.style.cssText = 'text-align:center;padding:8px;margin:8px 0;color:#e88;background:#3a1a1a;border-radius:8px;font-size:13px;';
+                expiredBadge.textContent = '⚠️ 此对话已失效（无关联会话），无法继续发送消息';
+                area.appendChild(expiredBadge);
+            }
+        }
+
+        // 高亮选中的历史
+        loadHistoryList();
+        scrollToBottom();
+    });
+}
+
+function renderHistoryMessages(area, messages, workflowCollapsed) {
+    var lastWasWorkflow = false;
+    (messages || []).forEach(function(msg) {
+        if (msg.role === 'user') {
+            addMessage('user', msg.content);
+            lastWasWorkflow = false;
+        } else if (msg.role === 'assistant') {
+            addMessage('assistant', msg.content);
+            lastWasWorkflow = false;
+        } else if (msg.segments) {
+            if (msg.isWorkflow) {
+                // 连续 workflow 段共享同一个 wrapper
+                if (!lastWasWorkflow) {
+                    var details = document.createElement('details');
+                    details.className = 'workflow-wrap' + (currentTheme === 'light' ? ' light' : '');
+                    if (!workflowCollapsed) details.setAttribute('open', '');
+                    var summary = document.createElement('summary');
+                    summary.innerHTML = '<span>工作流程</span><span class="badge">' + (workflowCollapsed ? '折叠' : '展开') + '</span>';
+                    var wfBody = document.createElement('div');
+                    wfBody.className = 'wf-body';
+                    details.appendChild(summary);
+                    details.appendChild(wfBody);
+                    area.appendChild(details);
+                    workflowWrappers.push(details);
+                }
+                var wfBody = workflowWrappers[workflowWrappers.length - 1].querySelector('.wf-body');
+                if (wfBody) renderWorkflowSegments(wfBody, msg.segments);
+                lastWasWorkflow = true;
+                return;
+            }
+            addAssistantSegments(msg.segments, true);
+            lastWasWorkflow = false;
+        }
+    });
+    if ((messages || []).length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'empty-msg';
+        empty.textContent = '此对话没有消息';
+        area.appendChild(empty);
+    }
+}
+
+// 历史回放时渲染工作流程段（简化版）
+function renderWorkflowSegments(container, segments) {
+    segments.forEach(function(seg) {
+        var group = document.createElement('div');
+        group.className = 'msg-group';
+        if (seg.type === 'text' && seg.content.trim()) {
+            var label = document.createElement('div');
+            label.className = 'msg-label';
+            label.textContent = '助手';
+            group.appendChild(label);
+            var msgEl = document.createElement('div');
+            msgEl.className = 'msg-assistant';
+            msgEl.innerHTML = renderMarkdown(seg.content);
+            group.appendChild(msgEl);
+            container.appendChild(group);
+        } else if (seg.type === 'tool-call') {
+            var toolCard = document.createElement('div');
+            toolCard.className = 'tool-card';
+            toolCard.style.cssText = 'margin-left:20px;border:1px solid #3a3a6a;border-radius:8px;overflow:hidden;background:#1e1e36;';
+            var toolHeader = document.createElement('div');
+            toolHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;font-size:13px;color:#aaaadd;user-select:none;';
+            toolHeader.innerHTML = '<span style="font-weight:600;">' + escapeHtml(seg.lang || 'unknown') + '</span><span class="tool-status" style="color:#5a9a5a;font-size:12px;margin-left:auto;">● 已返回</span>';
+            toolCard.appendChild(toolHeader);
+            var callSection = document.createElement('div');
+            callSection.style.cssText = 'padding:10px 14px;border-top:1px solid #2a2a4e;';
+            var callLabel = document.createElement('div');
+            callLabel.style.cssText = 'font-size:11px;color:#667;margin-bottom:4px;';
+            callLabel.textContent = '调用参数';
+            callSection.appendChild(callLabel);
+            var callContent = document.createElement('pre');
+            callContent.style.cssText = 'margin:0;color:#b0b0e8;font-family:monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;';
+            callContent.textContent = seg.content;
+            callSection.appendChild(callContent);
+            toolCard.appendChild(callSection);
+            group.appendChild(toolCard);
+            container.appendChild(group);
+        } else if (seg.type === 'tool-result') {
+            var cards = container.querySelectorAll('.tool-card');
+            var targetCard = cards[cards.length - 1];
+            if (targetCard) {
+                var resDiv = document.createElement('div');
+                resDiv.style.cssText = 'padding:10px 14px;border-top:1px solid #2a2a4e;background:#152815;color:#8cc88c;font-family:monospace;font-size:13px;line-height:1.5;word-wrap:break-word;';
+                resDiv.innerHTML = renderMarkdown(seg.content);
+                targetCard.appendChild(resDiv);
+            }
+        }
+    });
+}
+
+function formatTime(isoStr) {
+    if (!isoStr) return '';
+    try {
+        var d = new Date(isoStr);
+        var month = (d.getMonth() + 1).toString().padStart(2, '0');
+        var day = d.getDate().toString().padStart(2, '0');
+        var hour = d.getHours().toString().padStart(2, '0');
+        var min = d.getMinutes().toString().padStart(2, '0');
+        return month + '-' + day + ' ' + hour + ':' + min;
+    } catch(e) { return ''; }
+}
+
+function deleteHistoryItem(id) {
+    window.electronAPI.historyDelete(id).then(function(res) {
+        if (currentHistoryId === id) {
+            // 当前对话被删除，完整重置状态
+            currentHistoryId = null;
+            currentHistoryMessages = [];
+            currentSubSessions = [];
+            currentHistoryDeepseekUrl = null;
+            currentHistoryExpired = false;
+            isGenerating = false;
+            initCompleted = false;  // 重置初始化状态
+            conversationId = null;
+            // 通知主进程清除保存的历史对话 ID
+            window.electronAPI.setLastHistoryId(null);
+            var btn = document.getElementById('send-prompt-btn');
+            if (btn) { btn.disabled = false; btn.textContent = '发送'; btn.classList.remove('stop-btn'); }
+            // 清理可能残留的进度元素
+            var progressEl = document.querySelector('.msg-assistant[id="qwen-progress-msg"]');
+            if (progressEl && progressEl.parentNode) progressEl.parentNode.remove();
+            // qwenProgressEl 已迁移到状态栏
+            // 清理所有 tool-card 中的 filled 标记（避免影响后续）
+            document.querySelectorAll('.tool-section-result').forEach(function(el) { delete el.dataset.filled; });
+            // 重置聊天区
+            var area = document.getElementById('chat-area');
+            area.innerHTML = '';
+            var empty = document.createElement('div');
+            empty.className = 'empty-msg';
+            empty.textContent = '点击「+新对话」开始新对话';
+            area.appendChild(empty);
+            document.getElementById('pre-init-section').style.display = '';
+            document.getElementById('post-init-section').style.display = 'none';
+            // 确保弹窗关闭
+            document.getElementById('newchat-modal').style.display = 'none';
+            // 确保输入框可用并聚焦
+            var input = document.getElementById('prompt-input');
+            if (input) { input.disabled = false; input.value = ''; input.focus(); }
+        }
+        loadHistoryList();
+    });
+}
+
+// ==================== 模式控制 ====================
+function selectMode(el) {
+    document.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('active'); });
+    el.classList.add('active');
+    agentMode = el.dataset.mode;
+}
+
+function toggleDeepThink() {
+    agentDeepThink = !agentDeepThink;
+    document.getElementById('deepthink-switch').classList.toggle('on', agentDeepThink);
+    // 实时同步到 DeepSeek 页面
+    window.electronAPI.agentToggleDeepThink(agentDeepThink);
+}
+
+async function startNewChat() {
+    // 清除 qwen 进度指示
+    // qwenProgressEl 已迁移到状态栏
+    var btn = document.getElementById('new-chat-btn');
+    var initBtn = document.getElementById('init-btn');
+    var sendBtn = document.getElementById('send-prompt-btn');
+    var statusEl = document.getElementById('init-status');
+    var statusText = document.getElementById('init-status-text');
+
+    // 如果已有对话，保存当前历史
+    if (currentHistoryId && currentHistoryMessages.length > 0) {
+        saveCurrentHistory();
+    }
+
+    // 重置为初始化前状态：显示模式选择和深度思考
+    initCompleted = false;
+    document.getElementById('pre-init-section').style.display = '';
+    document.getElementById('post-init-section').style.display = 'none';
+    hideLoading();
+
+    btn.disabled = true;
+    initBtn.disabled = true;
+    sendBtn.disabled = true;
+    statusEl.style.display = 'block';
+    statusText.textContent = '正在创建新对话并发送初始化提示...';
+
+    // Clear chat area
+    var area = document.getElementById('chat-area');
+    area.innerHTML = '';
+    var empty = document.createElement('div');
+    empty.className = 'empty-msg';
+    empty.textContent = '初始化中...';
+    area.appendChild(empty);
+
+    // 重置历史追踪
+    currentHistoryId = Date.now().toString();
+    currentHistoryMessages = [];
+    currentSubSessions = [];
+    currentHistoryExpired = false;
+    currentHistoryDeepseekUrl = null;
+
+    try {
+        var initResult = await window.electronAPI.agentStartNewChat({
+            mode: agentMode,
+            deepthink: agentDeepThink
+        });
+
+        // 保存 DeepSeek 会话 URL
+        if (initResult && initResult.deepseekUrl) {
+            currentHistoryDeepseekUrl = initResult.deepseekUrl;
+            saveCurrentHistory();
+        }
+
+        // 通知主进程保存当前历史对话 ID
+        window.electronAPI.setLastHistoryId(currentHistoryId);
+
+        initCompleted = true;
+        // 初始化成功：隐藏模式选择，显示输入框和模式标签
+        document.getElementById('pre-init-section').style.display = 'none';
+        document.getElementById('post-init-section').style.display = 'block';
+        document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : '快速模式';
+
+        conversationId = Date.now();
+        statusText.textContent = '初始化完成，可以开始发送消息。';
+        document.querySelector('.empty-msg').textContent = '初始化已发送，等待响应...';
+        sendBtn.disabled = false;
+        document.getElementById('prompt-input').focus();
+        showLoading();
+        loadHistoryList();
+    } catch (e) {
+        statusText.textContent = '初始化失败：' + e.message;
+        statusEl.style.background = '#3a1a1a';
+        statusEl.style.color = '#e88b8b';
+        setTimeout(function() {
+            statusEl.style.display = 'none';
+            statusEl.style.background = '#1a3a1a';
+            statusEl.style.color = '#8bc88b';
+        }, 5000);
+    }
+    btn.disabled = false;
+    initBtn.disabled = false;
+}
+
+// ==================== 新建对话弹窗 ====================
+var newchatModalMode = 'expert';
+
+function showNewChatModal() {
+    newchatModalMode = agentMode || 'expert';
+    // 更新弹窗内按钮状态
+    var btns = document.querySelectorAll('#newchat-modal-modes .ncm-mode');
+    btns.forEach(function(b) {
+        var mode = b.getAttribute('data-mode');
+        if (mode === newchatModalMode) {
+            b.classList.add('active');
+            b.style.borderColor = '#0ea5e9';
+            b.style.background = 'rgba(14,165,233,.1)';
+            b.style.color = '#c0e0ff';
+        } else {
+            b.classList.remove('active');
+            b.style.borderColor = '#3a3a6a';
+            b.style.background = 'transparent';
+            b.style.color = '#8a8aaa';
+        }
+    });
+    // light theme
+    if (document.body.classList.contains('light-theme')) {
+        document.querySelector('#newchat-modal > div').style.background = '#f0f0f5';
+        document.querySelector('#ncm-title').style.color = '#222';
+        document.querySelector('#ncm-desc').style.color = '#888';
+        document.querySelector('#newchat-modal-cancel').style.borderColor = '#d0d0d8';
+        document.querySelector('#newchat-modal-cancel').style.color = '#666';
+    } else {
+        document.querySelector('#newchat-modal > div').style.background = '#222240';
+        document.querySelector('#ncm-title').style.color = '#e0e0f0';
+        document.querySelector('#ncm-desc').style.color = '#8a8aaa';
+        document.querySelector('#newchat-modal-cancel').style.borderColor = '#3a3a6a';
+        document.querySelector('#newchat-modal-cancel').style.color = '#8a8aaa';
+    }
+    document.getElementById('newchat-modal').style.display = 'flex';
+}
+
+// 弹窗模式选择
+document.getElementById('newchat-modal-modes').addEventListener('click', function(e) {
+    var btn = e.target.closest('.ncm-mode');
+    if (!btn) return;
+    document.querySelectorAll('#newchat-modal-modes .ncm-mode').forEach(function(b) {
+        b.classList.remove('active');
+        b.style.borderColor = '#3a3a6a';
+        b.style.background = 'transparent';
+        b.style.color = '#8a8aaa';
+    });
+    btn.classList.add('active');
+    btn.style.borderColor = '#0ea5e9';
+    btn.style.background = 'rgba(14,165,233,.1)';
+    btn.style.color = '#c0e0ff';
+    newchatModalMode = btn.getAttribute('data-mode');
+});
+
+// 弹窗取消
+document.getElementById('newchat-modal-cancel').onclick = function() {
+    document.getElementById('newchat-modal').style.display = 'none';
+};
+
+// 弹窗确认 - 调用 startNewChat
+document.getElementById('newchat-modal-confirm').onclick = function() {
+    document.getElementById('newchat-modal').style.display = 'none';
+    // 同步模式选择
+    agentMode = newchatModalMode;
+    document.querySelectorAll('.mode-btn').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-mode') === agentMode);
+    });
+    startNewChat();
+};
+
+async function sendPrompt() {
+    var input = document.getElementById('prompt-input');
+    var btn = document.getElementById('send-prompt-btn');
+
+    // 如果正在生成或执行任务中 -> 点击停止（优先于空输入检查）
+    if (isExecutingTasks || isGenerating) {
+        btn.disabled = true;
+        btn.textContent = '停止中...';
+        try {
+            await window.electronAPI.agentStop();
+        } catch(e) {}
+        isGenerating = false;
+        isExecutingTasks = false;
+        btn.textContent = '发送';
+        btn.disabled = false;
+        hideLoading();
+        return;
+    }
+
+    var text = input.value.trim();
+
+    // 允许纯附件发送（无文本但有文件时也能发）
+    if (!text && attachedFiles.length === 0) return;
+
+    // 检测文本中的 path="..." 模式，自动提取为文件附件
+    var pathRegex = /path="([^"]+)"/g;
+    var pathMatch;
+    while ((pathMatch = pathRegex.exec(text)) !== null) {
+        var p = pathMatch[1];
+        if (p) addFileToPanel(p, getFileName(p), 'file');
+    }
+    text = text.replace(/^path="[^"]*"\s*\n?/gm, '').trim();
+
+    // 如果对话已失效，不允许发送
+    if (currentHistoryExpired) {
+        addAssistantError('此对话已失效，无法发送消息。请创建新对话。');
+        return;
+    }
+
+    // 发送前确保 DeepSeek 处于正确的对话页面（如果 URL 不对会自动切回来）
+    if (currentHistoryDeepseekUrl) {
+        var navRes = await window.electronAPI.historyRestoreConversation(currentHistoryDeepseekUrl);
+        if (!navRes || !navRes.valid) {
+            // URL 无效，清除并尝试直接发送（新建对话时 URL 可能还没就绪）
+            currentHistoryDeepseekUrl = null;
+            if (!initCompleted) {
+                currentHistoryExpired = true;
+                addAssistantError('对话已过期，请创建新对话。');
+                return;
+            }
+            // initCompleted = true 时可能是新建对话 URL 未就绪，不清除标记，尝试直接发送
+        } else {
+            // 导航后 inject.js 重建，readTools 被重置，立即从历史记录恢复
+            if (currentHistoryId) {
+                var histRes = await window.electronAPI.historyLoad(currentHistoryId);
+                if (histRes.success && histRes.history && histRes.history.readTools) {
+                    await window.electronAPI.setReadTools(histRes.history.readTools);
+                }
+            }
+        }
+    }
+
+    input.value = '';
+
+    // 若有附件，拼接到消息前面
+    var filePrefix = getFilePathsForSend();
+    var fullText = filePrefix + text;
+    if (filePrefix) clearFilePanel();
+
+    btn.textContent = '发送';
+    btn.disabled = true;
+
+    // Add user message
+    addMessage('user', fullText);
+
+    // 记录到历史
+    if (currentHistoryId) {
+        currentHistoryMessages.push({ role: 'user', content: fullText, timestamp: new Date().toISOString() });
+        saveCurrentHistory();
+    }
+
+    // Scroll to bottom
+    scrollToBottom();
+
+    // Send via IPC
+    try {
+        await window.electronAPI.agentSendMessage({
+            text: fullText,
+            mode: agentMode,
+            deepthink: agentDeepThink,
+            conversationId: conversationId
+        });
+        showLoading();
+    } catch (e) {
+        addAssistantError('发送失败：' + e.message);
+    }
+    btn.disabled = false;
+}
+
+// Markdown 渲染函数
+function escapeHtml(text) {
+    var map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+    return text.replace(/[&<>"']/g, function(c) { return map[c]; });
+}
+
+function renderMarkdown(text) {
+    // 本地图片 [image:相对路径] - 在 escapeHtml 之前处理
+    var imgChips = [];
+    text = text.replace(/\[image:\s*([^\]]+)\]/g, function(m, imgPath) {
+        imgPath = imgPath.trim();
+        // 如果路径不是绝对路径且不含 file://，在前面加上根目录
+        var fullPath = imgPath;
+        if (!fullPath.match(/^[a-zA-Z]:\\/) && !fullPath.match(/^file:\/\//) && currentRootDir) {
+            fullPath = currentRootDir.replace(/\\/g, '/').replace(/\/$/, '') + '/' + fullPath.replace(/^\/+/, '');
+        }
+        var chipIdx = imgChips.length;
+        imgChips.push('<img src="' + fullPath.replace(/"/g, '%22') + '" style="max-width:250px;max-height:250px;object-fit:contain;border-radius:8px;margin:8px 0;display:block;" onerror="this.style.display=\'none\';">');
+        return '%%IMG_CHIP_' + chipIdx + '%%';
+    });
+    // 在 escapeHtml 之前处理 path="..." 和 path='...'（避免引号被转义导致匹配失败）
+    // 图片扩展名自动渲染为 <img>
+    var IMG_EXTS = /\.(png|jpg|jpeg|gif|bmp|webp|svg)(\?.*)?$/i;
+    var pathChips = [];
+    text = text.replace(/path\s*=\s*["']([^"']+)["']/g, function(m, p) {
+        var name = p.replace(/\\/g, '/').split('/').pop() || p;
+        // 判断是否为图片文件
+        if (IMG_EXTS.test(name)) {
+            // 渲染为图片
+            var fullPath = p;
+            if (!fullPath.match(/^[a-zA-Z]:\\/) && !fullPath.match(/^file:\/\//) && currentRootDir) {
+                fullPath = currentRootDir.replace(/\\/g, '/').replace(/\/$/, '') + '/' + fullPath.replace(/^\/+/, '');
+            }
+            var chip = '<img src="' + fullPath.replace(/"/g, '%22') + '" style="max-width:250px;max-height:250px;object-fit:contain;border-radius:8px;margin:8px 0;display:block;" onerror="this.style.display=\'none\';" title="' + name.replace(/[&<>]/g, function(c) { return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; }) + '">';
+            pathChips.push(chip);
+        } else {
+            var chip = '<span class="path-chip" data-path="' + p.replace(/"/g, '&quot;').replace(/[&<>]/g, function(c) { return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; }) + '" title="双击打开文件">📄 ' + name.replace(/[&<>]/g, function(c) { return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; }) + '</span>';
+            pathChips.push(chip);
+        }
+        return '%%PATH_CHIP_' + (pathChips.length - 1) + '%%';
+    });
+    var html = escapeHtml(text);
+    // 恢复图片芯片（逃逸 escapeHtml 的破坏）
+    for (var ici = 0; ici < imgChips.length; ici++) {
+        html = html.replace('%%IMG_CHIP_' + ici + '%%', imgChips[ici]);
+    }
+    // 恢复 path 芯片（逃逸 escapeHtml 的破坏）
+    for (var pci = 0; pci < pathChips.length; pci++) {
+        html = html.replace('%%PATH_CHIP_' + pci + '%%', pathChips[pci]);
+    }
+    // 数学公式（必须在代码块之前处理，避免冲突）
+    html = html.replace(/\$\$([\s\S]*?)\$\$/g, '<div class="math-block">$$$1$$</div>');
+    html = html.replace(/\$([^\n$]*?)\$/g, '<span class="math-inline">$$$1$</span>');
+    // 多行代码块：```lang\n...\n``` （支持开头/结尾可选空格和空行）
+    html = html.replace(/```\w*\s*\n([\s\S]*?)\s*```/g, function(m, code) {
+        return '<pre><code>' + code.replace(/\n$/, '') + '</code></pre>';
+    });
+    // 单行代码块：```content``` （整行被三个反引号包围，无换行）
+    html = html.replace(/^```\s*(.+?)\s*```$/gm, '<pre><code>$1</code></pre>');
+    // 行内代码：`content` （排除已处理的代码块残留反引号）
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    // 图片语法（![]()）必须在链接语法之前处理
+    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:250px;max-height:250px;object-fit:contain;border-radius:8px;margin:8px 0;" onerror="this.style.display=\'none\'">');
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    // 水平线: ---（兼容前导空格）
+    html = html.replace(/^\s*---\s*$/gm, '<hr style="border:none;border-top:1px solid #ccc;margin:12px 0;">');
+    html = html.replace(/^\s*- (.+)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>[\s\S]*?<\/li>(?:\s*\n)*)+/g, function(m) { return '<ul>' + m.replace(/\n/g,'') + '</ul>'; });
+    html = html.replace(/^\s*\d+\. (.+)$/gm, '<li>$1</li>');
+    html = html.replace(/(?:^<li>[\s\S]*?<\/li>(?:\s*\n)*)+/gm, function(m) { return '<ol>' + m.replace(/\n/g,'') + '</ol>'; });
+    // 表格: | col1 | col2 |\n| --- | --- |\n| v1 | v2 |（兼容前导空格和对齐标记 |:--:|）
+    html = html.replace(/^\s*\|(.+)\|\s*\n\s*\|[-| :]+\|\s*\n((?:\s*\|.+\|\s*\n?)*)/gm, function(m, header, rows) {
+        var hcells = header.split('|').map(function(c) { return '<th>' + c.trim() + '</th>'; }).filter(function(c) { return c !== '<th></th>'; });
+        var body = '';
+        rows.replace(/\s*\|(.+)\|\s*/g, function(m2, row) {
+            var cells = row.split('|').map(function(c) { return '<td>' + c.trim() + '</td>'; }).filter(function(c) { return c !== '<td></td>'; });
+            body += '<tr>' + cells.join('') + '</tr>';
+        });
+        return '<table style="border-collapse:collapse;margin:8px 0;width:100%;"><thead><tr style="background:#ddd;">' + hcells.join('') + '</tr></thead><tbody>' + body + '</tbody></table>';
+    });
+    var paragraphs = html.split(/\n\s*\n/);
+    for (var i = 0; i < paragraphs.length; i++) {
+        var p = paragraphs[i].trim();
+        if (!p) continue;
+        if (!/^<(h\d|ul|ol|pre|div|li|table)/.test(p)) {
+            p = p.replace(/\n/g, '<br>');
+            paragraphs[i] = '<p>' + p + '</p>';
+        } else {
+            paragraphs[i] = p;
+        }
+    }
+    html = paragraphs.join('\n');
+    return html;
+}
+
+function addMessage(role, content) {
+    var area = document.getElementById('chat-area');
+    var empty = area.querySelector('.empty-msg');
+    if (empty) empty.remove();
+
+    var group = document.createElement('div');
+    group.className = 'msg-group';
+
+    var label = document.createElement('div');
+    label.className = 'msg-label';
+    label.textContent = role === 'user' ? '你' : '助手';
+    group.appendChild(label);
+
+    var msg = document.createElement('div');
+    msg.className = 'msg-' + role;
+    if (role === 'assistant' || role === 'user') {
+        msg.innerHTML = renderMarkdown(content);
+    } else {
+        msg.textContent = content;
+    }
+    group.appendChild(msg);
+    area.appendChild(group);
+    scrollToBottom();
+}
+
+function addAssistantSegments(segments, skipSave) {
+    var area = document.getElementById('chat-area');
+    var empty = area.querySelector('.empty-msg');
+    if (empty) empty.remove();
+
+    // 记录到历史（仅非历史回放时保存，避免重复计入）
+    if (currentHistoryId && !skipSave) {
+        currentHistoryMessages.push({ segments: segments, timestamp: new Date().toISOString(), isWorkflow: isInWorkflow });
+        saveCurrentHistory();
+    }
+
+    // 合并相邻的 text 段
+    var merged = [];
+    var textBuf = '';
+    segments.forEach(function(seg) {
+        if (seg.type === 'text') {
+            if (seg.content.trim()) textBuf += (textBuf ? '\n\n' : '') + seg.content.trim();
+        } else {
+            if (textBuf) { merged.push({ type: 'text', content: textBuf }); textBuf = ''; }
+            merged.push(seg);
+        }
+    });
+    if (textBuf) merged.push({ type: 'text', content: textBuf });
+
+    // 每段作为独立消息组显示
+    merged.forEach(function(seg) {
+        var group = document.createElement('div');
+        group.className = 'msg-group';
+
+        if (seg.type === 'text' && seg.content.trim()) {
+            var label = document.createElement('div');
+            label.className = 'msg-label';
+            label.textContent = '助手';
+            group.appendChild(label);
+            var msg = document.createElement('div');
+            msg.className = 'msg-assistant';
+            msg.innerHTML = renderMarkdown(seg.content);
+            group.appendChild(msg);
+        } else if (seg.type === 'tool-call') {
+            // 工具调用 + 结果合并为单一可展开卡片
+            var toolCard = document.createElement('div');
+            toolCard.className = 'tool-card';
+            toolCard.style.cssText = 'margin-left:20px;border:1px solid #3a3a6a;border-radius:8px;overflow:hidden;background:#1e1e36;';
+            var toolHeader = document.createElement('div');
+            toolHeader.className = 'tool-card-header';
+            toolHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;font-size:13px;color:#8888cc;user-select:none;transition:background .2s;';
+            toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span style="font-weight:600;color:#aaaadd;">' + escapeHtml(seg.lang || 'unknown') + '</span><span class="tool-status" style="color:#ccaa44;font-size:12px;margin-left:auto;display:flex;align-items:center;gap:4px;"><span class="tool-pulse" style;width:6px;height:6px;border-radius:50%;background:#ccaa44;display:inline-block;"></span>执行中...</span>';
+            var toolBody = document.createElement('div');
+            toolBody.className = 'tool-card-body';
+            toolBody.style.cssText = 'display:none;padding:0;border-top:1px solid #2a2a4e;';
+            // 调用内容区
+            var callSection = document.createElement('div');
+            callSection.className = 'tool-section-call';
+            callSection.style.cssText = 'padding:10px 14px;border-bottom:1px solid #2a2a4e;';
+            var callLabel = document.createElement('div');
+            callLabel.style.cssText = 'font-size:11px;color:#667;margin-bottom:4px;';
+            callLabel.textContent = '调用参数';
+            callSection.appendChild(callLabel);
+            var callContent = document.createElement('pre');
+            callContent.style.cssText = 'margin:0;color:#b0b0e8;font-family:"Cascadia Code","Fira Code",Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;';
+            callContent.textContent = seg.content;
+            callSection.appendChild(callContent);
+            // 结果区（预留，结果到达时填充）
+            var resultSection = document.createElement('div');
+            resultSection.className = 'tool-section-result';
+            resultSection.style.cssText = 'display:none;padding:10px 14px;';
+            toolBody.appendChild(callSection);
+            toolBody.appendChild(resultSection);
+            // 展开/折叠
+            toolHeader.addEventListener('click', function() {
+                var arrow = this.querySelector('.tool-arrow');
+                if (toolBody.style.display === 'none') {
+                    toolBody.style.display = '';
+                    arrow.style.transform = 'rotate(0deg)';
+                    this.style.background = '#252545';
+                } else {
+                    toolBody.style.display = 'none';
+                    arrow.style.transform = 'rotate(-90deg)';
+                    this.style.background = '';
+                }
+            });
+            toolCard.appendChild(toolHeader);
+            toolCard.appendChild(toolBody);
+            group.appendChild(toolCard);
+        } else if (seg.type === 'tool-result') {
+            // 找到第一个未填充的工具卡片（按创建顺序匹配）
+            var targetCard = null;
+            var cards = area.querySelectorAll('.tool-card');
+            for (var ri = 0; ri < cards.length; ri++) {
+                var rs = cards[ri].querySelector('.tool-section-result');
+                if (rs && !rs.dataset.filled) { targetCard = cards[ri]; break; }
+            }
+            if (targetCard) {
+                var resSec = targetCard.querySelector('.tool-section-result');
+                var statusEl = targetCard.querySelector('.tool-status');
+                resSec.style.display = '';
+                resSec.dataset.filled = '1';
+                resSec.style.background = '#152815';
+                var resLabel = document.createElement('div');
+                resLabel.style.cssText = 'font-size:11px;color:#5a8a5a;margin-bottom:4px;display:flex;align-items:center;gap:6px;';
+                resLabel.innerHTML = '<span>返回结果</span><span class="res-copy-btn" style="cursor:pointer;font-size:11px;color:#5a9a5a;padding:1px 6px;border:1px solid #3a6e3a;border-radius:3px;user-select:none;" title="复制结果">复制</span>';
+                resSec.appendChild(resLabel);
+                var resContent = document.createElement('div');
+                resContent.className = 'result-content';
+                resContent.style.cssText = 'color:#8cc88c;font-family:"Cascadia Code","Fira Code",Consolas,monospace;font-size:13px;line-height:1.5;word-wrap:break-word;';
+                resContent.innerHTML = renderMarkdown(seg.content);
+                resSec.appendChild(resContent);
+                // 复制按钮
+                resLabel.querySelector('.res-copy-btn').addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var cbtn = this;
+                    var rtext = seg.content || '';
+                    window.electronAPI.clipboardSave().then(function(saved) {
+                        window.electronAPI.clipboardWriteText(rtext).then(function() {
+                            cbtn.textContent = '✅ 已复制';
+                            setTimeout(function() {
+                                cbtn.textContent = '复制';
+                                if (saved && saved.text !== undefined) { window.electronAPI.clipboardRestore(saved.text); }
+                            }, 2000);
+                        }).catch(function() {
+                            cbtn.textContent = '❌ 复制失败';
+                        });
+                    });
+                });
+                // 更新状态标签
+                if (statusEl) statusEl.innerHTML = '<span style="color:#5a9a5a;">● 已返回</span>';
+                scrollToBottom();
+                return;  // 不创建空 group
+            } else {
+                // 没有匹配的工具卡片 → 自动创建一张
+                var resultArea = area;
+                if (isInWorkflow) {
+                    var wfW = getCurrentWorkflowWrapper();
+                    if (wfW) resultArea = wfW.querySelector('.wf-body') || area;
+                }
+                var autoCard = document.createElement('div');
+                autoCard.className = 'tool-card';
+                autoCard.style.cssText = 'margin-left:20px;border:1px solid #3a3a6a;border-radius:8px;overflow:hidden;background:#1e1e36;';
+                var autoHeader = document.createElement('div');
+                autoHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;font-size:13px;color:#aaaadd;user-select:none;';
+                autoHeader.innerHTML = '<span style="font-weight:600;">' + escapeHtml(seg.lang || 'tool') + '</span><span class="tool-status" style="color:#5a9a5a;font-size:12px;margin-left:auto;">● 已返回</span>';
+                autoCard.appendChild(autoHeader);
+                var autoResult = document.createElement('div');
+                autoResult.style.cssText = 'padding:10px 14px;border-top:1px solid #2a2a4e;background:#152815;color:#8cc88c;font-family:monospace;font-size:13px;line-height:1.5;word-wrap:break-word;';
+                autoResult.innerHTML = renderMarkdown(seg.content);
+                autoCard.appendChild(autoResult);
+                group.classList.remove('msg-group');
+                group.style.cssText = 'margin:0;padding:0;border:none;background:transparent;';
+                group.appendChild(autoCard);
+                resultArea.appendChild(group);
+                scrollToBottom();
+                return;
+            }
+        }
+
+        // 如果处于工作流程模式，将内容追加到 workflow body 而非 chat-area
+        var targetArea3 = area;
+        if (isInWorkflow) {
+            var wfW3 = getCurrentWorkflowWrapper();
+            if (wfW3 && (seg.type === 'text' || seg.type === 'tool-call')) targetArea3 = wfW3.querySelector('.wf-body') || area;
+        }
+        targetArea3.appendChild(group);
+    });
+
+    scrollToBottom();
+}
+
+function addAssistantError(msg) {
+    addMessage('assistant', '[错误] ' + msg);
+    if (currentHistoryId) {
+        currentHistoryMessages.push({ role: 'assistant', content: '[错误] ' + msg, timestamp: new Date().toISOString() });
+        saveCurrentHistory();
+    }
+}
+
+function showLoading() {
+    var area = document.getElementById('chat-area');
+    if (!area) return;
+    // 移除已有的
+    var existing = document.getElementById('loading-indicator');
+    if (existing) existing.remove();
+    // 创建新的输出中气泡（动态动画效果）
+    var el = document.createElement('div');
+    el.id = 'loading-indicator';
+    el.style.cssText = 'flex-shrink:0;';
+    el.innerHTML = '<div class="msg-group">'
+        + '<div class="msg-label">助手</div>'
+        + '<div class="msg-assistant" style="display:flex;align-items:center;gap:12px;padding:14px 18px;">'
+        + '<div style="position:relative;width:18px;height:18px;">'
+        + '<div class="spinner" style="margin:0;"></div>'
+        + '</div>'
+        + '<span id="loading-text" style="color:#aaa;letter-spacing:1px;">输出中</span>'
+        + '<span id="loading-dots" style="color:#8888cc;font-weight:bold;min-width:20px;">...</span>'
+        + '</div>'
+        + '</div>';
+    area.appendChild(el);
+    scrollToBottom();
+    // 动态省略号动画
+    var dotEl = document.getElementById('loading-dots');
+    var dotIdx = 0;
+    var dotInterval = setInterval(function() {
+        dotIdx = (dotIdx + 1) % 4;
+        dotEl.textContent = '.'.repeat(dotIdx);
+    }, 400);
+    el.dataset.dotInterval = dotInterval;
+    // 切换发送按钮为停止按钮
+    var btn = document.getElementById('send-prompt-btn');
+    if (btn) { isGenerating = true; updateSendBtn(); }
+}
+
+function hideLoading() {
+    var el = document.getElementById('loading-indicator');
+    if (el) {
+        if (el.dataset.dotInterval) clearInterval(parseInt(el.dataset.dotInterval));
+        el.remove();
+    }
+    // 重置发送按钮（但如果有任务在执行，保持停止按钮）
+    isGenerating = false;
+    updateSendBtn();
+}
+
+function scrollToBottom() {
+    var area = document.getElementById('chat-area');
+    setTimeout(function() { area.scrollTop = area.scrollHeight; }, 50);
+}
+
+// Listen for agent messages from main process
+window.electronAPI.onAgentMessage(function(data) {
+    if (data.type === 'tasks-start') {
+        // 检查上一个 wrapper 是否已折叠（自动折叠 = 任务已结束）
+        var prevWf = getCurrentWorkflowWrapper();
+        var prevCollapsed = prevWf && !prevWf.hasAttribute('open');
+
+        if (prevWf && !prevCollapsed) {
+            // 同一个任务还在进行中，复用现有 wrapper，不创建新的
+            isInWorkflow = true;
+        } else {
+            // 上一个任务已结束，创建新的 wrapper
+            isInWorkflow = true;
+            var area = document.getElementById('chat-area');
+            var details = document.createElement('details');
+            details.className = 'workflow-wrap' + (currentTheme === 'light' ? ' light' : '');
+            details.setAttribute('open', '');
+            var summary = document.createElement('summary');
+            summary.innerHTML = '<span>工作流程</span><span class="badge">展开</span>';
+            var body = document.createElement('div');
+            body.className = 'wf-body';
+            details.appendChild(summary);
+            details.appendChild(body);
+            area.appendChild(details);
+            workflowWrappers.push(details);
+        }
+        isExecutingTasks = true;
+        isGenerating = false;
+        hideLoading();
+        scrollToBottom();
+        updateSendBtn();
+        return;
+    }
+    if (data.type === 'tasks-end') {
+        return;
+    }
+    hideLoading();
+    if (data.type === 'response') {
+        var hasCommands = data.segments && data.segments.some(function(s) { return s.type === 'tool-call'; });
+        if (!hasCommands && isInWorkflow) {
+            // 任务结束：自动折叠
+            isInWorkflow = false;
+            var cur = getCurrentWorkflowWrapper();
+            if (cur) {
+                cur.removeAttribute('open');
+                var badge = cur.querySelector('summary .badge');
+                if (badge) badge.textContent = '折叠';
+            }
+        }
+        addAssistantSegments(data.segments);
+        isExecutingTasks = hasCommands;
+        updateSendBtn();
+    } else if (data.type === 'tool-results') {
+        addAssistantSegments(data.segments);
+    } else if (data.type === 'tool-result') {
+        addAssistantSegments([{ type: 'tool-result', content: data.result }]);
+    }
+});
+
+// Qwen 绘图进度 → 改为在状态栏显示
+window.electronAPI.onQwenProgress(function(msg) {
+    addStatus('qwen', msg, 'qwen');
+});
+
+// 状态栏管理：支持多条状态，自动过期
+var statusMap = {};
+function addStatus(id, text, type) {
+    var bar = document.getElementById('status-bar');
+    if (!bar) return;
+    var el = statusMap[id];
+    if (!el) {
+        el = document.createElement('span');
+        el.style.cssText = 'padding:0 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;transition:opacity .5s;';
+        bar.appendChild(el);
+        statusMap[id] = el;
+    }
+    var colors = { qwen: '#6a8acc', tool: '#8a8a6a', confirm: '#cc8a6a', success: '#5a9a5a', error: '#cc5a5a' };
+    el.style.color = colors[type] || '#6a6a8a';
+    el.style.background = (colors[type] || '#6a6a8a') + '18';
+    el.textContent = text;
+    // 清空过期状态
+    var expires = Date.now() + 15000;
+    el._expires = expires;
+    setTimeout(function() {
+        if (el._expires <= Date.now()) {
+            el.style.opacity = '0';
+            setTimeout(function() { if (el._expires <= Date.now()) { el.remove(); delete statusMap[id]; } }, 500);
+        }
+    }, 15000);
+}
+
+// 初始化：加载历史列表
+loadHistoryList();
+
+// ==================== readTools 调试面板 ====================
+function refreshReadToolsDisplay() {
+    window.electronAPI.getReadTools().then(function(tools) {
+        var list = document.getElementById('readtools-list');
+        var count = document.getElementById('readtools-count');
+        if (!list || !count) return;
+        var arr = tools || [];
+        count.textContent = arr.length;
+        if (arr.length === 0) {
+            list.innerHTML = '<span style="color:#666;">暂无已读文档</span>';
+            return;
+        }
+        list.innerHTML = arr.sort().map(function(t) {
+            return '<span style="color:#8cc;">' + escapeHtml(t) + '</span>';
+        }).join('<br>');
+    });
+}
+function toggleReadToolsPopup() {
+    var popup = document.getElementById('readtools-popup');
+    if (!popup) return;
+    var visible = popup.style.display !== 'none';
+    popup.style.display = visible ? 'none' : '';
+    if (!visible) refreshReadToolsDisplay();
+}
+function syncReadTools() {
+    // 从当前历史记录的 readTools 恢复
+    if (currentHistoryId) {
+        window.electronAPI.historyLoad(currentHistoryId).then(function(res) {
+            if (res.success && res.history && res.history.readTools) {
+                window.electronAPI.setReadTools(res.history.readTools).then(function() {
+                    refreshReadToolsDisplay();
+                    var list = document.getElementById('readtools-list');
+                    if (list) list.innerHTML = '<span style="color:#5a9a5a;">✅ 已从历史记录同步 ' + res.history.readTools.length + ' 个工具</span>';
+                });
+            } else {
+                var list = document.getElementById('readtools-list');
+                if (list) list.innerHTML = '<span style="color:#e88;">⚠️ 当前历史记录无 readTools 数据</span>';
+            }
+        });
+    }
+}
+// 定期自动刷新 readTools 显示
+setInterval(refreshReadToolsDisplay, 5000);
+// 页面加载后也尝试刷新
+setTimeout(refreshReadToolsDisplay, 3000);
+// 用户发送消息时也刷新
+var origSend = sendPrompt;
+sendPrompt = function() {
+    setTimeout(refreshReadToolsDisplay, 1000);
+    return origSend.apply(this, arguments);
+};
+
+// ==================== QQ Bot 托管 ====================
+var qqBotEnabled = false;
+
+function toggleQQBot() {
+    qqBotEnabled = !qqBotEnabled;
+    document.getElementById('qqbot-switch').classList.toggle('on', qqBotEnabled);
+    document.getElementById('qqbot-panel').style.display = qqBotEnabled ? '' : 'none';
+    if (qqBotEnabled) loadQQBotList();
+}
+
+// 加载已保存的机器人列表
+var qqBotSelectedId = '';
+var qqBotRobotsList = [];
+function loadQQBotList() {
+    window.electronAPI.qqbotListRobots().then(function(robots) {
+        qqBotRobotsList = robots || [];
+        var dd = document.getElementById('qqbot-robot-dropdown');
+        if (!dd) return;
+        dd.innerHTML = '';
+        // 空白项
+        var emptyItem = document.createElement('div');
+        emptyItem.textContent = '-- 选择已保存的 Bot --';
+        emptyItem.style.cssText = 'padding:6px 10px;cursor:pointer;color:#666;font-size:12px;';
+        emptyItem.onclick = function() { selectQQBot(''); };
+        dd.appendChild(emptyItem);
+        (robots || []).forEach(function(r) {
+            var item = document.createElement('div');
+            item.textContent = (r.name || r.id) + ' (' + (r.appId || '').substring(0, 6) + '...)';
+            item.style.cssText = 'padding:6px 10px;cursor:pointer;color:#ccc;font-size:12px;border-top:1px solid #2a2a4e;';
+            item.onmouseover = function() { this.style.background = '#2a2a4e'; };
+            item.onmouseout = function() { this.style.background = ''; };
+            (function(rid) { item.onclick = function() { selectQQBot(rid); }; })(r.id);
+            dd.appendChild(item);
+        });
+        // 恢复选中
+        if (qqBotSelectedId) {
+            var text = document.getElementById('qqbot-robot-text');
+            if (text) text.textContent = (robots || []).filter(function(r) { return r.id === qqBotSelectedId; }).map(function(r) { return r.name; })[0] || '-- 选择已保存的 Bot --';
+        }
+        onQQBotSelectChange();
+    });
+}
+
+function selectQQBot(id) {
+    qqBotSelectedId = id;
+    document.getElementById('qqbot-robot-dropdown').style.display = 'none';
+    var text = document.getElementById('qqbot-robot-text');
+    if (id) {
+        window.electronAPI.qqbotListRobots().then(function(robots) {
+            var found = (robots || []).filter(function(r) { return r.id === id; });
+            text.textContent = found.length > 0 ? found[0].name : '-- 选择已保存的 Bot --';
+            onQQBotSelectChange();
+        });
+    } else {
+        text.textContent = '-- 选择已保存的 Bot --';
+        text.style.color = '#666';
+        onQQBotSelectChange();
+    }
+}
+
+function toggleQQBotDropdown() {
+    var dd = document.getElementById('qqbot-robot-dropdown');
+    if (!dd) return;
+    dd.style.display = dd.style.display === 'none' ? '' : 'none';
+}
+// 点击外部关闭 dropdown
+document.addEventListener('click', function(e) {
+    var dd = document.getElementById('qqbot-robot-dropdown');
+    var display = document.getElementById('qqbot-robot-display');
+    if (dd && display && !display.contains(e.target) && !dd.contains(e.target)) {
+        dd.style.display = 'none';
+    }
+});
+
+function getSelectedQQBotId() { return qqBotSelectedId; }
+function getSelectedQQBot() {
+    if (!qqBotSelectedId) return null;
+    for (var gi = 0; gi < qqBotRobotsList.length; gi++) {
+        if (qqBotRobotsList[gi].id === qqBotSelectedId) return qqBotRobotsList[gi];
+    }
+    return { id: qqBotSelectedId };
+}
+
+function onQQBotSelectChange() {
+    var hasSelection = !!qqBotSelectedId;
+    document.getElementById('qqbot-edit-btn').style.display = hasSelection ? '' : 'none';
+    document.getElementById('qqbot-del-btn').style.display = hasSelection ? '' : 'none';
+}
+
+function showQQBotEditModal(robot) {
+    var modal = document.getElementById('qqbot-edit-modal');
+    document.getElementById('qqbot-edit-title').textContent = robot ? '编辑 Bot' : '新建 Bot';
+    document.getElementById('qqbot-edit-name').value = robot ? (robot.name || '') : '';
+    document.getElementById('qqbot-edit-appid').value = robot ? (robot.appId || '') : '';
+    document.getElementById('qqbot-edit-secret').value = '';
+    modal._editId = robot ? robot.id : null;
+    modal.style.display = 'flex';
+}
+
+function doSaveQQBot() {
+    var modal = document.getElementById('qqbot-edit-modal');
+    var name = document.getElementById('qqbot-edit-name').value.trim();
+    var appId = document.getElementById('qqbot-edit-appid').value.trim();
+    var secret = document.getElementById('qqbot-edit-secret').value.trim();
+    var isEdit = !!modal._editId;
+    if (!name || !appId) { showQQBotAlert('请填写完整信息'); return; }
+    if (!isEdit && !secret) { showQQBotAlert('请填写 Secret'); return; }
+
+    var robot = {
+        id: modal._editId || 'robot_' + Date.now(),
+        name: name,
+        appId: appId,
+    };
+    if (secret) {
+        robot.clientSecret = secret;
+    } else if (isEdit) {
+        // 编辑时 secret 留空则保留原值，由 main.js 处理
+        robot.clientSecret = '';
+        robot._keepSecret = true;
+    } else {
+        robot.clientSecret = secret;
+    }
+    window.electronAPI.qqbotSaveRobot(robot).then(function(res) {
+        if (res.success) {
+            modal.style.display = 'none';
+            loadQQBotList();
+            // 自动选中新保存的
+            var sel = document.getElementById('qqbot-robot-select');
+            for (var oi = 0; oi < sel.options.length; oi++) {
+                if (sel.options[oi].value === robot.id) { sel.value = robot.id; break; }
+            }
+            onQQBotSelectChange();
+        }
+    });
+}
+
+function doDeleteQQBot() {
+    if (!qqBotSelectedId) return;
+    showQQBotConfirm('确定删除此机器人配置？', function() {
+        window.electronAPI.qqbotDeleteRobot(qqBotSelectedId).then(function() {
+            selectQQBot('');
+            loadQQBotList();
+        });
+    });
+}
+
+function doStartQQBot() {
+    if (!qqBotSelectedId) { showQQBotAlert('请先选择或创建一个 Bot'); return; }
+
+    window.electronAPI.qqbotListRobots().then(function(robots) {
+        var robot = null;
+        for (var ri = 0; ri < robots.length; ri++) {
+            if (robots[ri].id === qqBotSelectedId) { robot = robots[ri]; break; }
+        }
+        if (!robot) { showQQBotAlert('找不到该 Bot 配置'); return; }
+
+        document.getElementById('qqbot-start-btn').disabled = true;
+        document.getElementById('qqbot-start-btn').textContent = '启动中...';
+
+        window.electronAPI.qqbotStart({
+            appId: robot.appId,
+            clientSecret: robot.clientSecret
+        }).then(function(res) {
+            document.getElementById('qqbot-start-btn').disabled = false;
+            document.getElementById('qqbot-start-btn').textContent = '启动';
+            if (res.success) {
+                document.getElementById('qqbot-status-text').textContent = '运行中';
+                document.getElementById('qqbot-start-btn').style.display = 'none';
+                document.getElementById('qqbot-stop-btn').style.display = '';
+                document.getElementById('qqbot-verify-section').style.display = '';
+                document.getElementById('qqbot-verify-code').textContent = res.verifyCode;
+            } else {
+                showQQBotAlert('启动失败: ' + (res.error || '未知错误'));
+            }
+        });
+    });
+}
+
+// DOM 弹窗替代 alert
+function showQQBotAlert(msg) {
+    var modal = document.getElementById('confirm-modal');
+    document.getElementById('confirm-modal-text').textContent = msg;
+    var okBtn = document.getElementById('confirm-modal-ok');
+    document.getElementById('confirm-modal-cancel').style.display = 'none';
+    okBtn.textContent = '确定';
+    okBtn.onclick = function() { modal.style.display = 'none'; okBtn.textContent = '确定'; okBtn.onclick = null; };
+    modal.style.display = 'flex';
+}
+function showQQBotConfirm(msg, onOk) {
+    var modal = document.getElementById('confirm-modal');
+    document.getElementById('confirm-modal-text').textContent = msg;
+    var okBtn = document.getElementById('confirm-modal-ok');
+    var cancelBtn = document.getElementById('confirm-modal-cancel');
+    cancelBtn.style.display = '';
+    okBtn.textContent = '确定';
+    okBtn.onclick = function() { modal.style.display = 'none'; cancelBtn.style.display = 'none'; okBtn.textContent = '确定'; if (onOk) onOk(); };
+    cancelBtn.onclick = function() { modal.style.display = 'none'; okBtn.textContent = '确定'; };
+    modal.style.display = 'flex';
+}
+
+// 继续生成确认（由 main.js 触发）
+window.electronAPI.onContinueConfirm(function(data) {
+    var modal = document.getElementById('confirm-modal');
+    document.getElementById('confirm-modal-text').textContent = 'DeepSeek 输出似乎被截断了，是否继续生成以获取剩余内容？';
+    var okBtn = document.getElementById('confirm-modal-ok');
+    var cancelBtn = document.getElementById('confirm-modal-cancel');
+    cancelBtn.style.display = '';
+    okBtn.textContent = '继续生成';
+    okBtn.onclick = function() {
+        modal.style.display = 'none';
+        cancelBtn.style.display = 'none';
+        okBtn.textContent = '继续生成';
+        window.electronAPI.agentContinueResponse({ id: data.id, confirmed: true });
+    };
+    cancelBtn.onclick = function() {
+        modal.style.display = 'none';
+        okBtn.textContent = '继续生成';
+        window.electronAPI.agentContinueResponse({ id: data.id, confirmed: false });
+    };
+    modal.style.display = 'flex';
+});
+
+function doStopQQBot() {
+    window.electronAPI.qqbotStop().then(function() {
+        document.getElementById('qqbot-status-text').textContent = '未启动';
+        document.getElementById('qqbot-start-btn').style.display = '';
+        document.getElementById('qqbot-stop-btn').style.display = 'none';
+        document.getElementById('qqbot-verify-section').style.display = 'none';
+        document.getElementById('qqbot-authorized-section').style.display = 'none';
+        document.getElementById('qqbot-queue-info').style.display = 'none';
+    });
+}
+
+// 接收 QQ 消息
+window.electronAPI.onQQBotMessage(function(msg) {
+    var text = msg.content || '';
+    var files = msg.savedFiles || [];
+
+    // 直接填输入框 + 发送（sendPrompt 内部会渲染用户消息，无需手动渲染避免重复）
+    var input = document.getElementById('prompt-input');
+    if (!input) return;
+
+    // 有附件时，以 path="完整路径" 告知 AI（AI 需要完整路径访问文件）
+    var filePrefix = '';
+    if (files.length > 0) {
+        filePrefix = files.map(function(fp) {
+            return 'path="' + fp + '"';
+        }).join('\n') + '\n';
+    }
+    input.value = filePrefix + text;
+    sendPrompt();
+});
+
+// 接收授权成功通知
+window.electronAPI.onQQBotAuthorized(function(data) {
+    document.getElementById('qqbot-verify-section').style.display = 'none';
+    document.getElementById('qqbot-authorized-section').style.display = '';
+    document.getElementById('qqbot-authorized-openid').textContent = data.openid;
+});
+
+// 接收 QQ Bot 指令同步（来自手机远程控制）
+window.electronAPI.onQQBotCommand(function(data) {
+    switch (data.action) {
+        case 'toggleDeepThink':
+            var sw = document.getElementById('deepthink-switch');
+            if (data.value) { sw.classList.add('on'); agentDeepThink = true; }
+            else { sw.classList.remove('on'); agentDeepThink = false; }
+            window.electronAPI.agentToggleDeepThink(data.value);
+            break;
+        case 'setConfirmMode':
+            break;
+        case 'changeDir':
+            window.electronAPI.setLastHistoryId(null);
+            closeCurrentConversation();
+            break;
+        case 'newChat':
+            // main.js 已调用 __dsagent_newChatAndSendInit 创建新对话
+            // agentview 仅重置自身状态并开始轮询获取 URL
+            closeCurrentConversation();
+            document.getElementById('pre-init-section').style.display = 'none';
+            document.getElementById('post-init-section').style.display = 'block';
+            initCompleted = true;
+            // 同步 mode / deepthink（由 IPC 传入）
+            if (data.mode) {
+                agentMode = data.mode;
+                document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : '快速模式';
+            }
+            if (typeof data.deepthink === 'boolean') {
+                agentDeepThink = data.deepthink;
+                document.getElementById('deepthink-switch').classList.toggle('on', agentDeepThink);
+            }
+            // 创建新历史记录
+            conversationId = Date.now();
+            currentHistoryId = String(conversationId);
+            currentHistoryMessages = [];
+            currentSubSessions = [];
+            window.electronAPI.setLastHistoryId(currentHistoryId);
+            saveCurrentHistory();
+            // 刷新侧边栏
+            loadHistoryList();
+            // 保存 DeepSeek URL（由 main.js 直接返回）
+            if (data.url && data.url.indexOf('/chat/') >= 0) {
+                currentHistoryDeepseekUrl = data.url;
+                if (currentHistoryId) {
+                    window.electronAPI.historyLoadUrl(currentHistoryId, data.url);
+                }
+                saveCurrentHistory();
+            } else {
+                // fallback: 轮询获取 URL
+                setTimeout(function pollUrl() {
+                    window.electronAPI.agentGetDeepseekUrl().then(function(urlObj) {
+                        var url = urlObj && urlObj.url;
+                        if (url && url.indexOf('/chat/') >= 0) {
+                            currentHistoryDeepseekUrl = url;
+                            if (currentHistoryId) {
+                                window.electronAPI.historyLoadUrl(currentHistoryId, url);
+                            }
+                            saveCurrentHistory();
+                        } else {
+                            setTimeout(pollUrl, 1000);
+                        }
+                    });
+                }, 1000);
+            }
+            break;
+        case 'stop':
+            // 停止由 main.js 处理
+            break;
+    }
+});
+
+// 轮询 QQ Bot 状态（更新队列信息）
+setInterval(function() {
+    if (!qqBotEnabled) return;
+    window.electronAPI.qqbotStatus().then(function(status) {
+        if (status.running) {
+            document.getElementById('qqbot-status-text').textContent = '运行中';
+        }
+        if (status.authorized) {
+            document.getElementById('qqbot-authorized-section').style.display = '';
+            document.getElementById('qqbot-authorized-openid').textContent = status.openid || '';
+        }
+        if (status.queueLength > 0 || status.processing) {
+            document.getElementById('qqbot-queue-info').style.display = '';
+            document.getElementById('qqbot-queue-count').textContent = status.queueLength;
+        } else {
+            document.getElementById('qqbot-queue-info').style.display = 'none';
+        }
+    });
+}, 3000);
+
+// 在 AI 最终回复后自动发送到 QQ（hook addAssistantSegments 的末尾）
+var origAddAssistantSegments = addAssistantSegments;
+addAssistantSegments = function(segments, skipSave) {
+    origAddAssistantSegments(segments, skipSave);
+    if (!qqBotEnabled || skipSave || isInWorkflow) return;
+    var textParts = [];
+    var filePaths = [];
+    segments.forEach(function(s) {
+        if (s.type === 'text' && s.content.trim()) {
+            var t = s.content.trim();
+            // 将 path="..." 替换为 `文件名`（QQ 消息更简洁）
+            t = t.replace(/path\s*=\s*["'][^"']+\.(png|jpg|jpeg|gif|bmp|webp|svg|txt|doc|pdf|zip)["']/gi, function(m) {
+                var name = m.replace(/\\/g, '/').split('/').pop().replace(/^path\s*=\s*["']|["']$/gi, '');
+                return '`' + name + '`';
+            });
+            textParts.push(t);
+        }
+        var pathRegex = /path\s*=\s*["']([^"']+\.(png|jpg|jpeg|gif|bmp|webp|svg|txt|doc|pdf|zip))["']/gi;
+        var m;
+        while ((m = pathRegex.exec(s.content || '')) !== null) {
+            filePaths.push(m[1]);
+        }
+    });
+    if (textParts.length > 0 || filePaths.length > 0) {
+        window.electronAPI.qqbotSendResponse({
+            text: textParts.join('\n\n'),
+            files: filePaths
+        });
+    }
+};
+
+// ==================== 目录切换时关闭对话 ====================
+function closeCurrentConversation() {
+    // 停止所有正在进行的操作
+    isGenerating = false;
+    isExecutingTasks = false;
+    isInWorkflow = false;
+    workflowWrappers = [];
+    updateSendBtn();
+    hideLoading();
+    // 重置历史追踪
+    currentHistoryId = null;
+    currentHistoryMessages = [];
+    currentHistoryDeepseekUrl = null;
+    currentHistoryExpired = false;
+    initCompleted = false;
+    conversationId = null;
+    // 通知主进程清除保存的历史对话 ID
+    window.electronAPI.setLastHistoryId(null);
+    // 清理残留进度元素
+    var progressEl = document.querySelector('[id="qwen-progress-msg"]');
+    if (progressEl && progressEl.parentNode) progressEl.parentNode.remove();
+    // 清理所有 tool-card 中的 filled 标记
+    document.querySelectorAll('.tool-section-result').forEach(function(el) { delete el.dataset.filled; });
+    // 重置聊天区
+    var area = document.getElementById('chat-area');
+    area.innerHTML = '';
+    var empty = document.createElement('div');
+    empty.className = 'empty-msg';
+    empty.textContent = '点击「+新对话」开始新对话';
+    area.appendChild(empty);
+    document.getElementById('pre-init-section').style.display = '';
+    document.getElementById('post-init-section').style.display = 'none';
+    document.getElementById('newchat-modal').style.display = 'none';
+    var input = document.getElementById('prompt-input');
+    if (input) { input.disabled = false; input.value = ''; }
+}
+
+// 监听主进程的关闭对话指令（目录切换时触发）
+window.electronAPI.onAgentCloseConversation(function() {
+    closeCurrentConversation();
+});
+
+// ==================== 文件附件栏 ====================
+var attachedFiles = [];
+
+function addFileToPanel(filePath, fileName, fileType) {
+    attachedFiles.push({ type: fileType || 'file', path: filePath, name: fileName || getFileName(filePath) });
+    renderFilePanel();
+    document.getElementById('file-panel-bar').style.display = '';
+}
+
+function removeFileFromPanel(idx) {
+    attachedFiles.splice(idx, 1);
+    renderFilePanel();
+    if (attachedFiles.length === 0) document.getElementById('file-panel-bar').style.display = 'none';
+}
+
+function getFileName(fullPath) {
+    var parts = fullPath.replace(/\\/g, '/').split('/');
+    return parts[parts.length - 1] || fullPath;
+}
+
+function renderFilePanel() {
+    var container = document.getElementById('file-panel-items');
+    var countEl = document.getElementById('file-panel-count');
+    var clearBtn = document.getElementById('file-panel-clear');
+    container.innerHTML = '';
+    if (attachedFiles.length === 0) {
+        countEl.textContent = '';
+        clearBtn.style.display = 'none';
+        return;
+    }
+    countEl.textContent = '(' + attachedFiles.length + ')';
+    clearBtn.style.display = '';
+    attachedFiles.forEach(function(f, i) {
+        var chip = document.createElement('span');
+        chip.className = 'file-chip' + (f.type === 'image' ? ' chip-image' : '');
+        var icon = f.type === 'image' ? '🖼 ' : '📄 ';
+        chip.innerHTML = '<span class="chip-name">' + escapeHtml(icon + f.name) + '</span><span class="chip-remove">✕</span>';
+        chip.querySelector('.chip-remove').onclick = function() { removeFileFromPanel(i); };
+        chip.title = f.path;
+        container.appendChild(chip);
+    });
+}
+
+function clearFilePanel() {
+    attachedFiles = [];
+    renderFilePanel();
+    document.getElementById('file-panel-bar').style.display = 'none';
+}
+
+function getFilePathsForSend() {
+    if (attachedFiles.length === 0) return '';
+    return attachedFiles.map(function(f) {
+        return 'path="' + f.path.replace(/"/g, '\\"') + '"';
+    }).join('\n') + '\n\n';
+}
+
+// ==================== 文件上传（粘贴 / 拖拽 / 选择文件） ====================
+// 底部区域整体支持拖拽（dropzone + input 区域）
+var dropTargets = [
+    document.getElementById('file-panel-dropzone'),
+    document.getElementById('prompt-row'),
+    document.getElementById('file-panel')
+].filter(Boolean);
+
+function handleDragOver(e) { e.preventDefault(); document.getElementById('file-panel-dropzone').style.borderColor = '#8888ff'; document.getElementById('file-panel-dropzone').style.background = 'rgba(100,100,255,.1)'; }
+function handleDragLeave(e) { e.preventDefault(); document.getElementById('file-panel-dropzone').style.borderColor = '#444'; document.getElementById('file-panel-dropzone').style.background = ''; }
+
+dropTargets.forEach(function(el) {
+    el.addEventListener('dragover', handleDragOver);
+    el.addEventListener('dragleave', handleDragLeave);
+    el.addEventListener('drop', function(e) {
+        e.preventDefault();
+        handleDragLeave(e);
+        var files = e.dataTransfer.files;
+        // 外部拖拽：files 对象有内容（Windows 拖入、文件浏览器拖入）
+        if (files && files.length > 0) {
+            for (var fi = 0; fi < files.length; fi++) {
+                (function(f) {
+                    if (f.type.indexOf('image') === 0) {
+                        var reader = new FileReader();
+                        reader.onload = function(ev) {
+                            window.electronAPI.saveTempImage({ data: ev.target.result, name: f.name }).then(function(res) {
+                                if (res && res.success) addFileToPanel(res.path, f.name, 'image');
+                            });
+                        };
+                        reader.readAsDataURL(f);
+                    } else {
+                        // 外部文件：f.path 只在 Electron 中可用
+                        addFileToPanel(f.path || f.name, f.name, 'file');
+                    }
+                })(files[fi]);
+            }
+            return;
+        }
+        // 文本拖拽（文件浏览器拖入的路径文本）
+        var text = e.dataTransfer.getData('text');
+        if (text) text.split('\n').forEach(function(p) { p = p.trim(); if (p) addFileToPanel(p, getFileName(p), 'file'); });
+    });
+});
+
+// 粘贴图片（输入框 + 整个底部区域）
+document.getElementById('post-init-section').addEventListener('paste', function(e) {
+    var items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') === 0) {
+            e.preventDefault();
+            var blob = items[i].getAsFile();
+            if (!blob) continue;
+            (function(b) {
+                var reader = new FileReader();
+                reader.onload = function(ev) {
+                    window.electronAPI.saveTempImage({ data: ev.target.result, name: 'clipboard_' + Date.now() + '.' + (b.type.split('/')[1] || 'png') }).then(function(res) {
+                        if (res && res.success) addFileToPanel(res.path, getFileName(res.path), 'image');
+                    });
+                };
+                reader.readAsDataURL(b);
+            })(blob);
+            break;
+        }
+    }
+});
+
+// 选择文件按钮
+document.getElementById('file-upload-btn').addEventListener('click', function() {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = function() {
+        for (var i = 0; i < input.files.length; i++) {
+            (function(f) {
+                if (f.type.indexOf('image') === 0) {
+                    var reader = new FileReader();
+                    reader.onload = function(ev) {
+                        window.electronAPI.saveTempImage({ data: ev.target.result, name: f.name }).then(function(res) {
+                            if (res && res.success) addFileToPanel(res.path, f.name, 'image');
+                        });
+                    };
+                    reader.readAsDataURL(f);
+                } else {
+                    addFileToPanel(f.path || f.name, f.name, 'file');
+                }
+            })(input.files[i]);
+        }
+    };
+    input.click();
+});
+
+document.getElementById('file-panel-clear').onclick = clearFilePanel;
+
+// 接收文件浏览器发送的文件路径
+window.electronAPI.onAgentAddFile(function(filePath) {
+    addFileToPanel(filePath, getFileName(filePath), 'file');
+});
+
+// 全局双击打开文件：对话中所有 .path-chip 双击即用系统程序打开
+document.getElementById('chat-area').addEventListener('dblclick', function(e) {
+    var chip = e.target.closest('.path-chip');
+    if (!chip) return;
+    var filePath = chip.getAttribute('data-path');
+    if (filePath) window.electronAPI.openFile(filePath);
+});
+
+// ==================== DOM 确认弹窗（替代原生 confirm） ====================
+function confirmModal(msg) {
+    return new Promise(function(resolve) {
+        var modal = document.getElementById('confirm-modal');
+        var textEl = document.getElementById('confirm-modal-text');
+        var okBtn = document.getElementById('confirm-modal-ok');
+        var cancelBtn = document.getElementById('confirm-modal-cancel');
+        if (!modal || !textEl || !okBtn || !cancelBtn) {
+            resolve(true); // 兜底
+            return;
+        }
+        textEl.textContent = msg;
+        modal.style.display = 'flex';
+        function cleanup(result) {
+            modal.style.display = 'none';
+            okBtn.removeEventListener('click', onOk);
+            cancelBtn.removeEventListener('click', onCancel);
+            resolve(result);
+        }
+        function onOk() { cleanup(true); }
+        function onCancel() { cleanup(false); }
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+    });
+}
+
+// ==================== 焦点保护 ====================
+// 防止后台 BrowserView 劫持焦点导致输入框不可用
+(function() {
+    var promptRow = document.getElementById('prompt-row');
+    var promptInput = document.getElementById('prompt-input');
+    if (!promptRow || !promptInput) return;
+
+    // 点击输入区域时强制聚焦（即使被其他元素劫持了焦点）
+    promptRow.addEventListener('mousedown', function(e) {
+        // 仅在点击非按钮区域时聚焦输入框
+        if (e.target.tagName !== 'BUTTON') {
+            setTimeout(function() { promptInput.focus(); }, 0);
+        }
+    });
+
+    // 定时检测：如果初始化已完成但输入框意外失焦，尝试恢复
+    setInterval(function() {
+        if (!initCompleted || isGenerating) return;
+        // 如果用户正在选中文本，不抢焦点
+        var sel = window.getSelection();
+        if (sel && sel.toString().length > 0) return;
+        if (!promptInput._focused && document.hasFocus()) {
+            // 页面有焦点但输入框没有，且用户可能正在使用
+            var activeEl = document.activeElement;
+            if (activeEl !== promptInput && activeEl.tagName !== 'BUTTON') {
+                // 不强制抢焦点（避免打断用户操作），只记录
+                // 但如果 activeElement 是 body 或其他无意义元素，则恢复
+                if (activeEl === document.body || activeEl === document.documentElement) {
+                    promptInput.focus();
+                }
+            }
+        }
+    }, 2000);
+})();
+</script>
+</body>
+</html>

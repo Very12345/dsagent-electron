@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx electron:*)",
+      "Bash(taskkill /F /IM \"electron.exe\")",
+      "Bash(taskkill //F //IM electron.exe)",
+      "Bash(ls:*)",
+      "Bash(node -e \"try { require\\(''D:/系统/Desktop/tools/dsagent-electron/inject.js''\\); console.log\\(''OK''\\); } catch\\(e\\) { console.log\\(e.message\\); }\")",
+      "Bash(node -c \"D:/系统/Desktop/tools/dsagent-electron/main.js\")",
+      "Bash(node -c \"D:/系统/Desktop/tools/dsagent-electron/preload.js\")",
+      "Bash(node:*)",
+      "Bash(findstr 9876)",
+      "Bash(findstr \"127.0.0.1:9876\")",
+      "Bash(bash -c \"grep -n 'origDeepThinkActive\\\\|origWebSearchActive\\\\|Restore original toggle' 'D:/系统/Desktop/tools/dsagent-electron/inject.js'\")"
+    ]
+  }
+}

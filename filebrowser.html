@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>文件浏览器</title>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f1e; color: #f8fafc;
+            height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+        }
+        /* ========== HEADER ========== */
+        .header {
+            background: linear-gradient(180deg, #1a1830 0%, #141426 100%);
+            border-bottom: 1px solid #2e2e52; flex-shrink: 0;
+        }
+        .toolbar {
+            display: flex; gap: 8px; align-items: center;
+            padding: 12px 16px; flex-wrap: wrap;
+        }
+        .toolbar .nav-btn {
+            background: #252542; border: 1px solid #5a5a82;
+            color: #f1f5f9; padding: 6px 12px; border-radius: 8px;
+            cursor: pointer; font-size: 12px; font-weight: 500;
+            transition: all .2s; white-space: nowrap;
+        }
+        .toolbar .nav-btn:hover {
+            background: #3d2c6e; border-color: #8b5cf6;
+            color: #fff; transform: translateY(-1px);
+        }
+        .path-bar {
+            flex: 1; display: flex; gap: 6px; align-items: center;
+            background: rgba(255,255,255,0.08); border: 1px solid #4a4a6e;
+            padding: 4px 10px; border-radius: 8px; min-width: 160px;
+            transition: border-color .2s, box-shadow .2s;
+        }
+        .path-bar:focus-within {
+            border-color: #a78bfa;
+            box-shadow: 0 0 0 3px rgba(167,139,250,0.20);
+        }
+        .path-bar input {
+            flex: 1; background: transparent; border: none;
+            color: #f8fafc; padding: 5px 4px; font-size: 12px;
+            font-family: 'Cascadia Code','Fira Code',Consolas,monospace;
+            outline: none; min-width: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .path-bar input::placeholder { color: #94a3b8; }
+        .path-bar .go-btn {
+            background: linear-gradient(135deg,#7c3aed,#6366f1);
+            border: none; color: #fff; padding: 4px 12px; border-radius: 6px;
+            cursor: pointer; font-size: 11px; font-weight: 600;
+            transition: all .2s;
+        }
+        .path-bar .go-btn:hover {
+            box-shadow: 0 2px 10px rgba(124,58,237,0.4); transform: translateY(-1px);
+        }
+        #searchInput {
+            background: rgba(255,255,255,0.08); border: 1px solid #4a4a6e;
+            color: #f8fafc; padding: 6px 12px; border-radius: 8px;
+            font-size: 12px; outline: none; width: 140px;
+            transition: all .2s;
+        }
+        #searchInput:focus {
+            border-color: #a78bfa;
+            box-shadow: 0 0 0 3px rgba(167,139,250,0.20); width: 180px;
+        }
+        #searchInput::placeholder { color: #94a3b8; }
+        /* ========== BREADCRUMB ========== */
+        .breadcrumb {
+            display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
+            padding: 6px 16px; font-size: 12px;
+            border-top: 1px solid rgba(61,61,102,0.5);
+        }
+        .breadcrumb span {
+            cursor: pointer; color: #a3b3cc; padding: 2px 6px;
+            border-radius: 4px; transition: all .15s;
+        }
+        .breadcrumb span:hover { background: rgba(124,58,237,0.22); color: #ddd6fe; }
+        .breadcrumb .sep { color: #64748b; cursor: default; padding: 2px 2px; }
+        .breadcrumb .sep:hover { background: transparent; color: #64748b; }
+        /* ========== FILE LIST ========== */
+        .file-list {
+            flex: 1; overflow-y: auto; padding: 0;
+            background: #0c0c18;
+        }
+        /* Column header */
+        .list-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px 16px; font-size: 11px; font-weight: 600;
+            color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;
+            border-bottom: 1px solid #1e1e3a; background: rgba(255,255,255,0.02);
+            position: sticky; top: 0; z-index: 2;
+        }
+        .list-header .h-icon { width: 36px; text-align: center; }
+        .list-header .h-name { flex: 1; }
+        .list-header .h-size { min-width: 55px; text-align: right; }
+        .list-header .h-actions { width: 84px; text-align: right; }
+        .file-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px 16px; border-bottom: 1px solid rgba(255,255,255,0.04);
+            cursor: pointer; transition: all .15s ease;
+        }
+        .file-item:hover {
+            background: rgba(124,58,237,0.12);
+        }
+        .file-item:last-child { border-bottom: none; }
+        /* File icon - solid colors for high contrast */
+        .file-icon {
+            width: 34px; height: 26px; border-radius: 5px;
+            text-align: center; line-height: 26px;
+            font-size: 14px; flex-shrink: 0;
+        }
+        .file-icon.dir {
+            background: #312e81; color: #c7d2fe;
+        }
+        .file-icon.img {
+            background: #14532d; color: #86efac;
+        }
+        .file-icon.code {
+            background: #1e3a5f; color: #93c5fd;
+        }
+        .file-icon.doc {
+            background: #7c2d12; color: #fdba74;
+        }
+        .file-icon.data {
+            background: #3f3f46; color: #d4d4d8;
+        }
+        .file-icon.media {
+            background: #581c87; color: #e9d5ff;
+        }
+        .file-icon.archive {
+            background: #713f12; color: #fde047;
+        }
+        .file-icon.exe {
+            background: #450a0a; color: #fca5a5;
+        }
+        .file-icon.default {
+            background: #27272a; color: #a1a1aa;
+        }
+        .file-name {
+            flex: 1; font-size: 13px; font-weight: 500;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            color: #f1f5f9;
+        }
+        .directory { color: #c7d2fe; font-weight: 600; }
+        .file { color: #f1f5f9; }
+        .file-size {
+            font-size: 11px; color: #94a3b8; white-space: nowrap;
+            min-width: 55px; text-align: right;
+            font-family: 'Cascadia Code','Fira Code',Consolas,monospace;
+            font-variant-numeric: tabular-nums;
+        }
+        .file-item:hover .file-size { color: #cbd5e1; }
+        /* Actions - icon buttons */
+        .file-actions {
+            display: flex; gap: 2px; flex-shrink: 0; justify-content: flex-end;
+            width: 84px; opacity: 0; transition: opacity .15s;
+            align-items: center;
+        }
+        .file-item:hover .file-actions { opacity: 1; }
+        .file-actions button {
+            border: none; width: 26px; height: 26px; border-radius: 5px;
+            cursor: pointer; font-size: 13px; line-height: 26px;
+            text-align: center; transition: all .15s;
+            background: rgba(255,255,255,0.10); padding: 0;
+            color: #cbd5e1;
+        }
+        .file-actions button:hover { transform: scale(1.12); }
+        .file-actions .chat-btn { color: #34d399; }
+        .file-actions .chat-btn:hover { background: rgba(52,211,153,0.22); color: #6ee7b7; }
+        .file-actions .rename-btn { color: #c4b5fd; }
+        .file-actions .rename-btn:hover { background: rgba(139,92,246,0.30); color: #e9d5ff; }
+        .file-actions .delete-btn { color: #f87171; }
+        .file-actions .delete-btn:hover { background: rgba(248,113,113,0.22); color: #fca5a5; }
+        /* Directory hint on hover */
+        .file-item .dir-hint {
+            font-size: 10px; color: #64748b; margin-left: 6px;
+            opacity: 0; transition: opacity .15s;
+        }
+        .file-item:hover .dir-hint { opacity: 1; }
+        /* ========== STATUS BAR ========== */
+        .status-bar {
+            background: rgba(0,0,0,0.40); padding: 7px 16px;
+            border-top: 1px solid #2e2e52; font-size: 12px; color: #94a3b8;
+            display: flex; justify-content: space-between; align-items: center;
+            flex-shrink: 0;
+        }
+        .status-bar .stats { color: #64748b; font-size: 11px; }
+        .status-bar .stats span { color: #a3b3cc; margin: 0 3px; }
+        #currentRoot { font-family: 'Cascadia Code',Consolas,monospace; font-size: 11px; color: #c4b5fd; }
+        /* ========== SCROLLBAR ========== */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.20); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.35); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.55); }
+        /* ========== EMPTY / LOADING ========== */
+        .empty-state {
+            text-align: center; padding: 60px 20px; color: #64748b;
+        }
+        .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+        .empty-state .title { font-size: 14px; color: #94a3b8; margin-bottom: 4px; }
+        .empty-state .subtitle { font-size: 12px; color: #475569; }
+        .file-name + input[type="text"] {
+            background: rgba(255,255,255,0.10) !important; color: #f8fafc !important;
+            border: 1px solid #8b5cf6 !important; outline: none !important;
+            padding: 2px 6px !important; font-size: 13px !important;
+            font-family: inherit !important; border-radius: 4px !important;
+            width: 100% !important; box-sizing: border-box !important;
+        }
+
+        /* ========== 浅色主题 ========== */
+        body.light { background: #f2f2f7; color: #222; }
+        body.light .header { background: linear-gradient(180deg, #e8e8f0 0%, #f5f5f7 100%); border-bottom-color: #d0d0d8; }
+        body.light .toolbar .nav-btn { background: #e0e0e8; border-color: #c0c0d0; color: #333; }
+        body.light .toolbar .nav-btn:hover { background: #d4d4e8; border-color: #8b5cf6; color: #222; }
+        body.light .path-bar { background: rgba(0,0,0,0.04); border-color: #c0c0d0; }
+        body.light .path-bar input { color: #333; }
+        body.light .path-bar input::placeholder { color: #999; }
+        body.light .path-bar .go-btn { background: linear-gradient(135deg,#8b5cf6,#6366f1); }
+        body.light #searchInput { background: rgba(0,0,0,0.04); border-color: #c0c0d0; color: #333; }
+        body.light #searchInput::placeholder { color: #999; }
+        body.light .breadcrumb { border-top-color: #d0d0d8; }
+        body.light .breadcrumb span { color: #666; }
+        body.light .breadcrumb span:hover { background: rgba(139,92,246,0.12); color: #6d28d9; }
+        body.light .breadcrumb .sep { color: #aaa; }
+        body.light .breadcrumb .sep:hover { color: #aaa; }
+        body.light .file-list { background: #fafafc; }
+        body.light .list-header { color: #666; border-bottom-color: #ddd; background: rgba(0,0,0,0.02); }
+        body.light .file-item { border-bottom-color: rgba(0,0,0,0.06); }
+        body.light .file-item:hover { background: rgba(99,102,241,0.08); }
+        body.light .file-name { color: #222; }
+        body.light .directory { color: #4f46e5; }
+        body.light .file { color: #333; }
+        body.light .file-size { color: #888; }
+        body.light .file-item:hover .file-size { color: #666; }
+        body.light .file-actions button { background: rgba(0,0,0,0.06); color: #666; }
+        body.light .file-actions .chat-btn { color: #059669; }
+        body.light .file-actions .chat-btn:hover { background: rgba(5,150,105,0.12); color: #047857; }
+        body.light .file-actions .rename-btn { color: #7c3aed; }
+        body.light .file-actions .rename-btn:hover { background: rgba(124,58,237,0.12); color: #6d28d9; }
+        body.light .file-actions .delete-btn { color: #dc2626; }
+        body.light .file-actions .delete-btn:hover { background: rgba(220,38,38,0.12); color: #b91c1c; }
+        body.light .file-item .dir-hint { color: #999; }
+        body.light .status-bar { background: rgba(0,0,0,0.05); border-top-color: #d0d0d8; color: #666; }
+        body.light .status-bar .stats { color: #888; }
+        body.light .status-bar .stats span { color: #666; }
+        body.light #currentRoot { color: #7c3aed; }
+        body.light .empty-state { color: #888; }
+        body.light .empty-state .title { color: #666; }
+        body.light .empty-state .subtitle { color: #999; }
+        body.light .file-name + input[type="text"] { background: #fff !important; color: #333 !important; border-color: #7c3aed !important; }
+        body.light ::-webkit-scrollbar-track { background: rgba(0,0,0,0.06); }
+        body.light ::-webkit-scrollbar-thumb { background: rgba(100,100,200,0.3); }
+        body.light ::-webkit-scrollbar-thumb:hover { background: rgba(100,100,200,0.5); }
+        /* file-icon 在 light 下保持不变（色彩丰富有辨识度） */
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="toolbar">
+            <button id="upBtn" class="nav-btn">⬆ 上级</button>
+            <button id="refreshBtn" class="nav-btn">↻ 刷新</button>
+            <div class="path-bar">
+                <input type="text" id="pathInput" placeholder="输入路径后回车">
+                <button class="go-btn" id="goBtn">跳转</button>
+            </div>
+            <input type="text" id="searchInput" placeholder="搜索文件...">
+        </div>
+        <div id="breadcrumb" class="breadcrumb"></div>
+    </div>
+    <div id="fileList" class="file-list">
+        <div class="empty-state">
+            <div class="icon">📂</div>
+            <div class="title">加载中...</div>
+        </div>
+    </div>
+    <div class="status-bar">
+        <span id="statusText">就绪</span>
+        <span class="stats" id="statsInfo"></span>
+        <span>根目录: <span id="currentRoot">未打开</span></span>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        let currentPath = '';
+        let currentRoot = null;
+        let lastLoadedFiles = [];
+        let lastLoadedDir = '';
+
+        function loadDirectory(path) {
+            if (!currentRoot) {
+                showEmpty('📂', '请先选择根目录', '通过菜单 文件 > 打开文件夹 选择');
+                document.getElementById('statusText').innerText = '未打开文件夹';
+                return;
+            }
+
+            showEmpty('⏳', '加载中...', '');
+            document.getElementById('statusText').innerText = '正在加载 ' + path;
+
+            ipcRenderer.invoke('list-dir', path).then(result => {
+                if (result.success) {
+                    currentPath = result.path;
+                    lastLoadedFiles = result.files;
+                    lastLoadedDir = result.path;
+                    document.getElementById('pathInput').value = currentPath;
+                    document.getElementById('currentRoot').innerText = currentRoot;
+                    applySearchFilter();
+                    updateStats(result.files);
+                    document.getElementById('statusText').innerText = '已加载 ' + result.files.length + ' 个项目';
+                    // 同步刷新历史对话
+                    ipcRenderer.send('request-history-refresh');
+                } else {
+                    showEmpty('⚠️', '加载失败', result.error);
+                    document.getElementById('statusText').innerText = '加载失败';
+                }
+            }).catch(err => {
+                showEmpty('⚠️', '错误', err.message);
+            });
+        }
+
+        function showEmpty(icon, title, subtitle) {
+            const container = document.getElementById('fileList');
+            container.innerHTML = '<div class="empty-state">'
+                + '<div class="icon">' + icon + '</div>'
+                + '<div class="title">' + title + '</div>'
+                + (subtitle ? '<div class="subtitle">' + subtitle + '</div>' : '')
+                + '</div>';
+        }
+
+        function updateStats(files) {
+            if (!files) { document.getElementById('statsInfo').innerText = ''; return; }
+            const dirs = files.filter(f => f.isDir).length;
+            const fileCount = files.length - dirs;
+            const parts = [];
+            if (dirs > 0) parts.push(dirs + ' 个目录');
+            if (fileCount > 0) parts.push(fileCount + ' 个文件');
+            document.getElementById('statsInfo').innerText = parts.join('  ·  ');
+        }
+
+        function isUnderRoot(dirPath) {
+            if (!currentRoot) return false;
+            const rel = dirPath.replace(/\//g, '\\');
+            const root = currentRoot.replace(/\//g, '\\');
+            return rel === root || rel.startsWith(root + '\\');
+        }
+
+        function getParentPath(dirPath) {
+            const parts = dirPath.replace(/\//g, '\\').split('\\');
+            parts.pop();
+            return parts.join('\\') || dirPath;
+        }
+        
+        function renderFileList(files, currentDir) {
+            const container = document.getElementById('fileList');
+            if (!files || files.length === 0) {
+                showEmpty('📁', '空目录', '此目录下没有文件');
+                updateStats([]);
+                return;
+            }
+            
+            // 按目录优先排序
+            files.sort((a, b) => {
+                if (a.isDir === b.isDir) return a.name.localeCompare(b.name);
+                return a.isDir ? -1 : 1;
+            });
+            
+            updateStats(files);
+            
+            // Build list with header
+            let html = '<div class="list-header">'
+                + '<div class="h-icon"></div>'
+                + '<div class="h-name">文件名</div>'
+                + '<div class="h-size">大小</div>'
+                + '<div class="h-actions">操作</div>'
+                + '</div>';
+            
+            files.forEach(file => {
+                const iconInfo = getFileIcon(file.name, file.isDir);
+                const hint = file.isDir ? '<span class="dir-hint">双击进入</span>' : '';
+                
+                html += '<div class="file-item" draggable="true" data-name="' + escapeHtml(file.name) + '" data-path="' + escapeHtml(pathJoin(currentDir, file.name)) + '">'
+                    + '<div class="file-icon ' + iconInfo.cls + '">' + iconInfo.emoji + '</div>'
+                    + '<div class="file-name ' + (file.isDir ? 'directory' : 'file') + '">' + escapeHtml(file.name) + hint + '</div>'
+                    + '<div class="file-size">' + (file.isDir ? '' : formatFileSize(file.size)) + '</div>'
+                    + '<div class="file-actions">';
+                
+                if (!file.isDir) {
+                    html += '<button class="chat-btn" title="发送到对话" data-action="chat">→</button>';
+                }
+                html += '<button class="rename-btn" title="重命名" data-action="rename">✎</button>'
+                    + '<button class="delete-btn" title="删除" data-action="delete">✕</button>'
+                    + '</div></div>';
+            });
+            
+            container.innerHTML = html;
+            
+            // Attach event listeners
+            container.querySelectorAll('.file-item').forEach(item => {
+                const name = item.dataset.name;
+                const file = files.find(f => f.name === name);
+                if (!file) return;
+                
+                // 拖拽文件路径到 Agent 或其他目标
+                item.addEventListener('dragstart', function(e) {
+                    var fullPath = pathJoin(currentDir, file.name);
+                    e.dataTransfer.setData('text/plain', fullPath);
+                    e.dataTransfer.effectAllowed = 'copy';
+                });
+                
+                item.ondblclick = () => {
+                    if (file.isDir) {
+                        loadDirectory(pathJoin(currentDir, file.name));
+                    } else {
+                        ipcRenderer.invoke('open-file', pathJoin(currentDir, file.name));
+                    }
+                };
+                
+                item.querySelectorAll('button').forEach(btn => {
+                    btn.onclick = (e) => {
+                        e.stopPropagation();
+                        const action = btn.dataset.action;
+                        const fullPath = pathJoin(currentDir, file.name);
+                        if (action === 'chat') {
+                            ipcRenderer.invoke('send-path-to-chat', fullPath);
+                        } else if (action === 'delete') {
+                            if (confirm('确定删除 ' + file.name + ' 吗？')) {
+                                ipcRenderer.invoke('delete-file', fullPath, file.isDir).then(() => {
+                                    loadDirectory(currentPath);
+                                });
+                            }
+                        } else if (action === 'rename') {
+                            const nameEl = item.querySelector('.file-name');
+                            const oldName = nameEl.childNodes[0].textContent;
+                            const input = document.createElement('input');
+                            input.type = 'text';
+                            input.value = oldName;
+                            input.style.cssText = 'background:#1e1e2e;color:#f1f5f9;border:1px solid #8b5cf6;outline:none;padding:2px 6px;font-size:13px;font-family:inherit;border-radius:4px;width:100%;box-sizing:border-box;';
+                            nameEl.childNodes[0].replaceWith(input);
+                            input.focus();
+                            input.select();
+                            function finishRename() {
+                                const newName = input.value.trim();
+                                input.replaceWith(document.createTextNode(oldName));
+                                if (newName && newName !== oldName) {
+                                    ipcRenderer.invoke('rename-file', fullPath, newName).then((res) => {
+                                        if (res.success) loadDirectory(currentPath);
+                                        else alert('重命名失败: ' + (res.error || '未知错误'));
+                                    });
+                                }
+                            }
+                            input.addEventListener('keydown', (ke) => {
+                                if (ke.key === 'Enter') { ke.preventDefault(); finishRename(); }
+                                if (ke.key === 'Escape') { input.replaceWith(document.createTextNode(oldName)); }
+                            });
+                            input.addEventListener('blur', finishRename);
+                        }
+                    };
+                });
+            });
+        }
+        
+        function getFileIcon(filename, isDir) {
+            if (isDir) return { emoji: '📁', cls: 'dir' };
+            const ext = filename.split('.').pop().toLowerCase();
+            const map = {
+                js: { emoji: '📜', cls: 'code' }, jsx: { emoji: '⚛️', cls: 'code' },
+                ts: { emoji: '📘', cls: 'code' }, tsx: { emoji: '⚛️', cls: 'code' },
+                html: { emoji: '🌐', cls: 'code' }, htm: { emoji: '🌐', cls: 'code' },
+                css: { emoji: '🎨', cls: 'code' }, scss: { emoji: '🎨', cls: 'code' }, sass: { emoji: '🎨', cls: 'code' },
+                json: { emoji: '📋', cls: 'data' }, xml: { emoji: '📋', cls: 'data' }, yaml: { emoji: '📋', cls: 'data' }, yml: { emoji: '📋', cls: 'data' },
+                md: { emoji: '📝', cls: 'doc' }, txt: { emoji: '📄', cls: 'doc' }, rtf: { emoji: '📄', cls: 'doc' },
+                py: { emoji: '🐍', cls: 'code' }, java: { emoji: '☕', cls: 'code' },
+                cpp: { emoji: '⚙️', cls: 'code' }, c: { emoji: '⚙️', cls: 'code' }, h: { emoji: '⚙️', cls: 'code' }, hpp: { emoji: '⚙️', cls: 'code' },
+                cs: { emoji: '#️⃣', cls: 'code' }, go: { emoji: '🐹', cls: 'code' }, rs: { emoji: '🦀', cls: 'code' },
+                php: { emoji: '🐘', cls: 'code' }, rb: { emoji: '💎', cls: 'code' }, swift: { emoji: '🕊️', cls: 'code' }, kt: { emoji: '🟣', cls: 'code' },
+                sql: { emoji: '🗃️', cls: 'data' }, db: { emoji: '🗃️', cls: 'data' }, sqlite: { emoji: '🗃️', cls: 'data' },
+                exe: { emoji: '⚡', cls: 'exe' }, dll: { emoji: '⚡', cls: 'exe' }, bat: { emoji: '⚡', cls: 'exe' }, sh: { emoji: '⚡', cls: 'exe' }, cmd: { emoji: '⚡', cls: 'exe' },
+                jpg: { emoji: '🖼️', cls: 'img' }, jpeg: { emoji: '🖼️', cls: 'img' }, png: { emoji: '🖼️', cls: 'img' },
+                gif: { emoji: '🎬', cls: 'img' }, svg: { emoji: '🎨', cls: 'img' }, webp: { emoji: '🖼️', cls: 'img' }, ico: { emoji: '🖼️', cls: 'img' },
+                bmp: { emoji: '🖼️', cls: 'img' }, tiff: { emoji: '🖼️', cls: 'img' },
+                mp3: { emoji: '🎵', cls: 'media' }, wav: { emoji: '🎵', cls: 'media' }, flac: { emoji: '🎵', cls: 'media' }, ogg: { emoji: '🎵', cls: 'media' },
+                mp4: { emoji: '🎬', cls: 'media' }, avi: { emoji: '🎬', cls: 'media' }, mkv: { emoji: '🎬', cls: 'media' }, mov: { emoji: '🎬', cls: 'media' },
+                pdf: { emoji: '📕', cls: 'doc' }, doc: { emoji: '📘', cls: 'doc' }, docx: { emoji: '📘', cls: 'doc' }, xls: { emoji: '📗', cls: 'doc' }, xlsx: { emoji: '📗', cls: 'doc' }, ppt: { emoji: '📙', cls: 'doc' }, pptx: { emoji: '📙', cls: 'doc' },
+                zip: { emoji: '📦', cls: 'archive' }, rar: { emoji: '📦', cls: 'archive' }, '7z': { emoji: '📦', cls: 'archive' }, tar: { emoji: '📦', cls: 'archive' }, gz: { emoji: '📦', cls: 'archive' },
+                log: { emoji: '📋', cls: 'data' }, cfg: { emoji: '⚙️', cls: 'code' }, ini: { emoji: '⚙️', cls: 'code' }, env: { emoji: '🔐', cls: 'data' }
+            };
+            return map[ext] || { emoji: '📄', cls: 'default' };
+        }
+        
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function applySearchFilter() {
+            const query = document.getElementById('searchInput').value.trim().toLowerCase();
+            if (!query) {
+                renderFileList(lastLoadedFiles, lastLoadedDir);
+                document.getElementById('statusText').innerText = '已加载 ' + lastLoadedFiles.length + ' 个项目';
+            } else {
+                const filtered = lastLoadedFiles.filter(function(f) {
+                    return f.name.toLowerCase().includes(query);
+                });
+                renderFileList(filtered, lastLoadedDir);
+                document.getElementById('statusText').innerText = '找到 ' + filtered.length + ' 个结果 (共 ' + lastLoadedFiles.length + ' 个)';
+            }
+        }
+        
+        function pathJoin(...parts) {
+            return parts.join('\\').replace(/\\\\/g, '\\');
+        }
+        
+        function updateBreadcrumb(dirPath) {
+            const container = document.getElementById('breadcrumb');
+            const parts = dirPath.split('\\');
+            container.innerHTML = '';
+            
+            let current = '';
+            parts.forEach((part, index) => {
+                if (index > 0) {
+                    const sep = document.createElement('span');
+                    sep.className = 'sep';
+                    sep.innerText = ' › ';
+                    container.appendChild(sep);
+                }
+                
+                const crumb = document.createElement('span');
+                crumb.innerText = part || (part === '' ? '根' : part);
+                if (index < parts.length - 1) {
+                    current += (current ? '\\' : '') + part;
+                    crumb.onclick = () => loadDirectory(current);
+                }
+                container.appendChild(crumb);
+            });
+        }
+        
+        document.getElementById('upBtn').onclick = () => {
+            const parent = getParentPath(currentPath);
+            if (!isUnderRoot(parent)) {
+                document.getElementById('statusText').innerText = '已到达根目录边界';
+                return;
+            }
+            if (parent && parent !== currentPath) {
+                loadDirectory(parent);
+            }
+        };
+
+        document.getElementById('refreshBtn').onclick = () => {
+            if (currentPath) loadDirectory(currentPath);
+        };
+
+        document.getElementById('goBtn').onclick = () => {
+            const newPath = document.getElementById('pathInput').value;
+            if (newPath) {
+                if (!isUnderRoot(newPath)) {
+                    document.getElementById('statusText').innerText = '不允许访问根目录以外的路径';
+                    return;
+                }
+                loadDirectory(newPath);
+            }
+        };
+
+        document.getElementById('pathInput').onkeypress = (e) => {
+            if (e.key === 'Enter') document.getElementById('goBtn').click();
+        };
+
+        document.getElementById('searchInput').addEventListener('input', applySearchFilter);
+
+        ipcRenderer.on('root-changed', (event, newRoot) => {
+            currentRoot = newRoot;
+            document.getElementById('currentRoot').innerText = newRoot || '未打开';
+            if (newRoot) {
+                loadDirectory(newRoot);
+            } else {
+                currentPath = '';
+                showEmpty('📂', '请先选择根目录', '通过菜单 文件 > 打开文件夹 选择');
+                document.getElementById('statusText').innerText = '文件夹已关闭';
+                document.getElementById('pathInput').value = '';
+                document.getElementById('breadcrumb').innerHTML = '';
+                document.getElementById('statsInfo').innerText = '';
+            }
+        });
+
+        let autoRefreshTimer = null;
+        let lastRenderedSnapshot = '';
+
+        function getFileListSnapshot(files) {
+            return (files || []).map(function(f) {
+                return f.name + '|' + (f.isDir ? 'D' : 'F') + '|' + f.size + '|' + f.modifiedTime;
+            }).sort().join(',');
+        }
+
+        async function refreshIfChanged() {
+            if (!currentPath || !currentRoot) return;
+            try {
+                var result = await ipcRenderer.invoke('list-dir', currentPath);
+                if (!result.success) return;
+                var snapshot = getFileListSnapshot(result.files);
+                if (snapshot !== lastRenderedSnapshot) {
+                    lastRenderedSnapshot = snapshot;
+                    currentPath = result.path;
+                    lastLoadedFiles = result.files;
+                    lastLoadedDir = result.path;
+                    document.getElementById('pathInput').value = currentPath;
+                    document.getElementById('currentRoot').innerText = currentRoot;
+                    applySearchFilter();
+                    document.getElementById('statusText').innerText = '已加载 ' + result.files.length + ' 个项目';
+                }
+            } catch(e) {}
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+            autoRefreshTimer = setInterval(refreshIfChanged, 5000);
+        }
+
+        ipcRenderer.on('fb-theme', (event, theme) => {
+            document.body.classList.toggle('light', theme === 'light');
+        });
+
+        startAutoRefresh();
+
+        ipcRenderer.invoke('get-initial-dir').then(result => {
+            if (result.success && result.path) {
+                currentRoot = result.path;
+                document.getElementById('currentRoot').innerText = currentRoot;
+                loadDirectory(result.path);
+            } else {
+                showEmpty('📂', '请先选择根目录', '通过菜单 文件 > 打开文件夹 选择');
+            }
+        });
+    </script>
+</body>
+</html>

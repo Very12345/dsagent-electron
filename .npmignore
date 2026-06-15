@@ -1,0 +1,12 @@
+.dsa/
+.dist/
+dist/
+dist_pack/
+*.zip
+*.exe
+*.dmg
+*.AppImage
+package-lock.json
+recent_projects.json
+*.jpg
+*.png
