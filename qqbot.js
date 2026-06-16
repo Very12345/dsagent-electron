@@ -94,9 +94,18 @@ class QQBotClient extends EventEmitter {
             const ext = nameParts.length > 1 ? `.${nameParts.pop()}` : '';
             const baseName = nameParts.join('.');
             
-            const safeBaseName = baseName.replace(/[^a-zA-Z0-9_\-. ]/g, '').substring(0, 20);
-            const filename = `${safeBaseName}_${msgId.substring(0,8)}${ext}`;
-            const filePath = path.join(this.config.tempDir, filename);
+            // 保留完整原始文件名（仅移除危险字符）
+            const safeBaseName = baseName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+            let filename = `${safeBaseName}${ext}`;
+            let filePath = path.join(this.config.tempDir, filename);
+            
+            // 文件已存在自动加 (1)(2) 编号
+            let counter = 1;
+            while (fs.existsSync(filePath)) {
+                filename = `${safeBaseName}(${counter})${ext}`;
+                filePath = path.join(this.config.tempDir, filename);
+                counter++;
+            }
             
             const writer = fs.createWriteStream(filePath);
             response.data.pipe(writer);

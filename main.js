@@ -1,5 +1,5 @@
 // DeepSeek Local Agent - Electron 主进程（双栏布局版）
-const { app, BrowserWindow, BrowserView, Menu, dialog, session, ipcMain, shell, clipboard, nativeImage } = require('electron');
+const { app, BrowserWindow, BrowserView, Menu, dialog, session, ipcMain, shell, clipboard, nativeImage, desktopCapturer } = require('electron');
 const path = require('path');
 const agent = require('./server.js');
 const historyManager = require('./history-manager.js');
@@ -1083,6 +1083,24 @@ function setupControlBarIPC() {
                     qqBotInstance.sendText(msg.openid, '⏳ 正在处理上一条消息，已加入等待队列（位置 ' + qqBotPendingMessages.length + '）', msg.msgId);
                     return;
                 }
+
+                // 检查是否有活跃对话（DeepSeek 页面是否在当前对话中）
+                try {
+                    if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+                        var dsUrl = await deepseekView.webContents.executeJavaScript('window.location.href');
+                        var dsBody = await deepseekView.webContents.executeJavaScript('document.body ? document.body.textContent.length > 100 : false');
+                        if (!dsUrl || !dsUrl.includes('/chat/')) {
+                            // 无活跃对话，发送告警而非自动转发
+                            if (text) {
+                                qqBotInstance.sendText(msg.openid, '⚠️ 当前没有活跃的对话。请先发送 /new 开始新对话，或使用 /list 查看已有对话后用 /switch <编号> 切换。', msg.msgId);
+                            }
+                            return;
+                        }
+                    }
+                } catch(e) {
+                    console.log('[QQBot] 检查对话状态失败:', e.message);
+                }
+
                 qqBotProcessing = true;
                 forwardQQMessageToAgent(msg);
             });
@@ -1115,14 +1133,17 @@ function setupControlBarIPC() {
         parts.push('└ 📂 目录: ' + dir);
         parts.push('');
         parts.push('📖 可用指令：');
-        parts.push('/h          - 显示此帮助');
+        parts.push('/h               - 显示此帮助');
         parts.push('/n [expert|quick] - 新对话');
-        parts.push('/d          - 切换深度思考');
+        parts.push('/d               - 切换深度思考');
         parts.push('/m [smart|strict|loose] - 查看/切换信任模式');
-        parts.push('/cd <路径>   - 切换工作目录');
-        parts.push('/s          - 显示当前状态');
-        parts.push('/sc [full]   - 窗口截图（加 full 则为全屏）');
-        parts.push('/stop       - 停止正在执行的任务');
+        parts.push('/cd <路径>        - 切换工作目录');
+        parts.push('/s               - 显示当前状态');
+        parts.push('/sc               - 全屏截图');
+        parts.push('/sct              - 截取当前视图窗口');
+        parts.push('/stop            - 停止正在执行的任务');
+        parts.push('/l               - 列出所有对话');
+        parts.push('/sw <编号>        - 切换到指定对话（用 /l 查看编号）');
         return parts.join('\n');
     }
 
@@ -1235,77 +1256,248 @@ function setupControlBarIPC() {
             return true;
         }
 
+        if (main === '/list' || main === '/l') {
+            try {
+                var listDir = currentRootDir || app.getPath('userData');
+                var histories = historyManager.listHistories(listDir);
+                if (!histories || histories.length === 0) {
+                    await qqBotInstance.sendText(msg.openid, '📋 没有找到任何历史对话。发送 /new 开始一个新对话。', msg.msgId);
+                } else {
+                    var lines = ['📋 历史对话列表：'];
+                    var limit = Math.min(histories.length, 30);
+                    for (var li = 0; li < limit; li++) {
+                        var h = histories[li];
+                        var prefix = (li + 1) < 10 ? ' ' : '';
+                        var title = (h.title || '(无标题)').substring(0, 40);
+                        var modeInfo = (h.mode || 'expert') + (h.deepthink ? '+深' : '');
+                        var msgCount = h.messageCount || 0;
+                        lines.push(prefix + (li + 1) + '. ' + title + ' [' + modeInfo + ' ' + msgCount + '条]');
+                    }
+                    if (histories.length > 30) lines.push('... 还有 ' + (histories.length - 30) + ' 个');
+                    lines.push('');
+                    lines.push('发送 /sw <编号>（或 /switch <编号>）切换对话');
+                    await qqBotInstance.sendText(msg.openid, lines.join('\n'), msg.msgId);
+                }
+            } catch (e) {
+                await qqBotInstance.sendText(msg.openid, '❌ 获取对话列表失败: ' + e.message, msg.msgId);
+            }
+            return true;
+        }
+
+        if (main === '/switch' || main === '/sw') {
+            var swIdx = parseInt(cmd[1], 10);
+            if (isNaN(swIdx) || swIdx < 1) {
+                await qqBotInstance.sendText(msg.openid, '❌ 请指定有效的对话编号。使用 /l 查看所有对话。', msg.msgId);
+                return true;
+            }
+            try {
+                var listDir = currentRootDir || app.getPath('userData');
+                var histories = historyManager.listHistories(listDir);
+                if (!histories || swIdx > histories.length) {
+                    await qqBotInstance.sendText(msg.openid, '❌ 对话编号超出范围（1-' + (histories.length || 0) + '）', msg.msgId);
+                    return true;
+                }
+                var target = histories[swIdx - 1];
+                // 验证对话记录是否仍然存在（可能在列表后刚被删除）
+                var fullHistory = historyManager.loadHistory(listDir, target.id);
+                if (!fullHistory) {
+                    await qqBotInstance.sendText(msg.openid, '❌ 该对话记录已不存在（可能已被删除）', msg.msgId);
+                    return true;
+                }
+                // 通过 agentView 恢复历史对话
+                if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+                    agentView.webContents.send('restore-history-conversation', target.id);
+                    await qqBotInstance.sendText(msg.openid, '✅ 已切换到: ' + (target.title || '(未命名对话)'), msg.msgId);
+                } else {
+                    await qqBotInstance.sendText(msg.openid, '❌ Agent 页面未加载', msg.msgId);
+                }
+            } catch (e) {
+                await qqBotInstance.sendText(msg.openid, '❌ 切换对话失败: ' + e.message, msg.msgId);
+            }
+            return true;
+        }
+
         if (main === '/screenshot' || main === '/sc') {
-            var ssFull = cmd[1] === 'full' || cmd[1] === 'f';
             try {
                 var ssTempDir = path.join(currentRootDir || app.getPath('userData'), '.dsa', 'temp');
                 if (!fs.existsSync(ssTempDir)) fs.mkdirSync(ssTempDir, { recursive: true });
                 var ssFilename = 'screenshot_' + Date.now() + '.png';
                 var ssPath = path.join(ssTempDir, ssFilename);
 
-                if (ssFull) {
-                    // 全屏截图：用 scaleFactor 得到物理尺寸
-                    var scaleFactor = require('electron').screen.getPrimaryDisplay().scaleFactor || 1;
-                    var psScript = 'Add-Type -AssemblyName System.Windows.Forms,System.Drawing\n'
-                        + '$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds\n'
-                        + ('$r=New-Object System.Drawing.Size([int]($s.Width*' + scaleFactor + '),[int]($s.Height*' + scaleFactor + '))\n')
-                        + '$bmp=New-Object System.Drawing.Bitmap($r.Width,$r.Height)\n'
-                        + '$g2=[System.Drawing.Graphics]::FromImage($bmp)\n'
-                        + '$g2.CopyFromScreen(0,0,0,0,$r)\n'
-                        + ('$bmp.Save(\'' + ssPath.replace(/'/g, "''") + '\',[System.Drawing.Imaging.ImageFormat]::Png)\n')
-                        + '$g2.Dispose();$bmp.Dispose()\n'
-                        + 'Write-Output \'OK\'';
-                    var psFile = path.join(os.tmpdir(), '_ds_ss_' + Date.now() + '.ps1');
-                    fs.writeFileSync(psFile, psScript, 'utf-8');
-                    try {
-                        require('child_process').execSync(
-                            'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + psFile + '"',
-                            { timeout: 15000, encoding: 'utf-8' }
-                        );
-                    } finally {
-                        try { fs.unlinkSync(psFile); } catch(e) {}
-                    }
-                } else {
-                    // 窗口截图：通过 PowerShell 截全屏，按 Electron 窗口位置裁切
+                // 方法1: desktopCapturer screen capture + crop
+                var captured = false;
+                try {
+                    var sources = await desktopCapturer.getSources({
+                        types: ['screen'],
+                        thumbnailSize: { width: 3840, height: 2160 } // 明确尺寸更可靠
+                    });
+
+                    var electronScreen = require('electron').screen;
                     var winBounds = mainWindow.getBounds();
-                    var ssScale = require('electron').screen.getPrimaryDisplay().scaleFactor || 1;
-                    var winPngPath = ssPath;
-                    var psWin = 'Add-Type -AssemblyName System.Windows.Forms,System.Drawing\n'
-                        + '$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds\n'
-                        + ('$r=New-Object System.Drawing.Size([int]($s.Width*' + ssScale + '),[int]($s.Height*' + ssScale + '))\n')
-                        + '$full=New-Object System.Drawing.Bitmap($r.Width,$r.Height)\n'
-                        + '$g2=[System.Drawing.Graphics]::FromImage($full)\n'
-                        + '$g2.CopyFromScreen(0,0,0,0,$r)\n'
-                        + ('$rect=New-Object System.Drawing.Rectangle('
-                            + Math.round(winBounds.x * ssScale) + ','
-                            + Math.round(winBounds.y * ssScale) + ','
-                            + Math.round(winBounds.width * ssScale) + ','
-                            + Math.round(winBounds.height * ssScale) + ')\n')
-                        + '$crop=$full.Clone($rect,[System.Drawing.Imaging.PixelFormat]::Format32bppArgb)\n'
-                        + ('$crop.Save(\'' + winPngPath.replace(/'/g, "''") + '\',[System.Drawing.Imaging.ImageFormat]::Png)\n')
-                        + '$g2.Dispose();$full.Dispose();$crop.Dispose()\n'
-                        + 'Write-Output \'OK\'';
-                    var psWinFile = path.join(os.tmpdir(), '_ds_ss_' + Date.now() + '.ps1');
-                    fs.writeFileSync(psWinFile, psWin, 'utf-8');
+                    var targetDisplay = electronScreen.getDisplayMatching(winBounds);
+                    var source = null;
+                    for (var si = 0; si < sources.length; si++) {
+                        if (String(sources[si].display_id) === String(targetDisplay.id)) {
+                            source = sources[si];
+                            break;
+                        }
+                    }
+                    if (!source && sources.length > 0) source = sources[0];
+
+                    if (source && source.thumbnail && !source.thumbnail.isEmpty()) {
+                        var img = source.thumbnail;
+
+                        fs.writeFileSync(ssPath, img.toPNG());
+                        captured = true;
+                        console.log('[QQBot] 截图方式: desktopCapturer');
+                    }
+                } catch (e) {
+                    console.log('[QQBot] desktopCapturer 异常:', e.message);
+                }
+
+                // 方法2: PowerShell .NET 截图兜底（写入临时 .ps1 脚本避免转义问题）
+                if (!captured) {
+                    console.log('[QQBot] 截图回退到 PowerShell');
                     try {
-                        require('child_process').execSync(
-                            'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + psWinFile + '"',
-                            { timeout: 15000, encoding: 'utf-8' }
-                        );
-                    } finally {
-                        try { fs.unlinkSync(psWinFile); } catch(e) {}
+                        var psTempPath = ssPath.replace('.png', '_raw.png');
+                        // 生成临时 PowerShell 脚本
+                        var psScriptContent =
+                            'Add-Type -AssemblyName System.Drawing, System.Windows.Forms\r\n' +
+                            '$s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds\r\n' +
+                            '$b = New-Object System.Drawing.Bitmap $s.Width, $s.Height\r\n' +
+                            '$g = [System.Drawing.Graphics]::FromImage($b)\r\n' +
+                            '$g.CopyFromScreen($s.X, $s.Y, 0, 0, $s.Size)\r\n' +
+                            '$b.Save("' + psTempPath.replace(/\\/g, '\\\\') + '")\r\n' +
+                            '$g.Dispose(); $b.Dispose()';
+                        var psFile = path.join(ssTempDir, '_capture.ps1');
+                        fs.writeFileSync(psFile, psScriptContent, 'utf-8');
+                        await new Promise(function(resolve, reject) {
+                            exec('powershell -NoProfile -ExecutionPolicy Bypass -File "' + psFile + '"', { timeout: 15000 }, function(err, stdout) {
+                                if (err) { reject(err); return; }
+                                resolve(stdout);
+                            });
+                        });
+                        // 清理临时脚本
+                        try { fs.unlinkSync(psFile); } catch(e) {}
+
+                        if (fs.existsSync(psTempPath)) {
+                            var psBuffer = fs.readFileSync(psTempPath);
+                            var psImg = nativeImage.createFromBuffer(psBuffer);
+                            if (!psImg.isEmpty()) {
+                                fs.writeFileSync(ssPath, psImg.toPNG());
+                                captured = true;
+                                console.log('[QQBot] 截图方式: PowerShell');
+                            }
+                            // 删除临时原始截图
+                            try { fs.unlinkSync(psTempPath); } catch(e) {}
+                        }
+                    } catch (e) {
+                        console.log('[QQBot] PowerShell 截图也失败:', e.message);
+                    }
+                }
+
+                // 方法3: 终极兜底 - capturePage
+                if (!captured) {
+                    console.log('[QQBot] 截图回退到 capturePage');
+                    try {
+                        var capImg = await mainWindow.webContents.capturePage();
+                        if (capImg && !capImg.isEmpty()) {
+                            fs.writeFileSync(ssPath, capImg.toPNG());
+                            captured = true;
+                        }
+                    } catch (e) {
+                        console.log('[QQBot] capturePage 也失败:', e.message);
                     }
                 }
 
                 if (fs.existsSync(ssPath)) {
                     var stats = fs.statSync(ssPath);
                     await qqBotInstance.sendImage(msg.openid, ssPath, msg.msgId);
-                    console.log('[QQBot] 截图已发送:', ssPath, '(' + Math.round(stats.size / 1024) + 'KB, ' + (ssFull ? '全屏' : '窗口') + ')');
+                    console.log('[QQBot] 截图已发送:', ssPath, '(' + Math.round(stats.size / 1024) + 'KB)');
                 } else {
-                    await qqBotInstance.sendText(msg.openid, '❌ 截图保存失败', msg.msgId);
+                    await qqBotInstance.sendText(msg.openid, '❌ 截图保存失败（窗口截图可能被系统阻止）', msg.msgId);
                 }
             } catch (e) {
                 console.error('[QQBot] 截图失败:', e);
+                await qqBotInstance.sendText(msg.openid, '❌ 截图失败: ' + e.message, msg.msgId);
+            }
+            return true;
+        }
+
+        if (main === '/sct' || main === '/sct:' || (main === '/sct' && cmd.length === 1)) {
+            try {
+                // 确定当前活跃的视图
+                var targetView = null;
+                var viewName = '';
+                if (agentViewVisible) {
+                    targetView = agentView;
+                    viewName = 'Agent';
+                } else if (qwenVisible) {
+                    targetView = qwenView;
+                    viewName = 'Qwen';
+                } else {
+                    targetView = deepseekView;
+                    viewName = 'DeepSeek';
+                }
+
+                if (!targetView || targetView.webContents.isDestroyed()) {
+                    await qqBotInstance.sendText(msg.openid, '❌ 当前视图不可用', msg.msgId);
+                    return true;
+                }
+
+                console.log('[QQBot] /sct 截取窗口: ' + viewName);
+
+                var sctTempDir = path.join(currentRootDir || app.getPath('userData'), '.dsa', 'temp');
+                if (!fs.existsSync(sctTempDir)) fs.mkdirSync(sctTempDir, { recursive: true });
+                var sctFilename = 'screenshot_win_' + Date.now() + '.png';
+                var sctPath = path.join(sctTempDir, sctFilename);
+
+                // 计算内容区域 bounds（与 updateBounds 一致）
+                var winSize = mainWindow.getContentBounds();
+                var contentX = VIEWBAR_WIDTH;
+                var contentWidth = winSize.width - VIEWBAR_WIDTH - SIDEBAR_WIDTH;
+                var contentHeight = winSize.height - CTRL_BAR_HEIGHT;
+
+                // 保存原始 bounds，临时设为可见区域
+                var origBounds = targetView.getBounds();
+                var wasOffscreen = origBounds.width < 10 || origBounds.x < 0;
+
+                if (wasOffscreen) {
+                    targetView.setBounds({
+                        x: contentX, y: 0,
+                        width: contentWidth, height: contentHeight
+                    });
+                    // 等待一帧确保渲染
+                    await new Promise(function(r) { setTimeout(r, 300); });
+                }
+
+                // capturePage 捕获视图内容
+                var captured = false;
+                try {
+                    var capImg = await targetView.webContents.capturePage();
+                    if (capImg && !capImg.isEmpty()) {
+                        fs.writeFileSync(sctPath, capImg.toPNG());
+                        captured = true;
+                        console.log('[QQBot] /sct 截图方式: capturePage, 视图: ' + viewName);
+                    }
+                } catch (e) {
+                    console.log('[QQBot] /sct capturePage 失败:', e.message);
+                }
+
+                // 恢复原始 bounds
+                if (wasOffscreen) {
+                    targetView.setBounds(origBounds);
+                }
+
+                if (captured && fs.existsSync(sctPath)) {
+                    var sctStats = fs.statSync(sctPath);
+                    await qqBotInstance.sendImage(msg.openid, sctPath, msg.msgId);
+                    console.log('[QQBot] /sct 截图已发送:', sctPath, '(' + Math.round(sctStats.size / 1024) + 'KB) 视图: ' + viewName);
+                } else {
+                    await qqBotInstance.sendText(msg.openid, '❌ 截图失败（' + viewName + ' 视图不可用）', msg.msgId);
+                }
+            } catch (e) {
+                console.error('[QQBot] /sct 截图失败:', e);
                 await qqBotInstance.sendText(msg.openid, '❌ 截图失败: ' + e.message, msg.msgId);
             }
             return true;
@@ -1402,6 +1594,21 @@ function setupControlBarIPC() {
     });
 
     // ==================== Robot 配置管理 ====================
+
+    // 保存大文本到临时文件（粘贴 >5KB 内容时自动保存）
+    ipcMain.handle('save-large-text', async (event, text) => {
+        try {
+            var tempDir = path.join(currentRootDir || app.getPath('userData'), '.dsa', 'temp');
+            if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+            var filename = 'pasted_text_' + Date.now() + '.txt';
+            var filePath = path.join(tempDir, filename);
+            fs.writeFileSync(filePath, text, 'utf-8');
+            return { success: true, path: filePath };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
     ipcMain.handle('qqbot-list-robots', () => {
         var state = loadAppState();
         return state.qqRobots || [];
@@ -1991,6 +2198,25 @@ function setupBrowserIPC() {
         return tempDir;
     }
 
+    // 强制刷新所有 BrowserView，防止新建 BrowserWindow 时 GPU 合成器丢弃纹理导致白屏
+    function forceRepaintBrowserViews() {
+        var views = [deepseekView, qwenView, agentView, fileBrowserView, controlBarView, viewBarView];
+        views.forEach(function(v) {
+            if (!v || !v.webContents || v.webContents.isDestroyed()) return;
+            try {
+                v.webContents.invalidate();
+            } catch(e) {}
+        });
+        // 对当前可见的内容视图，通过短暂改变 bounds 强制 GPU 重建纹理
+        var visibleView = agentViewVisible ? agentView : (qwenVisible ? qwenView : deepseekView);
+        if (!visibleView || !visibleView.webContents || visibleView.webContents.isDestroyed()) return;
+        try {
+            var origBounds = visibleView.getBounds();
+            visibleView.setBounds({ x: origBounds.x, y: origBounds.y, width: Math.max(origBounds.width - 1, 1), height: origBounds.height });
+            visibleView.setBounds(origBounds);
+        } catch(e) {}
+    }
+
     // 创建浏览器窗口
     ipcMain.handle('browser-create', async (event, options) => {
         try {
@@ -2011,10 +2237,12 @@ function setupBrowserIPC() {
                 autoHideMenuBar: true,
             });
 
-            // 若有关闭窗口事件，自动清理
+            // 若有关闭窗口事件，自动清理并强制刷新视图
             win.on('closed', function() {
                 browserToolWindows.delete(winId);
                 console.log('[BrowserTool] Window closed:', winId);
+                // 关闭窗口也可能导致 GPU 纹理回收，延迟刷新
+                setTimeout(function() { forceRepaintBrowserViews(); }, 150);
             });
 
             // 加载 URL（如果有）
@@ -2024,6 +2252,9 @@ function setupBrowserIPC() {
 
             browserToolWindows.set(winId, win);
             console.log('[BrowserTool] Window created:', winId, options.url || '(blank)');
+
+            // 新窗口创建后 GPU 合成器可能丢弃 BrowserView 纹理，延迟强制刷新
+            setTimeout(function() { forceRepaintBrowserViews(); }, 200);
 
             return { success: true, id: winId };
         } catch (e) {
@@ -2096,6 +2327,8 @@ function setupBrowserIPC() {
             }
             win.close();
             browserToolWindows.delete(winId);
+            // 关闭窗口后 GPU 合成器可能丢弃 BrowserView 纹理，延迟强制刷新
+            setTimeout(function() { forceRepaintBrowserViews(); }, 150);
             return { success: true };
         } catch (e) {
             return { success: false, error: e.message };

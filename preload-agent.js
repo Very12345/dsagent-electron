@@ -127,4 +127,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onUpdateDownloaded: (callback) => {
         ipcRenderer.on('update-downloaded', () => callback());
     },
+
+    // 保存大文本到临时文件
+    saveLargeText: (text) => ipcRenderer.invoke('save-large-text', text),
 });

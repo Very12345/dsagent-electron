@@ -2476,6 +2476,44 @@
         }, CONFIG.START_DELAY);
     }
 
+    // ==================== 对话列表查询（供 QQ Bot /list 使用） ====================
+    window.__dsagent_listConversations = function() {
+        // 收集侧边栏中所有对话条目及其标题
+        var items = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"], [class*="sidebar-item"]');
+        var results = [];
+        var seen = new Set();
+        for (var i = 0; i < items.length; i++) {
+            var el = items[i];
+            // 过滤隐藏元素
+            if (el.offsetParent === null && window.getComputedStyle(el).position !== 'fixed') continue;
+            var titleEl = el.querySelector('[class*="title"], [class*="name"]') || el;
+            var title = (titleEl.textContent || '').trim();
+            // 跳过空标题和重复项
+            if (!title || title.length === 0) continue;
+            if (seen.has(title)) continue;
+            seen.add(title);
+            var href = el.getAttribute('href') || '';
+            results.push({ title: title, href: href });
+        }
+        return results;
+    };
+
+    // ==================== 切换对话（供 QQ Bot /switch 使用） ====================
+    window.__dsagent_switchToConversation = function(index) {
+        var items = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"], [class*="sidebar-item"]');
+        var visible = [];
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].offsetParent !== null || window.getComputedStyle(items[i]).position === 'fixed') {
+                var titleEl = items[i].querySelector('[class*="title"], [class*="name"]') || items[i];
+                var title = (titleEl.textContent || '').trim();
+                if (title) visible.push(items[i]);
+            }
+        }
+        if (index < 0 || index >= visible.length) return { success: false, error: '索引超出范围（0-' + (visible.length - 1) + '）' };
+        visible[index].click();
+        return { success: true, title: (visible[index].textContent || '').trim() };
+    };
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {

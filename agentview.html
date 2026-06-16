@@ -2624,9 +2624,11 @@ dropTargets.forEach(function(el) {
 document.getElementById('post-init-section').addEventListener('paste', function(e) {
     var items = e.clipboardData && e.clipboardData.items;
     if (!items) return;
+    var hasImage = false;
     for (var i = 0; i < items.length; i++) {
         if (items[i].type.indexOf('image') === 0) {
             e.preventDefault();
+            hasImage = true;
             var blob = items[i].getAsFile();
             if (!blob) continue;
             (function(b) {
@@ -2639,6 +2641,19 @@ document.getElementById('post-init-section').addEventListener('paste', function(
                 reader.readAsDataURL(b);
             })(blob);
             break;
+        }
+    }
+    // 大文本自动保存（无图片时检测文本大小）
+    if (!hasImage) {
+        var text = e.clipboardData.getData('text');
+        if (text && text.length > 5120) { // >5KB
+            e.preventDefault();
+            window.electronAPI.saveLargeText(text).then(function(res) {
+                if (res && res.success) {
+                    addFileToPanel(res.path, getFileName(res.path), 'file');
+                    showToast('[自动保存] 粘贴内容超过5KB，已保存为临时文件');
+                }
+            });
         }
     }
 });
