@@ -363,7 +363,7 @@ class QQBotClient extends EventEmitter {
         }
     }
 
-    async sendC2CMessage(openid, content, msgId = null) {
+    async sendC2CMessage(openid, content, msgId = null, keyboard = null) {
         try {
             const token = await this.getAccessToken();
             
@@ -377,6 +377,10 @@ class QQBotClient extends EventEmitter {
             if (msgId) {
                 payload.msg_id = msgId;
                 payload.msg_seq = this.getMessageSeq(msgId);
+            }
+
+            if (keyboard) {
+                payload.keyboard = keyboard;
             }
 
             const response = await axios.post(
@@ -458,10 +462,9 @@ class QQBotClient extends EventEmitter {
             const fileBuffer = fs.readFileSync(filePath);
             const base64Data = fileBuffer.toString('base64');
             const ext = path.extname(filePath).toLowerCase();
-            var fileType = 1; // 默认图片
-            if (ext.match(/\.(mp4|avi|mov|mkv|webm)$/i)) fileType = 2;
-            else if (ext.match(/\.(mp3|wav|ogg|flac)$/i)) fileType = 3;
-            else fileType = 4; // 普通文件
+            var fileType = 4; // 默认普通文件
+            if (ext.match(/\.(mp4|avi|mov|mkv|webm)$/i)) fileType = 2; // 视频
+            else if (ext.match(/\.(silk|wav|mp3|flac)$/i)) fileType = 3; // 语音
 
             console.log(`[SendFile] 发送文件: ${filePath} (type=${fileType})`);
 
@@ -508,8 +511,57 @@ class QQBotClient extends EventEmitter {
     }
 
     // ==================== 发送纯文本（type 2 markdown） ====================
-    async sendText(openid, content, msgId = null) {
-        return this.sendC2CMessage(openid, content, msgId);
+    async sendText(openid, content, msgId = null, keyboard = null) {
+        return this.sendC2CMessage(openid, content, msgId, keyboard);
+    }
+
+    // ==================== 发送带按钮的消息 ====================
+    // buttons: [{id, label, data, style: 0|1}]  style: 0=灰色线框, 1=蓝色线框
+    async sendKeyboard(openid, content, buttons, msgId = null) {
+        var rows = [];
+        var row = [];
+        buttons.forEach(function(btn, i) {
+            row.push({
+                id: btn.id || ('btn' + i),
+                render_data: {
+                    label: btn.label,
+                    visited_label: btn.visited_label || btn.label
+                },
+                action: {
+                    type: 1, // 回调按钮
+                    permission: { type: 2 }, // 所有人可操作
+                    data: btn.data || btn.id || ('btn' + i),
+                    unsupport_tips: '请升级QQ版本'
+                }
+            });
+            if (row.length >= 2) {
+                rows.push({ buttons: row });
+                row = [];
+            }
+        });
+        if (row.length > 0) rows.push({ buttons: row });
+        return this.sendC2CMessage(openid, content, msgId, { content: { rows: rows } });
+    }
+
+    // ==================== 回应按钮交互 ====================
+    async respondToInteraction(interactionId, code) {
+        try {
+            const token = await this.getAccessToken();
+            await axios.put(
+                `${this.config.apiBase}/interactions/${interactionId}`,
+                { code: code || 0 },
+                {
+                    headers: {
+                        'Authorization': `QQBot ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: 10000
+                }
+            );
+            console.log('[Interaction] 已回应:', interactionId, 'code:', code);
+        } catch (error) {
+            console.error('[Interaction] 回应失败:', error.response?.data || error.message);
+        }
     }
 
     // ==================== 发送测试富文本 ====================
@@ -609,6 +661,10 @@ class QQBotClient extends EventEmitter {
                 this.onC2CMessage(d);
                 break;
 
+            case 'INTERACTION_CREATE':
+                this.onInteractionCreate(d);
+                break;
+
             default:
                 if (t) {
                     console.log(`[Event] ${t}:`, JSON.stringify(d).substring(0, 200));
@@ -651,6 +707,34 @@ class QQBotClient extends EventEmitter {
                 console.error('[Handle] 发送错误回复失败:', sendError);
             }
         }
+    }
+
+    // ==================== 处理按钮交互事件 ====================
+    async onInteractionCreate(data) {
+        var interactionId = data.id;
+        var buttonData = data.data?.resolved?.button_data || '';
+        var buttonId = data.data?.resolved?.button_id || '';
+        var chatType = data.chat_type;
+        var userOpenid = data.user_openid;
+        var groupOpenid = data.group_openid;
+        var timestamp = data.timestamp;
+
+        console.log('[Interaction] 收到按钮点击: id=' + buttonId + ', data=' + buttonData + ', chatType=' + chatType);
+
+        // 先回应平台，避免客户端一直 loading
+        await this.respondToInteraction(interactionId, 0);
+
+        // 发送事件给主进程处理
+        this.emit('interaction', {
+            interactionId: interactionId,
+            buttonId: buttonId,
+            buttonData: buttonData,
+            chatType: chatType,
+            userOpenid: userOpenid,
+            groupOpenid: groupOpenid,
+            timestamp: timestamp,
+            raw: data
+        });
     }
 
     sendIdentify() {

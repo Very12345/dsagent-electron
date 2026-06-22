@@ -4,3 +4,4 @@ dist/
 *.log
 .env
 fingerprints.json
+qqbot1.js

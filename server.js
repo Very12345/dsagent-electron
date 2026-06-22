@@ -4,6 +4,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const iconv = require('iconv-lite');
 const os = require('os');
+const { manager: mcpManager } = require('./server-mcp');
 
 const FORBIDDEN_DELETE_PATHS = [
     /^[A-Z]:\\Windows$/i,
@@ -22,17 +23,24 @@ const DEFAULT_CONFIG = {
         'powershell remove-item', 'rm -rf', 'rm -r', 'dd if=/dev/zero',
         'move ', 'ren ', 'rename '
     ],
-    safeOperations: ['local-read', 'local-list', 'local-info', 'local-exists', 'local-singleread'],
+    safeOperations: ['local-read', 'local-list', 'local-info', 'local-exists', 'local-subreader'],
     confirmMode: 'smart',
-    commandWhitelist: []    // 用户信任的命令列表（如 python xxx、node xxx）
+    commandWhitelist: [],    // 用户信任的命令列表（如 python xxx、node xxx）
+    mcpServers: []           // MCP 服务器配置列表
 };
 
 // ==================== 内部工具函数 ====================
 
 function getDsaPath(filename) {
-    const dir = BASE_DIR ? path.join(BASE_DIR, '.dsa') : __dirname;
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    return path.join(dir, filename);
+    var appData;
+    if (process.platform === 'win32') {
+        appData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    } else {
+        appData = path.join(os.homedir(), '.local', 'share');
+    }
+    var dsaDir = BASE_DIR ? path.join(BASE_DIR, '.dsa') : path.join(appData, 'dsagent-electron', 'dsa-data');
+    if (!fs.existsSync(dsaDir)) fs.mkdirSync(dsaDir, { recursive: true });
+    return path.join(dsaDir, filename);
 }
 
 function log(type, msg) {
@@ -59,7 +67,9 @@ function decodeBuffer(buffer) {
     var utf8 = iconv.decode(buffer, 'utf-8');
     if (utf8.indexOf('\uFFFD') === -1) return utf8;
     // 回退 GBK（cmd.exe 默认代码页）
-    return iconv.decode(buffer, 'gbk');
+    var gbk = iconv.decode(buffer, 'gbk');
+    if (gbk.indexOf('\uFFFD') === -1) return gbk;
+    return utf8;
 }
 
 function cleanCommand(cmd) {
@@ -73,31 +83,37 @@ function runCmd(command, timeoutMs) {
     return new Promise(resolve => {
         command = cleanCommand(command);
         log('EXEC', command + (BASE_DIR ? ' [cwd: ' + BASE_DIR + ']' : ''));
-        // 写入临时 bat 文件（GBK 编码），cmd.exe 可正确识别中文路径
-        const tmpFile = path.join(os.tmpdir(), '_dsa_' + Date.now() + '.bat');
-        try {
-            // 以 GBK 编码写入 .bat 文件，cmd.exe 可正确识别中文路径
-            const cmdText = '@echo off\r\n' + command + '\r\n';
-            const cmdBuffer = iconv.encode(cmdText, 'gbk');
-            fs.writeFileSync(tmpFile, cmdBuffer);
-        } catch (e) {
-            return resolve({ success: false, error: 'Failed to write temp file: ' + e.message });
+        // 多行命令用 && 连接，直接通过 cmd 执行，避免临时文件
+        var singleLine = command.replace(/\r?\n/g, ' && ').replace(/\r/g, '');
+        // 将命令中的 Unix 工具别名替换为 Windows 等价命令
+        if (process.platform === 'win32') {
+            singleLine = singleLine
+                .replace(/\bpwd\b/g, 'cd')
+                .replace(/\bls\b(?=\s|$|"|'|&|\|)/g, 'dir /b')
+                .replace(/\bcat\b(?=\s|$|"|'|&|\|)/g, 'type')
+                .replace(/\bcp\b(?=\s|$|"|'|&|\|)/g, 'copy')
+                .replace(/\bmv\b(?=\s|$|"|'|&|\|)/g, 'move')
+                .replace(/\brm\b(?=\s|$|"|'|&|\|)/g, 'del')
+                .replace(/\bmkdir\b(?=\s|$|"|'|&|\|)/g, 'md')
+                .replace(/\btouch\b(?=\s|$|"|'|&|\|)/g, 'type nul >')
+                // 以上正则已限制为完整单词，可安全用于常见命令
         }
         var execOptions = {
             shell: 'cmd.exe',
             windowsHide: true,
             encoding: 'buffer',
-            cwd: BASE_DIR || process.cwd()
+            cwd: BASE_DIR || process.cwd(),
+            env: Object.assign({}, process.env, process.platform === 'win32' ? { LANG: 'zh_CN.UTF-8', LC_ALL: 'zh_CN.UTF-8' } : {})
         };
         if (timeoutMs && timeoutMs > 0) {
             execOptions.timeout = timeoutMs;
         }
-        exec('"' + tmpFile + '"', execOptions, (error, stdout, stderr) => {
-            try { fs.unlinkSync(tmpFile); } catch(e) {}
+        exec(singleLine, execOptions, (error, stdout, stderr) => {
             const result = {
                 stdout: decodeBuffer(stdout),
                 stderr: decodeBuffer(stderr),
-                error: error ? decodeBuffer(Buffer.from(error.message)) : null
+                error: error ? error.message : null,
+                exitCode: error ? (error.code || 1) : 0
             };
             // 检测超时
             if (error && error.killed && error.signal === 'SIGTERM') {
@@ -126,7 +142,9 @@ async function execCmd(command, timeoutMs) {
     if (result.timedOut) {
         return { success: false, timedOut: true, stdout: result.stdout, stderr: result.stderr, error: result.error };
     }
-    return { success: true, ...result };
+    // 非零退出码不等于失败：很多工具用非零退出码表示状态
+    // 只要 stdout 有内容，就视为成功
+    return { success: true, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, error: result.error || null };
 }
 
 async function execCmdAdmin(command) {
@@ -134,29 +152,36 @@ async function execCmdAdmin(command) {
     command = cleanCommand(command);
     log('EXEC-ADMIN', command);
 
-    const tmpFile = path.join(os.tmpdir(), '_dsa_admin_' + Date.now() + '.bat');
-    try {
-        const cmdText = '@echo off\r\n' + command + '\r\n';
-        const cmdBuffer = iconv.encode(cmdText, 'gbk');
-        fs.writeFileSync(tmpFile, cmdBuffer);
-    } catch (e) {
-        return { success: false, error: 'Failed to write temp file: ' + e.message };
+    // 多行命令用 && 连接，直接传递给 PowerShell Start-Process
+    var singleLine = command.replace(/\r?\n/g, ' && ').replace(/\r/g, '');
+    // Windows 下同步 Unix 别名，避免提权 cmd 中中文乱码问题
+    if (process.platform === 'win32') {
+        singleLine = singleLine
+            .replace(/\bpwd\b/g, 'cd')
+            .replace(/\bls\b(?=\s|$|"|'|&|\|)/g, 'dir /b')
+            .replace(/\bcat\b(?=\s|$|"|'|&|\|)/g, 'type')
+            .replace(/\bcp\b(?=\s|$|"|'|&|\|)/g, 'copy')
+            .replace(/\bmv\b(?=\s|$|"|'|&|\|)/g, 'move')
+            .replace(/\brm\b(?=\s|$|"|'|&|\|)/g, 'del')
+            .replace(/\bmkdir\b(?=\s|$|"|'|&|\|)/g, 'md')
+            .replace(/\btouch\b(?=\s|$|"|'|&|\|)/g, 'type nul >');
+        singleLine = 'chcp 65001 >nul 2>&1 && ' + singleLine;
     }
 
     return new Promise(resolve => {
         // 通过 PowerShell Start-Process -Verb RunAs 提权执行
         // 注意：UAC 提升后的进程无法直接捕获输出，会弹出 UAC 确认框
-        const psCmd = `Start-Process -FilePath "cmd.exe" -ArgumentList '/c','"${tmpFile}"' -Verb RunAs -Wait -WindowStyle Hidden`;
+        const psCmd = `Start-Process -FilePath "cmd.exe" -ArgumentList '/c',"${singleLine.replace(/"/g, '\\"')}" -Verb RunAs -Wait -WindowStyle Hidden`;
         exec(psCmd, {
             shell: 'powershell.exe',
             windowsHide: true,
-            timeout: 0
-        }, (error) => {
-            try { fs.unlinkSync(tmpFile); } catch(e) {}
+            timeout: 0,
+            encoding: 'buffer'
+        }, (error, stdout, stderr) => {
             if (error) {
-                resolve({ success: false, error: 'Admin execution failed: ' + error.message });
+                resolve({ success: false, error: 'Admin execution failed: ' + error.message, stdout: decodeBuffer(stdout), stderr: decodeBuffer(stderr) });
             } else {
-                resolve({ success: true, stdout: '[Admin] 命令已以管理员权限执行', stderr: '' });
+                resolve({ success: true, stdout: '[Admin] 命令已以管理员权限执行', stderr: decodeBuffer(stderr) });
             }
         });
     });
@@ -280,7 +305,7 @@ function checkExists(filePath) {
 function getInfo(filePath) {
     if (!filePath) return { success: false, error: 'Missing filePath' };
     const abs = safeResolve(filePath);
-    if (!fs.existsSync(abs)) return { success: false, error: 'File not found' };
+    if (!fs.existsSync(abs)) return { success: false, error: 'File or directory not found' };
     const stat = fs.statSync(abs);
     return {
         success: true, size: stat.size, mtime: stat.mtime.toISOString(),
@@ -315,26 +340,305 @@ function saveConfig(config) {
     }
 }
 
-// ==================== 技能持久化 ====================
+// ==================== 技能持久化（SKILL.md 标准格式） ====================
+// 两级存储：AppData 主仓库 → 按需同步到工作目录 .dsa/skills/
 
-function loadSkills() {
-    try {
-        const skillsPath = getDsaPath('skills.json');
-        if (fs.existsSync(skillsPath)) {
-            const skills = JSON.parse(fs.readFileSync(skillsPath, 'utf-8'));
-            return { success: true, skills: skills };
-        }
-    } catch (e) {
-        console.warn('[SKILLS] Failed to load:', e.message);
+function getSkillsRepoDir() {
+    var appData;
+    if (process.platform === 'win32') {
+        appData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    } else {
+        appData = path.join(os.homedir(), '.local', 'share');
     }
-    return { success: true, skills: [] };
+    var dir = path.join(appData, 'dsagent-electron', 'skills-repo');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
 }
 
-function saveSkills(skills) {
+function getSkillsDir() {
+    var dir = path.join(getDsaPath('skills'));
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+// 从 AppData 仓库同步所有技能到当前工作目录
+function syncSkillsFromRepo() {
     try {
-        const skillsPath = getDsaPath('skills.json');
-        fs.writeFileSync(skillsPath, JSON.stringify(skills || [], null, 2), 'utf-8');
+        var repoDir = getSkillsRepoDir();
+        var skillsDir = getSkillsDir();
+        var repoEntries = fs.readdirSync(repoDir, { withFileTypes: true });
+        var repoDirs = new Set();
+        repoEntries.forEach(function(entry) {
+            if (!entry.isDirectory()) return;
+            repoDirs.add(entry.name);
+            var srcPath = path.join(repoDir, entry.name);
+            var destPath = path.join(skillsDir, entry.name);
+            // 如果目标已存在且时间较新，跳过
+            if (fs.existsSync(destPath)) {
+                try {
+                    var srcMdStat = fs.statSync(path.join(srcPath, 'SKILL.md'));
+                    var destMdStat = fs.statSync(path.join(destPath, 'SKILL.md'));
+                    if (destMdStat.mtimeMs >= srcMdStat.mtimeMs) return;
+                } catch(e) {}
+                fs.rmSync(destPath, { recursive: true, force: true });
+            }
+            copyFolderSync(srcPath, destPath);
+        });
+        // 清理工作目录中已不在仓库的孤立技能目录
+        if (fs.existsSync(skillsDir)) {
+            var workEntries = fs.readdirSync(skillsDir, { withFileTypes: true });
+            workEntries.forEach(function(entry) {
+                if (!entry.isDirectory()) return;
+                if (!repoDirs.has(entry.name)) {
+                    fs.rmSync(path.join(skillsDir, entry.name), { recursive: true, force: true });
+                    console.log('[SKILLS] Cleaned orphan:', entry.name);
+                }
+            });
+        }
         return { success: true };
+    } catch (e) {
+        console.warn('[SKILLS] Sync from repo failed:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+function loadSkills() {
+    // 注意：不再自动同步，需要用户点击"同步技能"按钮触发
+    try {
+        var skillsDir = getSkillsDir();
+        var entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+        var skills = [];
+        entries.forEach(function(entry) {
+            if (!entry.isDirectory()) return;
+            var skillName = entry.name;
+            var skillPath = path.join(skillsDir, skillName);
+            var mdPath = path.join(skillPath, 'SKILL.md');
+            if (!fs.existsSync(mdPath)) return;
+            var instructions = fs.readFileSync(mdPath, 'utf-8');
+            var files = fs.readdirSync(skillPath).filter(function(f) {
+                return f !== 'SKILL.md';
+            });
+            skills.push({
+                name: skillName,
+                instructions: instructions,
+                files: files
+            });
+        });
+        return { success: true, skills: skills };
+    } catch (e) {
+        console.warn('[SKILLS] Failed to load:', e.message);
+        return { success: true, skills: [] };
+    }
+}
+
+function importSkill(sourceFolderPath) {
+    try {
+        var skillName = path.basename(sourceFolderPath);
+        var sourceMd = path.join(sourceFolderPath, 'SKILL.md');
+        if (!fs.existsSync(sourceMd)) {
+            return { success: false, error: '所选文件夹中未找到 SKILL.md 文件' };
+        }
+        // 1. 保存到 AppData 主仓库
+        var repoDir = getSkillsRepoDir();
+        var repoPath = path.join(repoDir, skillName);
+        if (fs.existsSync(repoPath)) {
+            fs.rmSync(repoPath, { recursive: true, force: true });
+        }
+        copyFolderSync(sourceFolderPath, repoPath);
+        console.log('[SKILLS] Imported to repo:', repoPath);
+        // 2. 同步到当前工作目录
+        syncSkillsFromRepo();
+        return { success: true, name: skillName };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+function deleteSkill(name) {
+    try {
+        var safeName = name.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fff]/g, '');
+        if (!safeName) return { success: false, error: '无效的技能名称' };
+        // 1. 从 AppData 主仓库删除
+        var repoPath = path.join(getSkillsRepoDir(), safeName);
+        if (fs.existsSync(repoPath)) {
+            fs.rmSync(repoPath, { recursive: true, force: true });
+        }
+        // 2. 从工作目录也删除（否则 loadSkills 仍会读到旧副本）
+        var workPath = path.join(getSkillsDir(), safeName);
+        if (fs.existsSync(workPath)) {
+            fs.rmSync(workPath, { recursive: true, force: true });
+        }
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+function getSkillsPrompt() {
+    var result = loadSkills();
+    var skills = result.skills || [];
+    if (skills.length === 0) return '';
+    var disabledSkills = getDisabledSkills();
+    var enabledSkills = skills.filter(function(s) { return disabledSkills.indexOf(s.name) === -1; });
+    if (enabledSkills.length === 0) return '';
+    var prompt = '\n\n## 已加载的技能\n\n';
+    prompt += '以下是当前工作区中已加载的技能列表（已禁用的技能不显示）。每个技能包含名称和描述，帮助判断何时使用。\n';
+    prompt += '当用户的请求匹配某个技能的用途时，请使用 `local-skill` 命令获取该技能的完整指令内容后再执行。\n';
+    prompt += '使用 `local-skill all` 可重新列出所有技能及其描述。\n\n';
+    prompt += '**技能文件位置：** 每个技能的附加文件存放在 `.dsa/skills/{技能名}/` 目录下。\n';
+    prompt += '使用 `local-read` 读取技能文件时，路径格式为 `.dsa/skills/{技能名}/{文件名}`。\n';
+    prompt += '使用 `local-skill` 获取完整 SKILL.md 指令，例如：\n';
+    prompt += '```local-skill\n技能名称\n```\n\n';
+    enabledSkills.forEach(function(s) {
+        var fm = parseSkillFrontmatter(s.instructions);
+        var displayName = fm.name || s.name;
+        prompt += '- **' + displayName + '** — `./dsa/skills/' + s.name + '/`';
+        if (fm.description) {
+            prompt += '\n  ' + fm.description;
+        }
+        if (s.files && s.files.length > 0) {
+            prompt += '\n  附加文件：' + s.files.map(function(f) { return '`' + f + '`'; }).join(', ');
+        }
+        prompt += '\n';
+    });
+    prompt += '\n> 使用 `local-skill` + 技能名称获取该技能的完整指令内容。\n';
+    return prompt;
+}
+
+// 解析 SKILL.md 的 YAML frontmatter
+// 支持单行 key: value、多行 key: > 和 key: | 语法
+function parseSkillFrontmatter(instructions) {
+    var fm = {};
+    var match = instructions.match(/^---\s*\n([\s\S]*?)\n---/);
+    if (!match) return fm;
+    var body = match[1];
+    var lines = body.split('\n');
+    var currentKey = null;
+    var currentValue = [];
+    var currentMode = null; // 'fold' (>), 'literal' (|), or null (single-line)
+    for (var li = 0; li < lines.length; li++) {
+        var line = lines[li];
+        if (currentKey) {
+            // 在多行值收集模式中
+            var indentMatch = line.match(/^(\s+)(.*)$/);
+            if (indentMatch) {
+                // 缩进行 → 继续收集
+                currentValue.push(indentMatch[2]);
+                continue;
+            } else {
+                // 非缩进行 → 结束当前多行值
+                fm[currentKey] = currentMode === 'literal'
+                    ? currentValue.join('\n').trim()
+                    : currentValue.join(' ').replace(/\s+/g, ' ').trim();
+                currentKey = null;
+                currentValue = [];
+                currentMode = null;
+            }
+        }
+        // 尝试匹配新的 key: value
+        var kv = line.match(/^\s*(\w+)\s*:\s*(.*)$/);
+        if (!kv) continue;
+        var key = kv[1];
+        var val = kv[2].trim();
+        if (val === '>' || val === '|') {
+            // 多行值开始
+            currentKey = key;
+            currentValue = [];
+            currentMode = val === '|' ? 'literal' : 'fold';
+        } else if (val === '') {
+            // 空值 → 可能下一行是缩进的多行值（纯 YAML 缩进语法）
+            currentKey = key;
+            currentValue = [];
+            currentMode = 'fold';
+        } else {
+            // 单行值
+            fm[key] = val;
+        }
+    }
+    // 处理最后一个多行值
+    if (currentKey) {
+        fm[currentKey] = currentMode === 'literal'
+            ? currentValue.join('\n').trim()
+            : currentValue.join(' ').replace(/\s+/g, ' ').trim();
+    }
+    return fm;
+}
+
+// 获取单个技能的完整 SKILL.md 内容（不截断，返回全文）
+function getSkillContent(skillName) {
+    try {
+        var result = loadSkills();
+        var skills = result.skills || [];
+        // 精确匹配
+        for (var i = 0; i < skills.length; i++) {
+            if (skills[i].name === skillName) {
+                var content = '# 技能: ' + skills[i].name + '\n\n';
+                content += '**路径:** `.dsa/skills/' + skills[i].name + '/`\n';
+                if (skills[i].files && skills[i].files.length > 0) {
+                    content += '**附加文件:** ' + skills[i].files.map(function(f) { return '`' + f + '`'; }).join(', ') + '\n\n';
+                }
+                // 返回完整 SKILL.md 内容，不做任何截断
+                content += skills[i].instructions;
+                return { success: true, content: content };
+            }
+        }
+        // 不区分大小写/模糊匹配作为后备
+        var lowerName = skillName.toLowerCase();
+        for (var j = 0; j < skills.length; j++) {
+            if (skills[j].name.toLowerCase() === lowerName) {
+                var content2 = '# 技能: ' + skills[j].name + '\n\n';
+                content2 += '**路径:** `.dsa/skills/' + skills[j].name + '/`\n';
+                if (skills[j].files && skills[j].files.length > 0) {
+                    content2 += '**附加文件:** ' + skills[j].files.map(function(f) { return '`' + f + '`'; }).join(', ') + '\n\n';
+                }
+                content2 += skills[j].instructions;
+                return { success: true, content: content2 };
+            }
+        }
+        return { success: false, error: '未找到技能: ' + skillName };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+function copyFolderSync(src, dest) {
+    if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+    var entries = fs.readdirSync(src, { withFileTypes: true });
+    entries.forEach(function(entry) {
+        var srcPath = path.join(src, entry.name);
+        var destPath = path.join(dest, entry.name);
+        if (entry.isDirectory()) {
+            copyFolderSync(srcPath, destPath);
+        } else {
+            fs.copyFileSync(srcPath, destPath);
+        }
+    });
+}
+
+// ==================== 技能禁用/启用 ====================
+
+function getDisabledSkills() {
+    try {
+        var result = loadConfig();
+        return result.config.disabledSkills || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function toggleSkillDisabled(name) {
+    try {
+        var result = loadConfig();
+        var config = result.config;
+        if (!config.disabledSkills) config.disabledSkills = [];
+        var idx = config.disabledSkills.indexOf(name);
+        if (idx === -1) {
+            config.disabledSkills.push(name);
+        } else {
+            config.disabledSkills.splice(idx, 1);
+        }
+        saveConfig(config);
+        return { success: true, disabled: idx === -1, disabledSkills: config.disabledSkills };
     } catch (e) {
         return { success: false, error: e.message };
     }
@@ -360,11 +664,14 @@ function terminalCreate(name, cwd) {
     term.child = spawn('cmd.exe', [], {
         cwd: cwd || BASE_DIR || process.cwd(),
         windowsHide: true,
-        shell: true
+        shell: true,
+        env: Object.assign({}, process.env, { LANG: 'zh_CN.UTF-8', LC_ALL: 'zh_CN.UTF-8' })
     });
+    // 初始化终端为 UTF-8，避免中文输出乱码
+    try { term.child.stdin.write('chcp 65001\r\n'); } catch (e) {}
     term.running = true;
-    term.child.stdout.on('data', function(d) { term.stdout += d.toString(); });
-    term.child.stderr.on('data', function(d) { term.stderr += d.toString(); });
+    term.child.stdout.on('data', function(d) { term.stdout += decodeBuffer(d); });
+    term.child.stderr.on('data', function(d) { term.stderr += decodeBuffer(d); });
     term.child.on('exit', function() {
         term.running = false;
         term.child = null;
@@ -429,7 +736,89 @@ function terminalList() {
     return list;
 }
 
+// ==================== MCP 桥接 ====================
+
+var mcpInitialized = false;
+
+async function initMcp() {
+    if (mcpInitialized) return { success: true, message: 'Already initialized' };
+    try {
+        var result = loadConfig();
+        var config = result.config;
+        var mcpServers = config.mcpServers || [];
+        if (mcpServers.length === 0) {
+            return { success: true, message: 'No MCP servers configured', tools: [] };
+        }
+        var results = await mcpManager.initFromConfig(mcpServers);
+        mcpInitialized = true;
+        return { success: true, results: results, tools: mcpManager.getAllTools() };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+function getMcpTools() {
+    return { success: true, tools: mcpManager.getAllTools() };
+}
+
+function getMcpPrompt() {
+    return mcpManager.generateToolsPrompt();
+}
+
+async function callMcpTool(serverName, toolName, args) {
+    try {
+        var result = await mcpManager.callTool(serverName, toolName, args);
+        return { success: true, result: result };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+async function shutdownMcp() {
+    await mcpManager.shutdown();
+    mcpInitialized = false;
+}
+
 // ==================== 导出 ====================
+
+// ==================== 计划管理 ====================
+
+function planLoad() {
+    try {
+        var planPath = getDsaPath('plan.json');
+        if (fs.existsSync(planPath)) {
+            var plan = JSON.parse(fs.readFileSync(planPath, 'utf-8'));
+            return { success: true, plan: plan };
+        }
+        return { success: true, plan: null };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+function planSave(plan) {
+    try {
+        var planPath = getDsaPath('plan.json');
+        plan.updatedAt = new Date().toISOString();
+        fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), 'utf-8');
+        log('PLAN', 'Saved: ' + plan.title);
+        return { success: true, plan: plan };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+function planDelete() {
+    try {
+        var planPath = getDsaPath('plan.json');
+        if (fs.existsSync(planPath)) {
+            fs.unlinkSync(planPath);
+        }
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
 
 module.exports = {
     setBaseDir,
@@ -447,7 +836,15 @@ module.exports = {
     loadConfig,
     saveConfig,
     loadSkills,
-    saveSkills,
+    syncSkillsFromRepo,
+    importSkill,
+    deleteSkill,
+    getSkillsPrompt,
+    getSkillContent,
+    getSkillsRepoDir,
+    getSkillsDir,
+    getDisabledSkills,
+    toggleSkillDisabled,
     addWhitelist,
     removeWhitelist,
     checkWhitelist,
@@ -457,6 +854,14 @@ module.exports = {
     terminalClear,
     terminalKill,
     terminalList,
+    initMcp,
+    getMcpTools,
+    getMcpPrompt,
+    callMcpTool,
+    shutdownMcp,
+    planLoad,
+    planSave,
+    planDelete,
     DEFAULT_CONFIG
 };
 

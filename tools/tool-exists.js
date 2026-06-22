@@ -6,13 +6,19 @@
         name: 'local-exists',
         scope: '检查文件或目录是否存在',
         description: '检查指定路径的文件或目录是否存在，返回"Exists"或"Not found"。',
-        params: [],
-        usage: 'D:\\project\\config.json',
-        notes: '只检查存在性，不区分文件还是目录。如需详细信息请使用 local-info。',
+        params: [
+            { name: 'path', type: '字符串', default: '—', required: true, description: '要检查的文件或目录路径' }
+        ],
+        usage: 'path="D:\\project\\config.json"',
+        notes: '只检查存在性，不区分文件还是目录。支持直接写路径或 path="..." 形式。如需详细信息请使用 local-info。',
         handler: async function(content) {
-            var path = content.trim();
-            if (!path) throw new Error('Missing path');
-            var res = await window.electronAPI.agentExists(path);
+            content = content.trim();
+            var kv = (typeof window.__dsagent_parseKeyValuePairs === 'function')
+                ? window.__dsagent_parseKeyValuePairs(content)
+                : {};
+            var targetPath = (kv.path || content).trim();
+            if (!targetPath) throw new Error('Missing path');
+            var res = await window.electronAPI.agentExists(targetPath);
             if (!res.success) throw new Error(res.error);
             return res.exists ? 'Exists' : 'Not found';
         }

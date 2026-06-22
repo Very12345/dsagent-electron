@@ -15,7 +15,7 @@
     var readTools = new Set();
 
     // 免检白名单 — 这些工具不需要先阅读文档即可使用
-    var READ_WHITELIST = ['local-help', 'local-break'];
+    var READ_WHITELIST = ['local-help', 'local-break', 'local-skill'];
 
     // ==================== 工具注册 ====================
     function registerTool(toolDef) {
@@ -169,11 +169,17 @@
         var tool = registry[name];
         if (!tool) throw new Error('未知工具: ' + name);
 
-        // 文档阅读检查 — 调用前必须先通过 local-help 阅读过文档
+        // 文档阅读检查 — 未阅读时自动帮读，不再阻塞执行
         if (READ_WHITELIST.indexOf(name) === -1 && !readTools.has(name)) {
-            return '⚠️ **工具未阅读文档**: 你尝试调用了 `' + name + '`，但在本轮对话中尚未通过 `local-help` 阅读该工具的文档。\n\n'
-                + '请先查看文档了解用法后再调用：\n\n```local-help\n' + name + '\n```\n\n'
-                + '（你也可以直接阅读全部工具文档：`local-help` 无参数调用）';
+            readTools.add(name);
+            var doc = generateToolDoc(name);
+            // 简化提醒 + 完整文档 + 执行结果一起返回
+            var brief = '📖 **自动帮助** — 你调用了 `' + name + '`，以下是该工具的文档：\n\n';
+            brief += doc + '\n\n';
+            brief += '---\n**执行结果:**\n';
+            if (!tool.handler) throw new Error('工具 ' + name + ' 未实现处理函数');
+            var result = await tool.handler(content, toolContext);
+            return brief + (result || '(No output)');
         }
 
         if (!tool.handler) throw new Error('工具 ' + name + ' 未实现处理函数');

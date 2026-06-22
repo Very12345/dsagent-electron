@@ -92,6 +92,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     qqbotStop: () => ipcRenderer.invoke('qqbot-stop'),
     qqbotStatus: () => ipcRenderer.invoke('qqbot-status'),
     qqbotSendResponse: (data) => ipcRenderer.send('qqbot-send-response', data),
+    qqbotGetNetMode: () => ipcRenderer.invoke('qqbot-get-net-mode'),
+    qqbotSetNetMode: (mode) => ipcRenderer.invoke('qqbot-set-net-mode', mode),
     onQQBotMessage: (callback) => {
         ipcRenderer.on('qqbot-message', (event, data) => callback(data));
     },
@@ -130,4 +132,57 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 保存大文本到临时文件
     saveLargeText: (text) => ipcRenderer.invoke('save-large-text', text),
+
+    // 技能弹窗
+    onAgentShowSkills: (callback) => {
+        ipcRenderer.on('agent-show-skills', (event, skills) => callback(skills));
+    },
+    onAgentOpenSkillsModal: (callback) => {
+        ipcRenderer.on('agent-open-skills-modal', () => callback());
+    },
+    deleteSkill: (name) => ipcRenderer.send('ctrl-delete-skill', name),
+
+    // 获取技能完整内容（local-skill 命令）
+    agentSkillGetContent: (skillName) => ipcRenderer.invoke('agent-skill-get-content', skillName),
+    agentSkillToggleDisabled: (skillName) => ipcRenderer.invoke('agent-skill-toggle-disabled', skillName),
+    agentSkillGetDisabled: () => ipcRenderer.invoke('agent-skill-get-disabled'),
+
+    // 配置管理
+    agentConfigLoad: () => ipcRenderer.invoke('agent-config-load'),
+    agentConfigSave: (config) => ipcRenderer.invoke('agent-config-save', config),
+
+    // MCP 桥接
+    mcpInit: () => ipcRenderer.invoke('mcp-init'),
+    mcpGetTools: () => ipcRenderer.invoke('mcp-get-tools'),
+    mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp-call-tool', serverName, toolName, args),
+    mcpShutdown: () => ipcRenderer.invoke('mcp-shutdown'),
+
+    // 计划管理
+    agentPlanLoad: () => ipcRenderer.invoke('agent-plan-load'),
+    agentPlanSave: (plan) => ipcRenderer.invoke('agent-plan-save', plan),
+    agentPlanDelete: () => ipcRenderer.invoke('agent-plan-delete'),
+
+    // 表单结果回复
+    onAgentFormShow: (callback) => {
+        ipcRenderer.on('agent-form-show', (event, data) => callback(data));
+    },
+    agentFormSubmit: (data) => ipcRenderer.send('agent-form-submit', data),
+
+    // 计划更新通知
+    onAgentPlanUpdate: (callback) => {
+        ipcRenderer.on('agent-plan-update', (event, plan) => callback(plan));
+    },
+
+    // Skill 步骤更新通知
+    onAgentSkillStep: (callback) => {
+        ipcRenderer.on('agent-skill-step', (event, data) => callback(data));
+    },
+
+    // 状态消息发送到 controlbar（统一任务栏）
+    agentStatusToControlbar: (msg, type) => ipcRenderer.send('agent-status-to-controlbar', { msg: msg, type: type || '' }),
+
+    // 加载菜单栏配置
+    getMenubarConfig: () => ipcRenderer.invoke('get-menubar-config'),
+    // 菜单项点击 → 主进程执行操作
+    agentMenuItemClick: (item) => ipcRenderer.send('agent-menu-item-click', item),
 });

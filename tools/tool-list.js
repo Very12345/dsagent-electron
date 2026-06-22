@@ -6,12 +6,17 @@
         name: 'local-list',
         scope: '浏览文件系统目录结构',
         description: '列出指定目录下的所有文件和子目录，显示文件名、类型（文件/目录）和大小。',
-        params: [],
-        usage: 'D:\\project\\src',
-        notes: '不提供路径时默认为当前工作目录。结果包含文件大小和修改时间信息。',
+        params: [
+            { name: 'path', type: '字符串', default: '.', required: false, description: '要列出的目录路径，省略时默认为当前工作目录' }
+        ],
+        usage: 'path="D:\\project\\src"',
+        notes: '省略路径时默认为当前工作目录。支持直接写路径或 path="..." 形式。结果包含文件大小和修改时间信息。',
         handler: async function(content) {
-            var targetDir = content && content.trim();
-            if (!targetDir) targetDir = '.';
+            content = (content || '').trim();
+            var kv = (typeof window.__dsagent_parseKeyValuePairs === 'function')
+                ? window.__dsagent_parseKeyValuePairs(content)
+                : {};
+            var targetDir = (kv.path || content || '.').trim();
             var res = await window.electronAPI.agentList(targetDir);
             if (!res.success) throw new Error(res.error);
             var output = res.path + '\n';

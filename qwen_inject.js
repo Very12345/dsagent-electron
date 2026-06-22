@@ -45,12 +45,18 @@
     Q.ready = true;
 
     // 自动点击 float-to-bottom 按钮（Qwen 回到底部的滚动按钮）
-    // 这个按钮出现时需要自动点击，否则对话内容被截断不完整
+    // 严格限定：只匹配 chat 区域内的回到底部按钮，排除侧边栏折叠按钮
     (function() {
         var observer = new MutationObserver(function() {
-            var ftb = document.querySelector('[class*="float-to-bottom"]');
-            if (ftb && (ftb.className.indexOf('active') !== -1 || ftb.className.indexOf('float-to-bottom-active') !== -1)) {
-                ftb.click();
+            // 只在 chat 主区域查找，避免误触侧边栏按钮
+            var chatArea = document.querySelector('[class*="chat-area"], [class*="chat-container"], [class*="main"]');
+            var searchRoot = chatArea || document;
+            var ftb = searchRoot.querySelector('[class*="float-to-bottom"]');
+            if (ftb && ftb.className && (ftb.className.indexOf('active') !== -1 || ftb.className.indexOf('float-to-bottom-active') !== -1)) {
+                // 确认不是侧边栏按钮（侧边栏按钮有 sidebar 相关 class 或 SVG）
+                if (ftb.className.indexOf('sidebar') === -1 && !ftb.querySelector('[class*="sidebar"], [class*="Sidebar"]')) {
+                    ftb.click();
+                }
             }
         });
         observer.observe(document.body || document.documentElement, {
@@ -631,6 +637,62 @@
         return { current: drawPhase.current, detail: drawPhase.detail };
     };
 
+    // ======== PPT 生成相关 ========
+
+    // 等待 PPT 卡片出现（data-ppt-id 属性），并滚动到可见位置
+    Q.waitForPPTResponse = function(timeout) {
+        timeout = timeout || 1800000;
+        var start = Date.now();
+        console.log('[Qwen PPT] 开始等待 PPT 卡片...');
+        return new Promise(function(resolve) {
+            function check() {
+                if (Date.now() - start > timeout) {
+                    console.log('[Qwen PPT] 超时');
+                    resolve({ success: false, error: 'Timeout' });
+                    return;
+                }
+                var pptCard = document.querySelector('[data-ppt-id]');
+                if (pptCard) {
+                    console.log('[Qwen PPT] 找到 PPT 卡片, data-ppt-id=' + pptCard.getAttribute('data-ppt-id'));
+                    // 滚动到 PPT 卡片可见
+                    pptCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    resolve({ success: true, pptId: pptCard.getAttribute('data-ppt-id') });
+                    return;
+                }
+                setTimeout(check, 500);
+            }
+            setTimeout(check, 100);
+        });
+    };
+
+    // 点击 PPT 卡片中的下载按钮，触发下载
+    Q.clickPPTDownload = function() {
+        console.log('[Qwen PPT] 查找下载按钮...');
+        var pptCard = document.querySelector('[data-ppt-id]');
+        if (!pptCard) {
+            return { success: false, error: 'No PPT card found' };
+        }
+        // 在 PPT 卡片内查找下载按钮（btn-wrapper 类）
+        var downloadBtn = pptCard.querySelector('[class*="btn-wrapper"]');
+        if (!downloadBtn) {
+            // 回退：查找所有 btn-wrapper 并在 PPT 卡片后面的
+            downloadBtn = document.querySelector('[data-ppt-id] ~ [class*="btn-wrapper"], [data-ppt-id] [class*="btn-wrapper"]');
+        }
+        if (!downloadBtn) {
+            console.log('[Qwen PPT] 未找到下载按钮，尝试点击 office-card 内的可点击元素');
+            var clickable = pptCard.querySelector('button, [role="button"], [class*="btn"]');
+            if (clickable) {
+                clickable.click();
+                console.log('[Qwen PPT] 已点击备选下载按钮');
+                return { success: true };
+            }
+            return { success: false, error: 'No download button found' };
+        }
+        console.log('[Qwen PPT] 点击下载按钮:', downloadBtn.className);
+        downloadBtn.click();
+        return { success: true };
+    };
+
     // 等待纯文本回复完成（类似 waitForDrawResponse 但只有文字阶段，无需检测图片）
     // 使用100ms快速轮询 + 状态转换检测，专为后台模式优化
     Q.waitForTextResponse = function(timeout) {
@@ -863,6 +925,100 @@
         }
     };
 
+    // 获取当前页面 URL（对话专属 URL，比标题更可靠）
+    Q.getCurrentUrl = function() {
+        var href = window.location.href;
+        console.log('[Qwen DEBUG] getCurrentUrl =', href);
+        return { success: true, url: href };
+    };
+
+    // 直接导航到指定 URL（用于切回之前发送的对话）
+    Q.navigateToUrl = function(url) {
+        if (!url) return { success: false, error: 'No URL' };
+        console.log('[Qwen DEBUG] navigateToUrl: 导航到', url);
+        window.location.href = url;
+        return { success: true };
+    };
+
+    // 等待 URL 变为对话专属 URL（包含 /chat/），用于确认新建对话已完成
+    Q.waitForConversationUrl = function(timeout) {
+        timeout = timeout || 10000;
+        var start = Date.now();
+        var checkCount = 0;
+        console.log('[Qwen DEBUG] waitForConversationUrl: 开始等待, timeout=' + timeout + ', 当前URL=' + window.location.href);
+        return new Promise(function(resolve) {
+            function check() {
+                checkCount++;
+                var href = window.location.href;
+                if (href.indexOf('/chat/') >= 0) {
+                    console.log('[Qwen DEBUG] waitForConversationUrl: 成功! 第' + checkCount + '次检查, URL=' + href);
+                    resolve({ success: true, url: href });
+                    return;
+                }
+                if (Date.now() - start > timeout) {
+                    console.log('[Qwen DEBUG] waitForConversationUrl: 超时! 第' + checkCount + '次检查, 最终URL=' + href);
+                    resolve({ success: false, url: href });
+                    return;
+                }
+                setTimeout(check, 300);
+            }
+            check();
+        });
+    };
+
+    // 获取当前活跃对话的标题（用于并行时标记对话，稍后切回）
+    // 多级兜底：活跃类 → 任意对话 → 第一个对话的文本
+    Q.getCurrentConversationTitle = function() {
+        var allConvs = document.querySelectorAll('[data-react-window-index]');
+        // 方法1：查找活跃对话（有 text-title-attachment 或 font-500 类）
+        for (var i = 0; i < allConvs.length; i++) {
+            var title = allConvs[i].querySelector('[class*="text-title-attachment"], [class*="font-500"]');
+            if (title) {
+                var t = title.textContent.trim();
+                if (t) return { success: true, title: t };
+            }
+        }
+        // 方法2：任意对话的第一个文本节点
+        for (var i = 0; i < allConvs.length; i++) {
+            var text = allConvs[i].textContent.trim();
+            if (text) return { success: true, title: text.substring(0, 50) };
+        }
+        // 方法3：取第一个对话
+        if (allConvs.length > 0) {
+            var t = allConvs[0].textContent.trim();
+            if (t) return { success: true, title: t.substring(0, 50) };
+        }
+        return { success: false, title: '' };
+    };
+
+    // 切换到指定标题的对话（多级兜底）
+    Q.switchToConversation = function(title) {
+        return new Promise(function(resolve) {
+            if (!title) { resolve({ success: false, error: 'No title' }); return; }
+            var allConvs = document.querySelectorAll('[data-react-window-index]');
+            // 方法1：精确匹配标题文本
+            for (var i = 0; i < allConvs.length; i++) {
+                var text = allConvs[i].textContent.trim();
+                if (text.indexOf(title) >= 0) {
+                    allConvs[i].click();
+                    setTimeout(function() { resolve({ success: true }); }, 800);
+                    return;
+                }
+            }
+            // 方法2：模糊匹配（取标题前 20 个字符）
+            var shortTitle = title.substring(0, 20);
+            for (var i = 0; i < allConvs.length; i++) {
+                var text = allConvs[i].textContent.trim();
+                if (text.indexOf(shortTitle) >= 0) {
+                    allConvs[i].click();
+                    setTimeout(function() { resolve({ success: true }); }, 800);
+                    return;
+                }
+            }
+            resolve({ success: false, error: 'Conversation not found: ' + title });
+        });
+    };
+
     // 删除当前对话（两步：菜单→删除此对话→确认）
     Q._deleteSerial = 0;
     Q.deleteConversation = function(convIndex) {
@@ -901,6 +1057,12 @@
             // 查找"..."更多按钮
             function findConvMoreButton(convEl) {
                 if (!convEl) return null;
+                // 策略0：convEl 内找 span[data-icon-type*="more"] 的父级 button（新版 Qwen 图标）
+                var qwIconSpans = convEl.querySelectorAll('span[data-icon-type*="more"]');
+                if (qwIconSpans.length > 0) {
+                    var btn = qwIconSpans[qwIconSpans.length - 1].closest('button');
+                    if (btn) return btn;
+                }
                 // 策略1：convEl 内搜索 data-icon-type
                 var localIconBtns = convEl.querySelectorAll('button[data-icon-type*="more"], [data-icon-type*="more"]');
                 for (var i = 0; i < localIconBtns.length; i++) {
@@ -935,12 +1097,20 @@
                 if (convList) {
                     allConvs = convList.querySelectorAll('[class*="conversation"], [class*="chat-item"], [class*="session"], [class*="history-item"], a[href*="/c/"]');
                 }
-                if (allConvs.length === 0) {
+                if (!allConvs || allConvs.length === 0) {
                     allConvs = document.querySelectorAll('[class*="conversation"], [class*="chat-item"], [class*="session"], [class*="history-item"], a[href*="/c/"]');
                 }
             }
-            if (allConvs.length === 0) {
-                safeResolve({ success: false, error: 'No conversations found in sidebar' });
+            // Qwen 新版 Tailwind 布局：可拖拽的对话项（带 aria-haspopup 按钮）
+            if (!allConvs || allConvs.length === 0) {
+                var draggable = document.querySelectorAll('div[draggable="true"]');
+                allConvs = Array.from(draggable).filter(function(el) {
+                    return el.querySelector('button[aria-haspopup="menu"]');
+                });
+            }
+            if (!allConvs || allConvs.length === 0) {
+                // 侧边栏没有对话 = 无需删除，视为成功
+                safeResolve({ success: true, reason: 'No conversations in sidebar, already clean' });
                 return;
             }
 
@@ -1057,30 +1227,19 @@
 
     // 在 Qwen 页面显示状态覆盖层（用于 debug）
     Q.setStatus = function(text) {
+        // 发送到 controlbar 状态栏，不在 Qwen 页面上创建 DOM 叠加层
         try {
-            var el = document.getElementById('__qwen_status');
-            if (!el) {
-                el = document.createElement('div');
-                el.id = '__qwen_status';
-                el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);color:#0ff;padding:16px 24px;border-radius:12px;z-index:99999;font-size:16px;text-align:center;max-width:600px;word-break:break-all;box-shadow:0 4px 20px rgba(0,0,0,0.5);pointer-events:none;font-family:monospace;border:2px solid #0ff;';
-                document.body.appendChild(el);
+            if (window.electronAPI && window.electronAPI.qwenNotifyStatus) {
+                window.electronAPI.qwenNotifyStatus(text);
             }
-            el.textContent = '🔧 Qwen Debug: ' + text;
-            el.style.display = 'block';
-            return { success: true };
-        } catch(e) {
-            return { success: false, error: e.message };
-        }
+        } catch(e) {}
+        console.log('[Qwen Status]', text);
+        return { success: true };
     };
 
     Q.clearStatus = function() {
-        try {
-            var el = document.getElementById('__qwen_status');
-            if (el) el.style.display = 'none';
-            return { success: true };
-        } catch(e) {
-            return { success: false, error: e.message };
-        }
+        // 不再需要清除 DOM 叠加层
+        return { success: true };
     };
 
     console.log('[Qwen Auto] Script loaded');

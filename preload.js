@@ -22,9 +22,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     agentMkdir: (path) => ipcRenderer.invoke('agent-mkdir', path),
     agentExists: (path) => ipcRenderer.invoke('agent-exists', path),
     agentInfo: (path) => ipcRenderer.invoke('agent-info', path),
+    agentConfigLoad: () => ipcRenderer.invoke('agent-config-load'),
     agentConfigSave: (cfg) => ipcRenderer.invoke('agent-config-save', cfg),
+    agentPlanLoad: () => ipcRenderer.invoke('agent-plan-load'),
+    agentPlanSave: (plan) => ipcRenderer.invoke('agent-plan-save', plan),
+    agentPlanDelete: () => ipcRenderer.invoke('agent-plan-delete'),
     agentSkillsLoad: () => ipcRenderer.invoke('agent-skills-load'),
-    agentSkillsSave: (skills) => ipcRenderer.invoke('agent-skills-save', skills),
+    agentSkillsDelete: (name) => ipcRenderer.invoke('agent-skills-delete', name),
+    agentSkillGetContent: (skillName) => ipcRenderer.invoke('agent-skill-get-content', skillName),
+    agentSkillToggleDisabled: (skillName) => ipcRenderer.invoke('agent-skill-toggle-disabled', skillName),
+    agentSkillGetDisabled: () => ipcRenderer.invoke('agent-skill-get-disabled'),
     agentPing: () => ipcRenderer.invoke('agent-ping'),
     agentExecAdmin: (cmd) => ipcRenderer.invoke('agent-exec-admin', cmd),
     agentRequestConfirm: (data) => ipcRenderer.invoke('agent-request-confirm', data),
@@ -53,9 +60,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     qwenGetClipboard: () => ipcRenderer.invoke('qwen-get-clipboard'),
     qwenClickAt: (x, y) => ipcRenderer.invoke('qwen-click-at', x, y),
 
+    // Qwen PPT 下载准备（设置一次性 will-download 拦截）
+    qwenPreparePPTDownload: (saveDir) => ipcRenderer.invoke('qwen-prepare-ppt-download', saveDir),
+
     // Qwen 进度推送（单向消息 → agentView）
     qwenProgress: (msg) => ipcRenderer.send('qwen-progress', msg),
     agentNotifyStatus: (msg) => ipcRenderer.send('agent-notify-status', msg),
+    qwenNotifyStatus: (msg) => ipcRenderer.send('qwen-notify-status', msg),
 
     // 主题同步
     sendTheme: (theme) => ipcRenderer.send('theme-changed', theme),
@@ -66,8 +77,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 继续生成按钮检测通知（返回用户选择：true=继续生成，false=取消）
     notifyContinueGeneration: () => ipcRenderer.invoke('notify-continue-generation'),
 
-    // 频率限制通知（返回用户选择：true=重试，false=取消）
-    agentRateLimitNotify: (waitSeconds) => ipcRenderer.invoke('agent-rate-limit-notify', waitSeconds),
+    // 频率限制/服务器繁忙通知（返回用户选择：true=重试，false=取消）
+    agentRateLimitNotify: (waitSeconds, errorType) => ipcRenderer.invoke('agent-rate-limit-notify', waitSeconds, errorType),
 
     // 浏览器工具
     browserCreate: (options) => ipcRenderer.invoke('browser-create', options),
@@ -86,4 +97,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     terminalClear: (name) => ipcRenderer.invoke('terminal-clear', name),
     terminalKill: (name) => ipcRenderer.invoke('terminal-kill', name),
     terminalList: () => ipcRenderer.invoke('terminal-list'),
+
+    // MCP 桥接
+    mcpInit: () => ipcRenderer.invoke('mcp-init'),
+    mcpGetTools: () => ipcRenderer.invoke('mcp-get-tools'),
+    mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp-call-tool', serverName, toolName, args),
+    mcpShutdown: () => ipcRenderer.invoke('mcp-shutdown'),
 });
