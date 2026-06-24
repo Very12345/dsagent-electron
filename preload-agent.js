@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     historySave: (data) => ipcRenderer.invoke('history-save', data),
     historyLoadUrl: (id, url) => ipcRenderer.invoke('history-load-url', id, url),
     historyDelete: (id) => ipcRenderer.invoke('history-delete', id),
+    historyRename: (id, newTitle) => ipcRenderer.invoke('history-rename', id, newTitle),
     historyRestoreConversation: (url) => ipcRenderer.invoke('history-restore-conversation', url),
 
     // 获取根目录（用于解析本地图片等）
@@ -140,7 +141,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onAgentOpenSkillsModal: (callback) => {
         ipcRenderer.on('agent-open-skills-modal', () => callback());
     },
+    onAgentShowMcpTools: (callback) => {
+        ipcRenderer.on('agent-show-mcp-tools', (event, data) => callback(data));
+    },
     deleteSkill: (name) => ipcRenderer.send('ctrl-delete-skill', name),
+    agentSkillsLoad: () => ipcRenderer.invoke('agent-skills-load'),
+    agentSkillsSyncedList: () => ipcRenderer.invoke('agent-skills-synced-list'),
+    syncSkillToWorkdir: (skillName) => ipcRenderer.send('sync-skill-to-workdir', skillName),
+    unsyncSkill: (skillName) => ipcRenderer.send('unsync-skill', skillName),
+    // invoke 版本（供 dsa 工具使用，返回结果）
+    agentSkillSync: (skillName) => ipcRenderer.invoke('agent-skill-sync', skillName),
+    agentSkillUnsync: (skillName) => ipcRenderer.invoke('agent-skill-unsync', skillName),
+    agentSkillDelete: (skillName) => ipcRenderer.invoke('agent-skill-delete', skillName),
 
     // 获取技能完整内容（local-skill 命令）
     agentSkillGetContent: (skillName) => ipcRenderer.invoke('agent-skill-get-content', skillName),
@@ -150,12 +162,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 配置管理
     agentConfigLoad: () => ipcRenderer.invoke('agent-config-load'),
     agentConfigSave: (config) => ipcRenderer.invoke('agent-config-save', config),
+    agentSkillsStoragePath: () => ipcRenderer.invoke('agent-skills-storage-path'),
+    agentSkillsSetStoragePath: (path) => ipcRenderer.invoke('agent-skills-set-storage-path', path),
+    agentSkillsSelectFolder: () => ipcRenderer.invoke('agent-skills-select-folder'),
+
+    // 存储路径设置弹窗事件
+    onAgentShowStoragePathDialog: (callback) => {
+        ipcRenderer.on('agent-show-storage-path-dialog', () => callback());
+    },
 
     // MCP 桥接
-    mcpInit: () => ipcRenderer.invoke('mcp-init'),
+    mcpInit: (force) => ipcRenderer.invoke('mcp-init', force),
     mcpGetTools: () => ipcRenderer.invoke('mcp-get-tools'),
     mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp-call-tool', serverName, toolName, args),
     mcpShutdown: () => ipcRenderer.invoke('mcp-shutdown'),
+    mcpGetToolStates: () => ipcRenderer.invoke('mcp-get-tool-states'),
+    mcpSetToolEnabled: (serverName, toolName, enabled) => ipcRenderer.invoke('mcp-set-tool-enabled', serverName, toolName, enabled),
 
     // 计划管理
     agentPlanLoad: () => ipcRenderer.invoke('agent-plan-load'),
@@ -185,4 +207,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getMenubarConfig: () => ipcRenderer.invoke('get-menubar-config'),
     // 菜单项点击 → 主进程执行操作
     agentMenuItemClick: (item) => ipcRenderer.send('agent-menu-item-click', item),
+
+    // 后台定时任务管理（从 agentview UI 控制）
+    intervalAddFromUI: (params) => ipcRenderer.invoke('interval-add-from-ui', params),
+    intervalStopFromUI: (taskName) => ipcRenderer.invoke('interval-stop-from-ui', taskName),
+    intervalStopAll: () => ipcRenderer.send('interval-stop-all'),
+    intervalStopAllForce: () => ipcRenderer.send('interval-stop-all-force'),
+    intervalGetSaved: () => ipcRenderer.invoke('interval-get-saved'),
+    intervalRestoreSaved: () => ipcRenderer.invoke('interval-restore-saved'),
+    intervalClearSaved: () => ipcRenderer.invoke('interval-clear-saved'),
+    // 定时任务状态同步和队列管理
+    intervalStateUpdate: (state) => ipcRenderer.send('interval-state-update', state),
+    intervalFlushQueue: () => ipcRenderer.send('interval-flush-queue'),
 });

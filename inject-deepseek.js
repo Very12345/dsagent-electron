@@ -21,7 +21,7 @@
             'powershell remove-item', 'rm -rf', 'rm -r', 'dd if=/dev/zero',
             'move ', 'ren ', 'rename '
         ],
-        SAFE_OPERATIONS: ['local-read', 'local-list', 'local-info', 'local-exists', 'local-save', 'local-edit', 'local-mkdir', 'local-subreader', 'local-interval', 'local-break', 'local-help', 'local-browser', 'local-winapi', 'local-skill'],
+        SAFE_OPERATIONS: ['local-read', 'local-list', 'local-info', 'local-exists', 'local-save', 'local-edit', 'local-mkdir', 'local-subreader', 'local-interval', 'local-interval-list', 'local-break', 'local-help', 'local-winapi', 'local-skill'],
         CONFIRM_MODE: 'smart',  // 'strict' | 'smart' | 'loose'
     };
 
@@ -64,6 +64,12 @@
     window.__dsagent_pendingAsyncTasks = [];  // 待处理异步任务列表
     window.__dsagent_seenToolDocs = [];       // AI 已查看过文档的工具名列表
     window.__dsagent_concurrentMode = false;  // subreader 是否处于并发子代理模式
+
+    // 后台定时任务系统
+    var _intervalTasks = {};        // { taskName: { id, taskName, interval, mode, message, command, timerId, status } }
+    var _pendingIntervalResults = []; // [{ taskName, content, timestamp }] 待注入的定时结果
+    var _intervalSending = false;   // 正在发送定时消息的锁
+var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 维护）
 
     function isDangerousCommand(cmd) {
         const lowerCmd = cmd.toLowerCase();
@@ -279,8 +285,8 @@
     }
 
     function setModelMode(mode) {
-        // mode: 'quick' 或 'professional'
-        var targetType = mode === 'professional' ? 'expert' : 'quick';
+        // mode: 'quick' 或 'professional' 或 'image'（识图模式 = quick 模型 + 无深度思考）
+        var targetType = mode === 'professional' ? 'expert' : (mode === 'image' ? 'image' : 'quick');
         var radios = document.querySelectorAll('[data-model-type]');
         for (var ri = 0; ri < radios.length; ri++) {
             var r = radios[ri];
@@ -293,7 +299,7 @@
             }
         }
         // fallback: 按文字搜索
-        var label = mode === 'professional' ? '专家模式' : '快速模式';
+        var label = mode === 'professional' ? '专家模式' : (mode === 'image' ? '识图模式' : '快速模式');
         var allEls = document.querySelectorAll('span, div, button');
         for (var ei = 0; ei < allEls.length; ei++) {
             var el = allEls[ei];
@@ -432,7 +438,7 @@
             // 专家模式：超过 10KB 需要 force=true 才能读取
             if (mode !== 'quick' && infoRes.size > 10 * 1024) {
                 if (!force) {
-                    return '⚠️ 文件大小警告：该文件 ' + sizeKB + 'KB（超过 10KB），可能会占用大量上下文。\n如果你确认需要读取完整内容，请在 local-read 中添加 force=true 参数，如：\n\n```local-read\npath="' + filePath + '" force=true\n```\n\n> 建议使用 local-subreader 并添加分析指令来获取摘要，避免占用过多上下文。';
+                    return '⚠️ 文件大小警告：该文件 ' + sizeKB + 'KB（超过 10KB），可能会占用大量上下文。\n如果你确认需要读取完整内容，请在 read 中添加 force=true 参数，如：\n\n```functioncall\n{"tool": "read", "params": {"path": "' + filePath + '", "force": true}}\n```\n\n> 建议使用 subreader 并添加分析指令来获取摘要，避免占用过多上下文。';
                 }
                 showToast('⚠️ 已强制读取大文件 (' + sizeKB + 'KB)', 3000);
             }
@@ -493,62 +499,168 @@
         return res.message + (res.changed ? ' (Modified)' : ' (No match)');
     }
 
-    /** local-interval 循环执行 */
-    var _intervalBreak = false;
+    /** 后台定时任务系统（非阻塞） */
 
-    async function execInterval(content) {
-        var lines = content.trim().split('\n');
-        var intervalMs = 5000;
-        // 解析 interval=... 参数
-        var intervalMatch = lines[0] && lines[0].match(/^\s*interval\s*=\s*(\d+)/i);
-        if (intervalMatch) {
-            intervalMs = parseInt(intervalMatch[1]);
-            lines = lines.slice(1);
+    // 创建后台定时任务
+    async function createIntervalTask(params) {
+        var taskName = params.taskName;
+        if (!taskName) return '❌ 缺少 taskName';
+        
+        // 检查是否已存在同名任务
+        if (_intervalTasks[taskName]) {
+            return '❌ 任务 "' + taskName + '" 已存在，请先停止或使用其他名称';
         }
-        var cmdContent = lines.join('\n').trim();
-        if (!cmdContent) return '# Error: local-interval requires a command after the parameters';
 
-        // 阻止 completion watcher 干扰
-        var prevExecuting = isExecuting;
-        isExecuting = true;
-        _intervalBreak = false;
+        var task = {
+            taskName: taskName,
+            interval: params.interval || 5000,
+            mode: params.mode || 'command',
+            message: params.message || '',
+            command: params.command || '',
+            createdAt: Date.now(),
+            status: 'running',
+            iteration: 0
+        };
 
+        // 通知 Agent 视图：定时任务已创建
         try {
-            var iteration = 0;
-            while (!_intervalBreak) {
-                iteration++;
-                var result;
-                try {
-                    result = await execLocal(cmdContent);
-                } catch (e) {
-                    result = 'Error: ' + e.message;
-                }
-                // 如果返回超时，直接退出 interval
-                if (typeof result === 'string' && result.indexOf('命令已超时') >= 0) {
-                    return result;
-                }
+            window.electronAPI.agentForwardResult({
+                type: 'interval-start',
+                taskName: taskName,
+                command: task.mode === 'command' ? task.command : task.message,
+                interval: task.interval,
+                mode: task.mode
+            });
+        } catch(e) {}
 
-                var iterMsg = '--- Interval Iteration ' + iteration + ' ---\n' + (result || '(no output)');
-                // 发送结果到对话
-                await fillAndSend(iterMsg + '\n\n要继续监控请回复 `local-break` 以停止。');
-                // 等待 AI 生成回复
-                await waitForGenerationEnd();
-                await sleep(300);
-                // 检查 AI 回复中是否包含 local-break
-                var allMsgs = document.querySelectorAll('.ds-message, [class*="message"]');
-                var lastMsg = allMsgs[allMsgs.length - 1];
-                if (lastMsg && lastMsg.textContent.indexOf('local-break') >= 0) {
-                    break;
-                }
-                // 等待间隔
-                await sleep(intervalMs);
-            }
-        } finally {
-            isExecuting = prevExecuting;
-            _intervalBreak = false;
+        _intervalTasks[taskName] = task;
+
+        console.log('[Interval] CREATED: ' + taskName + ' interval=' + task.interval + 'ms mode=' + task.mode);
+        try {
+            window.electronAPI.agentForwardResult({
+                type: 'interval-debug',
+                msg: 'CREATED: ' + taskName + ' interval=' + task.interval + 'ms mode=' + task.mode
+            });
+        } catch(e) {}
+
+        var modeLabel = task.mode === 'command' ? '执行命令' : '定时提醒';
+        var detail = task.mode === 'command' ? task.command : task.message;
+        return '✅ 后台定时任务 "' + taskName + '" 已创建（' + modeLabel + '，每 ' + (task.interval/1000).toFixed(1) + ' 秒）。\n'
+            + '内容: ' + (detail.length > 60 ? detail.substring(0, 60) + '...' : detail) + '\n'
+            + '对话可正常继续，定时消息将自动注入。使用 `{"tool": "break", "params": {"taskName": "' + taskName + '"}}` 停止。';
+    }
+
+    // 停止定时任务
+    function stopIntervalTask(taskName, reason) {
+        var task = _intervalTasks[taskName];
+        if (!task) return '❌ 未找到任务 "' + taskName + '"';
+
+        console.warn('[Interval] STOP: ' + taskName + (reason ? ' (' + reason + ')' : ''));
+        try {
+            window.electronAPI.agentForwardResult({
+                type: 'interval-debug',
+                msg: 'STOP: ' + taskName + (reason ? ' (' + reason + ')' : '')
+            });
+        } catch(e) {}
+
+        task.status = 'stopped';
+        delete _intervalTasks[taskName];
+
+        // 从待注入队列中移除该任务的结果
+        _pendingIntervalResults = _pendingIntervalResults.filter(function(r) { return r.taskName !== taskName; });
+
+        // 通知 Agent 视图
+        try {
+            window.electronAPI.agentForwardResult({
+                type: 'interval-stop',
+                taskName: taskName,
+                command: task.mode === 'command' ? task.command : task.message
+            });
+        } catch(e) {}
+
+        return '⏹️ 已停止定时任务 "' + taskName + '"' + (reason ? '（' + reason + '）' : '');
+    }
+
+    // 停止所有定时任务
+    function stopAllIntervalTasks() {
+        var names = Object.keys(_intervalTasks);
+        names.forEach(function(name) { stopIntervalTask(name); });
+        _pendingIntervalResults = [];
+    }
+
+    // 列出活跃的定时任务
+    function listIntervalTasks() {
+        var names = Object.keys(_intervalTasks);
+        return names.map(function(name) { return _intervalTasks[name]; });
+    }
+
+    // 收集待注入的定时结果
+    function collectPendingIntervalResults() {
+        if (_pendingIntervalResults.length === 0) return [];
+        var results = _pendingIntervalResults.slice();
+        _pendingIntervalResults = [];
+        return results;
+    }
+
+    // ===== 定时结果独立消费者：每 2 秒检查，AI 真正空闲时发送 =====
+    function startIntervalConsumer() {
+        var _lastConsumerLog = '';
+        function _log(msg) {
+            console.log(msg);
+            try {
+                window.electronAPI.agentForwardResult({ type: 'interval-debug', msg: '[Consumer] ' + msg });
+            } catch(e) {}
         }
+        setInterval(async function() {
+            if (_intervalSending) return;
+            if (_pendingIntervalResults.length === 0) return;
+            if (stopRequested) {
+                _log('stopRequested=true');
+                return;
+            }
 
-        return '✅ Interval monitoring stopped after ' + iteration + ' iteration(s).';
+            // agent 在工作 → 结果会被 feedback 顺路带走
+            if (isExecuting) {
+                _log('isExecuting=true, queue=' + _pendingIntervalResults.length + ', waiting...');
+                return;
+            }
+
+            // AI 正在生成 → 等（watcher 每 500ms 更新此标志）
+            if (_wasAiGenerating) {
+                var logMsg = 'aiGen=true, queue=' + _pendingIntervalResults.length + ', waiting...';
+                if (logMsg !== _lastConsumerLog) { _log(logMsg); _lastConsumerLog = logMsg; }
+                return;
+            }
+
+            _lastConsumerLog = '';
+
+            // 批量发送积压
+            _log('sending! queue=' + _pendingIntervalResults.length + ' items');
+            var results = collectPendingIntervalResults();
+            if (results.length === 0) return;
+            var combined = results.map(function(r) { return r.content; }).join('\n\n---\n\n');
+
+            // 通知 agentview：即将发送定时消息，请自动滚动
+            try {
+                window.electronAPI.agentForwardResult({ type: 'interval-msg-sending' });
+            } catch(e) {}
+
+            _intervalSending = true;
+            try {
+                var ok = await fillAndSend(combined);
+                if (!ok) {
+                    _log('fillAndSend FAILED, re-queuing ' + results.length + ' items');
+                    results.forEach(function(r) { _pendingIntervalResults.push(r); });
+                } else {
+                    _log('fillAndSend OK');
+                }
+            } catch(e) {
+                _log('fillAndSend error: ' + e.message);
+                results.forEach(function(r) { _pendingIntervalResults.push(r); });
+            } finally {
+                _intervalSending = false;
+            }
+        }, 2000);
     }
 
     function formatSize(bytes) {
@@ -721,13 +833,13 @@
     var MAX_EXPERT_TOTAL_SIZE = 159 * 1024;
     
     for (var fi = 0; fi < pathsList.length; fi++) {
-        if (mode === 'quick' && fi >= MAX_QUICK_FILES) {
+        if ((mode === 'quick' || mode === 'image') && fi >= MAX_QUICK_FILES) {
             throw new Error('快速模式最多支持 ' + MAX_QUICK_FILES + ' 个文件');
         }
         showToast('Reading file ' + (fi + 1) + '/' + pathsList.length + '...');
         var fileInfo = await window.electronAPI.agentInfo(pathsList[fi]);
         if (fileInfo.success && fileInfo.size !== undefined) {
-            if (mode === 'quick') {
+            if (mode === 'quick' || mode === 'image') {
                 if (fileInfo.size > MAX_QUICK_SIZE_PER_FILE) {
                     throw new Error('快速模式单个文件不能超过 100MB');
                 }
@@ -889,18 +1001,45 @@ async function handleSingleReadSingle(pathsList, fileResults, mode, extraPrompt,
     ta.focus();
     await sleep(600);
 
-    // ======== 专家模式特殊处理 ========
-    if (mode === 'professional') {
-        showToast('Switching to Expert mode...');
-        setModelMode('professional');
-        await sleep(1500); // 等待模式切换完成
+    // ======== 专家 / 识图模式特殊处理 ========
+    if (mode === 'professional' || mode === 'image') {
+        var isImageMode = (mode === 'image');
+        showToast(isImageMode ? '识图模式 (Quick + 无深度思考)...' : 'Switching to Expert mode...');
+        setModelMode(isImageMode ? 'quick' : 'professional');
+        await sleep(1500);
         
         // 专家模式：需要先点击输入框激活完整工具栏
         ta.click();
         await sleep(500);
         
-        // 查找深度思考按钮（专家模式可能位置不同）
-        if (enableThink) {
+        // 识图模式：始终禁用深度思考
+        if (isImageMode) {
+            for (var attempt = 0; attempt < 5; attempt++) {
+                var allToggles = document.querySelectorAll('.ds-toggle-button');
+                var deepThinkBtn = null;
+                for (var ti = 0; ti < allToggles.length; ti++) {
+                    var toggle = allToggles[ti];
+                    var span = toggle.querySelector('span');
+                    if (span && (span.textContent.includes('深度思考') || span.textContent.includes('Deep Think'))) {
+                        deepThinkBtn = toggle;
+                        break;
+                    }
+                }
+                if (!deepThinkBtn) {
+                    deepThinkBtn = document.querySelector('[aria-label="深度思考"], [aria-label="Deep Think"]');
+                }
+                if (deepThinkBtn) {
+                    if (deepThinkBtn.getAttribute('aria-pressed') === 'true') {
+                        deepThinkBtn.click();
+                        await sleep(400);
+                    }
+                    break;
+                }
+                await sleep(500);
+            }
+        } else {
+            // 专家模式：按需处理深度思考
+            if (enableThink) {
             showToast('Enabling deep think in Expert mode...');
             var thinkSuccess = false;
 
@@ -975,6 +1114,7 @@ async function handleSingleReadSingle(pathsList, fileResults, mode, extraPrompt,
                 }
                 await sleep(500);
             }
+        }
         }
 
         // 专家模式联网搜索
@@ -1109,7 +1249,7 @@ async function handleSingleReadSingle(pathsList, fileResults, mode, extraPrompt,
 
     // ======== 处理文件（注意编码） ========
     var readMsg;
-    if (mode === 'quick') {
+    if (mode === 'quick' || mode === 'image') {
         // 快速模式：上传文件
         var fileInput = document.querySelector(SELECTORS.fileInput);
         if (!fileInput) throw new Error('找不到文件上传输入框');
@@ -1301,7 +1441,7 @@ async function handleSingleReadSingle(pathsList, fileResults, mode, extraPrompt,
     }
 
     // ======== Return result ========
-    var modeLabel = mode === 'professional' ? 'Expert' : 'Quick';
+    var modeLabel = mode === 'professional' ? 'Expert' : (mode === 'image' ? 'Image' : 'Quick');
     if (searchActuallyEnabled) modeLabel += '+Search';
     if (thinkActuallyEnabled) modeLabel += '+DeepThink';
     
@@ -1416,7 +1556,7 @@ async function waitAndExtractSingle(ref) {
         await sleep(500);
     }
 
-    var modeLabel = mode === 'professional' ? 'Expert' : 'Quick';
+    var modeLabel = mode === 'professional' ? 'Expert' : (mode === 'image' ? 'Image' : 'Quick');
     if (searchActuallyEnabled) modeLabel += '+Search';
     if (thinkActuallyEnabled) modeLabel += '+DeepThink';
 
@@ -1611,11 +1751,12 @@ async function waitAndExtractBatch(convHref, batchPaths, label) {
 // 提取最后一个 AI 回复的文本内容
 function extractLastAiResponse() {
     var messages = document.querySelectorAll(SELECTORS.messageContainer);
+    console.log('[Debug] extractLastAiResponse: found ' + messages.length + ' messages, selector=' + SELECTORS.messageContainer);
     var lastAiMsg = null;
     for (var mi = messages.length - 1; mi >= 0; mi--) {
         var msg = messages[mi];
         var textEls = msg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
-        if (textEls.length > 0) { lastAiMsg = msg; break; }
+        if (textEls.length > 0) { lastAiMsg = msg; console.log('[Debug] extractLastAiResponse: last AI message at index ' + mi + ' has ' + textEls.length + ' text elements'); break; }
     }
     var responseText = '';
     if (lastAiMsg) {
@@ -1624,7 +1765,9 @@ function extractLastAiResponse() {
             responseText += textEls[ti].textContent + '\n';
         }
     }
-    return responseText.trim() || '(子代理未返回内容)';
+    var result = responseText.trim() || '(子代理未返回内容)';
+    console.log('[Debug] extractLastAiResponse: result length=' + result.length + ' content=' + result.substring(0, 120));
+    return result;
 }
 
 // 删除当前活跃的对话
@@ -1718,6 +1861,10 @@ async function deleteCurrentConversation() {
         _contextCompressSent = false;
         window.__dsagent_pendingAsyncTasks = [];
         _asyncRoundCount = 0;
+        // 通知主进程停止所有后台定时任务
+        try {
+            window.electronAPI.intervalStopAll();
+        } catch(e) {}
     }
 
     async function findDeleteButton(convEl) {
@@ -2596,10 +2743,32 @@ async function deleteCurrentConversation() {
     }
 
     // ==================== 完成生成处理（新流程：点击复制按钮 → 读取剪贴板 → 解析 markdown → 执行） ====================
+    // DOM 兜底：从页面直接提取最后一条 AI 回复
+    function extractLastAssistantResponse() {
+        try {
+            // DeepSeek 的 AI 回复通常在 .ds-markdown 或 .markdown 元素中
+            var markdownEls = document.querySelectorAll('.ds-markdown, .markdown, [class*="markdown"]');
+            if (markdownEls.length > 0) {
+                return markdownEls[markdownEls.length - 1].innerText || '';
+            }
+            // 兜底：找最后一个包含代码块的容器
+            var codeBlocks = document.querySelectorAll('pre code, .code-block');
+            if (codeBlocks.length > 0) {
+                var lastBlock = codeBlocks[codeBlocks.length - 1];
+                var container = lastBlock.closest('[class*="message"], [class*="bubble"], [class*="response"]');
+                if (container) return container.innerText || '';
+            }
+            return '';
+        } catch(e) {
+            return '';
+        }
+    }
+
     function findCopyButton() {
         // 查找 DeepSeek 回复底部的复制按钮（SVG 为复制图标）
         // 返回最后一个（= 最新消息的）复制按钮
         var buttons = document.querySelectorAll('[role="button"]');
+        console.log('[Debug] findCopyButton: total [role="button"] elements=' + buttons.length);
         var last = null;
         for (var i = 0; i < buttons.length; i++) {
             var btn = buttons[i];
@@ -2608,10 +2777,12 @@ async function deleteCurrentConversation() {
                 var d = svgPath.getAttribute('d') || '';
                 // 复制图标路径特征：以 M6.14929 4.02032 开头
                 if (d.indexOf('M6.14929 4.02032') >= 0) {
+                    console.log('[Debug] findCopyButton: found candidate at index ' + i + ' d=' + d.substring(0, 50));
                     last = btn;
                 }
             }
         }
+        console.log('[Debug] findCopyButton: returning ' + (last ? 'FOUND' : 'null'));
         return last;
     }
 
@@ -2629,60 +2800,8 @@ async function deleteCurrentConversation() {
         return null;
     }
 
-    function parseCommandsFromMarkdown(markdown) {
-        var commands = [];
-        // 匹配标准代码块 ```lang\ncontent```
-        var regex = /```(\w[\w-]*)\s*\n([\s\S]*?)```/g;
-        var match;
-        while ((match = regex.exec(markdown)) !== null) {
-            var lang = match[1].toLowerCase();
-            var content = match[2].trim();
-            if (lang === 'local-skip') continue;
-            if (SUPPORTED_LANGS.indexOf(lang) >= 0) {
-                commands.push({ lang: lang, content: content });
-            }
-        }
-        return commands;
-    }
-
-    function parseSegmentsFromMarkdown(markdown) {
-        var segments = [];
-        // 匹配标准代码块 ```lang\ncontent```
-        var regex = /```(\w[\w-]*)\s*\n([\s\S]*?)```/g;
-        var lastIndex = 0;
-
-        while (true) {
-            var match = regex.exec(markdown);
-            if (!match) break;
-
-            // 代码块前的文本
-            var textBefore = markdown.slice(lastIndex, match.index).trim();
-            if (textBefore) {
-                segments.push({ type: 'text', content: textBefore });
-            }
-
-            var lang = match[1].toLowerCase();
-            var content = match[2].trim();
-            if (content) {
-                if (SUPPORTED_LANGS.indexOf(lang) >= 0) {
-                    segments.push({ type: 'tool-call', lang: lang, content: content });
-                } else if (lang.indexOf('local-') !== 0) {
-                    // 非 local-* 的普通代码块也当作文本
-                    segments.push({ type: 'text', content: match[0] });
-                }
-            }
-
-            lastIndex = match.index + match[0].length;
-        }
-
-        // 末尾剩余文本
-        var textAfter = markdown.slice(lastIndex).trim();
-        if (textAfter) {
-            segments.push({ type: 'text', content: textAfter });
-        }
-
-        return segments;
-    }
+    // 解析函数已迁移到 tools/tool-parser.js 共享模块
+    // 使用 window.__dsagent_parseCommands / window.__dsagent_parseSegments
 
     var _collectingAsyncResults = false;
 
@@ -2739,25 +2858,41 @@ async function deleteCurrentConversation() {
 
             // 1. 点击复制按钮
             if (!copyBtn) {
-                showToast('未找到复制按钮，跳过自动执行', 2000);
+                console.log('[Process] Copy button is null, reporting error to agent view');
+                showToast('未找到复制按钮，自动执行失败', 2000);
+                try {
+                    window.electronAPI.agentForwardResult({ type: 'error', message: '未找到复制按钮，无法获取 AI 回复内容。可能原因是 DeepSeek 页面在后台时按钮未渲染。' });
+                } catch(e) {}
                 return;
             }
             copyBtn.click();
 
-            // 2. 等待剪贴板更新
-            await sleep(150);
+            // 2. 等待剪贴板更新（带重试）
+            await sleep(200);
+            var markdown = '';
+            for (var retry = 0; retry < 5; retry++) {
+                try {
+                    markdown = await window.electronAPI.clipboardReadText();
+                } catch (e) {
+                    console.warn('[Process] clipboard read attempt ' + (retry + 1) + ' failed:', e);
+                }
+                if (markdown && markdown.length > 10) break;
+                // 剪贴板可能还没更新，重试
+                await sleep(200);
+            }
 
             // 3. 读取剪贴板中的完整 markdown
-            var markdown = '';
-            try {
-                markdown = await window.electronAPI.clipboardReadText();
-            } catch (e) {
-                showToast('读取剪贴板失败: ' + e.message, 3000);
-                return;
-            }
             if (!markdown) {
-                showToast('剪贴板内容为空', 2000);
-                return;
+                // 剪贴板方案失败，尝试从 DOM 直接提取
+                console.warn('[Process] Clipboard empty after retries, trying DOM fallback');
+                markdown = extractLastAssistantResponse();
+                if (!markdown) {
+                    showToast('剪贴板内容为空', 2000);
+                    try {
+                        window.electronAPI.agentForwardResult({ type: 'error', message: '剪贴板内容为空，无法获取 AI 回复内容。' });
+                    } catch(e2) {}
+                    return;
+                }
             }
 
             // 4a. 频率限制检测：页面包含"发送过于频繁，请稍后重试"
@@ -2784,7 +2919,7 @@ async function deleteCurrentConversation() {
             }
 
             // 4. 从 markdown 中提取命令和分段
-            var commands = parseCommandsFromMarkdown(markdown);
+            var commands = window.__dsagent_parseCommands(markdown);
 
             // 4a. 如果有指令，先通知任务开始，再转发解析结果
             if (commands.length > 0) {
@@ -2794,7 +2929,7 @@ async function deleteCurrentConversation() {
             }
 
             try {
-                var segments = parseSegmentsFromMarkdown(markdown);
+                var segments = window.__dsagent_parseSegments(markdown);
                 if (segments.length > 0) {
                     window.electronAPI.agentForwardResult({ type: 'response', segments: segments });
                 }
@@ -2808,11 +2943,13 @@ async function deleteCurrentConversation() {
                 if (asyncResults.length > 0) {
                     // 有异步任务完成，发送结果给 DeepSeek
                     _asyncRoundCount = 0;
-                    var asyncFeedback = 'Async task results (' + asyncResults.length + ')\n';
-                    for (var ai = 0; ai < asyncResults.length; ai++) {
-                        var ar = asyncResults[ai];
-                        asyncFeedback += '\n--- ' + ar.lang + ' ASYNC ---\n' + (ar.result || '(No output)');
-                    }
+                    var asyncResultsList = asyncResults.map(function(ar) {
+                        return { tool: ar.lang, success: true, data: ar.result, async: true };
+                    });
+                    var asyncFeedback = JSON.stringify({
+                        summary: { total: asyncResults.length, success: asyncResults.length, failed: 0, async: true },
+                        results: asyncResultsList
+                    }, null, 2);
                     await fillAndSend(asyncFeedback);
                     try {
                         window.electronAPI.agentForwardResult({ type: 'tasks-end', stopped: false });
@@ -2869,36 +3006,65 @@ async function deleteCurrentConversation() {
                     } else {
                         return null;
                     }
-                    var result = { lang: c.lang, success: true, result: r };
-                    // 输出大小检查
-                    if (r && typeof r === 'string') {
-                        var outputKB = Math.round(r.length / 1024);
-                        if (r.length > 159 * 1024) {
-                            result.success = false;
-                            result.result = '❌ 输出结果过长 (' + outputKB + 'KB)，无法直接返回对话。\n建议使用 local-save 将结果保存到文件，或使用 local-subreader 子代理读取分析。';
-                        } else if (r.length > 10 * 1024 && c.lang !== 'local-skill') {
-                            var hasForce = /force\s*=\s*true/.test(resolvedContent);
+
+                    // 统一为 JSON 结果格式
+                    var jsonResult = normalizeResult(r, c.lang);
+                    delete jsonResult._autoDoc;
+
+                    // 输出大小检查（对 data 字段中的字符串）
+                    if (jsonResult.success && typeof jsonResult.data === 'string') {
+                        var dataLen = jsonResult.data.length;
+                        var outputKB = Math.round(dataLen / 1024);
+                        if (dataLen > 159 * 1024) {
+                            jsonResult.success = false;
+                            jsonResult.error = '输出结果过长 (' + outputKB + 'KB)，无法直接返回对话。建议使用 local-save 将结果保存到文件。';
+                            jsonResult.data = null;
+                        } else if (dataLen > 10 * 1024 && c.lang !== 'local-skill') {
+                            var hasForce = false;
+                            try {
+                                var parsed = JSON.parse(resolvedContent.trim());
+                                hasForce = parsed.params && parsed.params.force === true;
+                            } catch(e) {}
                             if (!hasForce) {
-                                result.result = '⚠️ 输出结果较大 (' + outputKB + 'KB)，可能占用大量上下文。\n如果你需要完整结果，请在命令中添加 force=true 参数。\n建议使用 local-save 保存结果到文件，避免上下文溢出。\n\n（返回前 2000 个字符供参考）\n\n' + r.substring(0, 2000);
+                                jsonResult.data = '⚠️ 输出结果较大 (' + outputKB + 'KB)，可能占用大量上下文。\n如需完整结果，请在 params 中添加 "force": true。\n\n（返回前 2000 个字符供参考）\n\n' + jsonResult.data.substring(0, 2000);
                             }
                         }
                     }
-                    return result;
+                    return jsonResult;
                 } catch (e) {
-                    return { lang: c.lang, success: false, result: e.message };
+                    return { success: false, data: null, error: e.message, meta: { tool: c.lang } };
                 }
+            }
+
+            function normalizeResult(r, lang) {
+                // 已经是标准 JSON 格式
+                if (r && typeof r === 'object' && 'success' in r) {
+                    if (!r.meta) r.meta = {};
+                    if (!r.meta.tool) r.meta.tool = lang;
+                    return r;
+                }
+                // 旧格式字符串 → 包装为 JSON
+                return {
+                    success: true,
+                    data: typeof r === 'string' ? r : (r ? JSON.stringify(r) : null),
+                    error: null,
+                    meta: { tool: lang }
+                };
             }
 
             function forwardResult(result) {
                 if (!result) return;
                 try {
+                    var content = result.success
+                        ? (typeof result.data === 'string' ? result.data : JSON.stringify(result.data))
+                        : ('ERROR: ' + (result.error || ''));
                     window.electronAPI.agentForwardResult({
                         type: 'tool-results',
                         segments: [{
                             type: 'tool-result',
-                            lang: result.lang,
+                            lang: (result.meta && result.meta.tool) || 'unknown',
                             success: result.success,
-                            content: (result.success ? '' : 'ERROR: ') + (typeof result.result === 'string' ? result.result : JSON.stringify(result.result))
+                            content: content
                         }]
                     });
                 } catch (e) {
@@ -2959,7 +3125,7 @@ async function deleteCurrentConversation() {
                         // 切回第一个：等待并提取
                         var result1 = null;
                         if (ref1) {
-                            result1 = { lang: 'local-subreader', success: true, result: await waitAndExtractSingle(ref1) };
+                            result1 = { success: true, data: await waitAndExtractSingle(ref1), meta: { tool: 'local-subreader' } };
                         }
                         // 按原始顺序推送结果
                         if (result1) { results.push(result1); forwardResult(result1); }
@@ -2999,9 +3165,9 @@ async function deleteCurrentConversation() {
                             var extractFn = isPicture ? qwenDrawWaitAndExtract : (isPPT ? qwenPPTWaitAndExtract : qwenWaitAndExtract);
                             // 最后一个发送的（qi === qwRefs.length - 1）= 当前页面，跳过导航
                             var skipNav = (qi === qwRefs.length - 1);
-                            qwResults[qi] = { lang: 'local-qwen', success: true, result: await extractFn(qwRefs[qi], skipNav) };
+                            qwResults[qi] = { success: true, data: await extractFn(qwRefs[qi], skipNav), meta: { tool: 'local-qwen' } };
                         } else {
-                            qwResults[qi] = { lang: 'local-qwen', success: false, result: '(Qwen 发送失败)' };
+                            qwResults[qi] = { success: false, data: null, error: 'Qwen 发送失败', meta: { tool: 'local-qwen' } };
                         }
                     }
                     // 按原始顺序推入
@@ -3034,7 +3200,7 @@ async function deleteCurrentConversation() {
                 }
                 if (stopRequested) {
                     console.log('[Stop] Stop requested, breaking command loop');
-                    results.push({ lang: 'stop', success: true, result: '(后续命令已停止)' });
+                    results.push({ success: true, data: '(后续命令已停止)', meta: { tool: 'stop' } });
                     break;
                 }
                 if (i < normalCommands.length - 1) await new Promise(function(r) { setTimeout(r, 300); });
@@ -3046,23 +3212,48 @@ async function deleteCurrentConversation() {
                 showToast('已停止', 2000);
             } else {
                 var successCount = results.filter(function(r) { return r.success; }).length;
-                var feedback = 'Execution results (' + successCount + '/' + results.length + ')\n';
-                for (var i = 0; i < results.length; i++) {
-                    var r = results[i];
-                    feedback += '\n--- ' + r.lang + ' ' + (r.success ? 'OK' : 'FAIL') + ' ---\n';
-                    var resultStr = r.result;
-                    feedback += (resultStr || '(No output)');
-                }
+                // JSON 格式反馈
+                var feedbackObj = {
+                    summary: { total: results.length, success: successCount, failed: results.length - successCount },
+                    results: results.map(function(r) {
+                        return {
+                            tool: (r.meta && r.meta.tool) || 'unknown',
+                            success: r.success,
+                            data: r.data,
+                            error: r.error
+                        };
+                    })
+                };
+                var feedback = JSON.stringify(feedbackObj, null, 2);
 
                 // 检查已启动的异步任务是否完成
                 var asyncCompleted = await collectAsyncResults();
                 if (asyncCompleted.length > 0) {
                     _asyncRoundCount = 0;
-                    feedback += '\n\n--- Async tasks completed ---\n';
-                    for (var ai = 0; ai < asyncCompleted.length; ai++) {
-                        var ar = asyncCompleted[ai];
-                        feedback += '\n' + ar.lang + ' (' + ar.desc + '):\n' + (ar.result || '(No output)');
-                    }
+                    var asyncExtras = asyncCompleted.map(function(ar) {
+                        return { tool: ar.lang, success: true, data: ar.result, desc: ar.desc };
+                    });
+                    feedbackObj.results.push.apply(feedbackObj.results, asyncExtras);
+                    feedbackObj.summary.total += asyncCompleted.length;
+                    feedbackObj.summary.success += asyncCompleted.length;
+                    feedback = JSON.stringify(feedbackObj, null, 2);
+                }
+
+                // 检查是否有待注入的定时任务结果
+                var intervalResults = collectPendingIntervalResults();
+                if (intervalResults.length > 0) {
+                    _asyncRoundCount = 0;
+                    intervalResults.forEach(function(ir) {
+                        feedbackObj.results.push({
+                            tool: 'interval',
+                            success: true,
+                            data: ir.content,
+                            desc: '定时任务: ' + ir.taskName
+                        });
+                    });
+                    feedbackObj.summary.total += intervalResults.length;
+                    feedbackObj.summary.success += intervalResults.length;
+                    feedback = JSON.stringify(feedbackObj, null, 2);
                 }
 
                 // 控制 DeepSeek 输出轮次：待处理异步任务不超过 2 轮
@@ -3197,7 +3388,7 @@ async function deleteCurrentConversation() {
                 _lastLogState = 'processing'; // 防止后续回到 idle 时重复输出 idle 日志
                 console.log('[Watcher] DETECTED: generation completed!');
                 if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
-                var copyBtn = await waitForCopyButton(500);
+                var copyBtn = await waitForCopyButton(10000);
                 if (copyBtn) {
                     console.log('[Watcher] Found copy button');
                     await sleep(300);
@@ -3239,12 +3430,27 @@ async function deleteCurrentConversation() {
                     await processCompletedGeneration(copyBtn);
                 } else {
                     console.log('[Watcher] Copy button NOT found within 500ms');
+                    // Debug: log current DOM state for diagnosis
+                    console.log('[Debug] State at skip: isExecuting=' + isExecuting + ' stopRequested=' + stopRequested + ' wasGen=' + wasGenerating + ' isStop=' + isStopSquare + ' disabled=' + isDisabled + ' btnClass=' + (btn ? btn.className : 'null'));
+                    // Debug: log all SVG paths in buttons to see what's actually on the page
+                    var allBtns2 = document.querySelectorAll('[role="button"] svg path');
+                    var paths2 = [];
+                    for (var pi2 = 0; pi2 < allBtns2.length && pi2 < 20; pi2++) {
+                        var pd2 = allBtns2[pi2].getAttribute('d') || '';
+                        paths2.push(pd2.substring(0, 40));
+                    }
+                    console.log('[Debug] First 20 SVG paths on page:', JSON.stringify(paths2));
+                    // 通知 Agent 视图：复制按钮找不到
+                    try {
+                        window.electronAPI.agentForwardResult({ type: 'error', message: '检测到 AI 已完成回复，但在页面上未找到复制按钮（10 秒超时）。页面可能处于不可见状态导致 SVG 未渲染。' });
+                    } catch(e) {}
                 }
             } else if (wasGenerating && !isStopSquare && !isDisabled) {
                 console.log('[Watcher] Generation interrupted (stop-square gone, button enabled)');
             }
 
             wasGenerating = isStopSquare;
+            _wasAiGenerating = isStopSquare;  // 同步全局标志
         }, 500);
     }
 
@@ -3267,7 +3473,7 @@ async function deleteCurrentConversation() {
             // 如果按钮已禁用且不是停止状态 → 可能已完成
             if (isDisabled && !isStopSquare) {
                  console.log('[Fallback#' + Math.floor((now - sendTimestamp)/1000) + 's] Detected: disabled + sendIcon, checking copy button...');
-                 var copyBtn = await waitForCopyButton(200);
+                 var copyBtn = await waitForCopyButton(5000);
                  if (copyBtn) {
                      console.log('[Fallback] Found copy button, processing...');
                      // 如果最近已处理过，跳过（防止与主检测重复）
@@ -3361,9 +3567,21 @@ async function deleteCurrentConversation() {
         window.__dsagent_parseKeyValuePairs = parseKeyValuePairs;
         window.__dsagent_parseSingleReadParams = parseSingleReadParams;
         window.__dsagent_handleSingleRead = handleSingleRead;
-        window.__dsagent_execInterval = execInterval;
-        window.__dsagent_breakInterval = function() { _intervalBreak = true; };
-        window.__dsagent_qwenVision = qwenVision;
+        window.__dsagent_createInterval = createIntervalTask;
+        window.__dsagent_stopIntervalByTaskName = stopIntervalTask;
+        window.__dsagent_listIntervals = listIntervalTasks;
+        window.__dsagent_stopAllIntervals = stopAllIntervalTasks;
+        window.__dsagent_fillAndSend = fillAndSend;
+        window.__dsagent_isGenerating = function() { return _wasAiGenerating; };
+        window.__dsagent_isExecuting = function() { return isExecuting; };
+        // 将定时消息推入队列（由已有 consumer + feedback 机制处理）
+        window.__dsagent_queueIntervalResult = function(taskName, content) {
+            _pendingIntervalResults.push({ taskName: taskName, content: content, timestamp: Date.now() });
+            if (_pendingIntervalResults.length > 50) {
+                _pendingIntervalResults.splice(0, _pendingIntervalResults.length - 50);
+            }
+        };
+            window.__dsagent_qwenVision = qwenVision;
         window.__dsagent_qwenDraw = qwenDraw;
         window.__dsagent_qwenPPT = qwenPPT;
         window.__dsagent_qwenGeneral = qwenGeneral;
@@ -3372,9 +3590,15 @@ async function deleteCurrentConversation() {
         // ======== 初始化工具系统 ========
         if (window.__dsagent_tools && window.__dsagent_tools.init) {
             window.__dsagent_tools.init({ utils: true });
-            // 从工具系统获取所有支持的语言列表
+            // 从工具系统获取所有支持的语言列表，并加入统一入口 `local`
             SUPPORTED_LANGS = window.__dsagent_tools.getAllLangs();
+            if (SUPPORTED_LANGS.indexOf('local') === -1) {
+                SUPPORTED_LANGS.push('local');
+            }
         }
+
+        // 启动定时结果消费者（仅启动一次）
+        startIntervalConsumer();
 
         // 暴露控制接口给主进程
         window.__dsagent_setAutoExec = function(enabled) {
@@ -3399,7 +3623,7 @@ async function deleteCurrentConversation() {
             var apiDoc = (await window.__dsagent_getInitPromptText())
                 + '\n\n## 初次使用\n\n'
                 + '请先发送测试指令确认连接：\n\n'
-                + '```local-exec\necho "本地服务连接测试成功"\n```';
+                + '```functioncall\n{"tool": "exec", "params": {}, "body": "echo \\"本地服务连接测试成功\\""}\n```';
 
             var input = getInputBox();
             if (input) {
@@ -3538,22 +3762,22 @@ async function deleteCurrentConversation() {
                 console.warn('Failed to load prompt file:', e);
             }
             if (!baseText) {
-                baseText = '# 本地执行助手\n\n你是一个能通过本机接口执行命令、读写文件的助手。\n使用 `local-exec`、`local-read` 等代码块执行操作。\n详细指令见 `agent-prompt.md`。';
+                baseText = '# 本地执行助手\n\n你是一个能通过本机接口执行命令、读写文件的助手。\n使用 `exec`、`read` 等工具执行操作。\n详细指令见 `prompt/` 文件夹。';
             }
             // 动态追加工具列表（从工具系统自动生成）
             if (window.__dsagent_tools) {
                 var allTools = window.__dsagent_tools.getAll();
                 baseText += '\n\n## 可用工具一览\n\n';
-                baseText += '> 每个工具的详细参数和使用方法请使用 `local-help` 查询。\n\n';
+                baseText += '> 每个工具的详细参数和使用方法请使用 `help` 查询。\n\n';
                 baseText += '| 命令 | 适用场景 |\n';
                 baseText += '|------|----------|\n';
                 for (var ti = 0; ti < allTools.length; ti++) {
                     var t = allTools[ti];
                     var names = Array.isArray(t.name) ? t.name : [t.name];
-                    var nameStr = names.map(function(n) { return '`' + n + '`'; }).join(' / ');
+                    var nameStr = names.map(function(n) { return '`' + n.replace(/^local-/, '') + '`'; }).join(' / ');
                     baseText += '| ' + nameStr + ' | ' + (t.scope || t.description || '') + ' |\n';
                 }
-                baseText += '\n> 如有疑问，使用 `local-help` 获取完整文档。';
+                baseText += '\n> 如有疑问，使用 `help` 获取完整文档。';
             }
             return baseText;
         };
@@ -3580,11 +3804,16 @@ async function deleteCurrentConversation() {
             await sleep(600);
 
             // 设置模式
-            setModelMode(mode === 'expert' ? 'professional' : 'quick');
+            setModelMode(mode === 'expert' ? 'professional' : (mode === 'image' ? 'image' : 'quick'));
             await sleep(800);
 
-            // 设置深度思考（使用统一的健壮方法，含重试和验证）
-            await setDeepThink(!!deepthink);
+            // 设置深度思考
+            if (mode === 'image') {
+                // 识图模式：强制关闭深度思考
+                await setDeepThink(false);
+            } else {
+                await setDeepThink(!!deepthink);
+            }
             await sleep(300);
 
             // 确保关闭联网搜索
@@ -3705,11 +3934,12 @@ async function deleteCurrentConversation() {
                 if (d.indexOf('M2 4.88') >= 0) return; // 正在生成，不打扰
                 if (!disabled) return; // 输入框有内容，可能是用户在打字，不覆盖
                 _asyncRoundCount = 0;
-                var feedback = 'Async task results (' + completed.length + ')\n';
-                for (var ai = 0; ai < completed.length; ai++) {
-                    var ar = completed[ai];
-                    feedback += '\n--- ' + ar.lang + ' ASYNC ---\n' + (ar.result || '(No output)');
-                }
+                var feedback = JSON.stringify({
+                    summary: { total: completed.length, success: completed.length, failed: 0, async: true },
+                    results: completed.map(function(ar) {
+                        return { tool: ar.lang, success: true, data: ar.result };
+                    })
+                }, null, 2);
                 await fillAndSend(feedback);
                 try {
                     window.electronAPI.agentForwardResult({ type: 'tasks-end', stopped: false });

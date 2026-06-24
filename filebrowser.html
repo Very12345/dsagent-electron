@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>文件浏览器</title>
+    <link rel="stylesheet" href="./node_modules/@mdi/font/css/materialdesignicons.min.css">
     <style>
         :root {
             --bg-base: #0d1117;
@@ -56,16 +57,10 @@
             --shadow-glow: 0 0 20px rgba(9,105,218,0.10);
         }
 
-        /* 文件类型图标 — 浅色主题覆盖 */
-        body.light .file-icon.dir { background: #e0e7ff; color: #4338ca; }
-        body.light .file-icon.img { background: #dcfce7; color: #15803d; }
-        body.light .file-icon.code { background: #dbeafe; color: #1d4ed8; }
-        body.light .file-icon.doc { background: #ffedd5; color: #c2410c; }
-        body.light .file-icon.data { background: #f3f4f6; color: #52525b; }
-        body.light .file-icon.media { background: #f3e8ff; color: #7e22ce; }
-        body.light .file-icon.archive { background: #fef9c3; color: #a16207; }
-        body.light .file-icon.exe { background: #fce4ec; color: #c62828; }
-        body.light .file-icon.default { background: #e5e7eb; color: #6b7280; }
+        /* 文件类型图标 — 浅色主题颜色调整 */
+        body.light .file-icon.python { color: #3776AB; }
+        body.light .file-icon.cpp { color: #00599C; }
+        body.light .file-icon.default { color: #6b7280; }
 
         * { margin:0; padding:0; box-sizing:border-box; }
         body {
@@ -195,39 +190,41 @@
             background: var(--bg-hover);
         }
         .file-item:last-child { border-bottom: none; }
-        /* File icon - solid colors for high contrast */
+        /* File icon - Material Design Icons */
         .file-icon {
             width: 34px; height: 26px; border-radius: var(--radius-sm);
             text-align: center; line-height: 26px;
-            font-size: 14px; flex-shrink: 0;
+            font-size: 18px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
         }
-        .file-icon.dir {
-            background: #312e81; color: #c7d2fe;
-        }
-        .file-icon.img {
-            background: #14532d; color: #86efac;
-        }
-        .file-icon.code {
-            background: #1e3a5f; color: #93c5fd;
-        }
-        .file-icon.doc {
-            background: #7c2d12; color: #fdba74;
-        }
-        .file-icon.data {
-            background: #3f3f46; color: #d4d4d8;
-        }
-        .file-icon.media {
-            background: #581c87; color: #e9d5ff;
-        }
-        .file-icon.archive {
-            background: #713f12; color: #fde047;
-        }
-        .file-icon.exe {
-            background: #450a0a; color: #fca5a5;
-        }
-        .file-icon.default {
-            background: #27272a; color: #a1a1aa;
-        }
+        /* Material Design Icons 颜色 */
+        .file-icon.python { color: #3776AB; background: transparent; }
+        .file-icon.cpp { color: #00599C; background: transparent; }
+        .file-icon.c { color: #A8B9CC; background: transparent; }
+        .file-icon.java { color: #f89820; background: transparent; }
+        .file-icon.js { color: #F7DF1E; background: transparent; }
+        .file-icon.ts { color: #3178C6; background: transparent; }
+        .file-icon.html { color: #E34F26; background: transparent; }
+        .file-icon.css { color: #1572B6; background: transparent; }
+        .file-icon.json { color: #cbcbcb; background: transparent; }
+        .file-icon.md { color: #083fa1; background: transparent; }
+        .file-icon.pdf { color: #E53E30; background: transparent; }
+        .file-icon.word { color: #2B579A; background: transparent; }
+        .file-icon.excel { color: #217346; background: transparent; }
+        .file-icon.ppt { color: #D24625; background: transparent; }
+        .file-icon.image { color: #8B5CF6; background: transparent; }
+        .file-icon.video { color: #EF4444; background: transparent; }
+        .file-icon.audio { color: #10B981; background: transparent; }
+        .file-icon.archive { color: #F59E0B; background: transparent; }
+        .file-icon.sql { color: #336791; background: transparent; }
+        .file-icon.go { color: #00ADD8; background: transparent; }
+        .file-icon.rs { color: #DEA584; background: transparent; }
+        .file-icon.php { color: #777BB4; background: transparent; }
+        .file-icon.rb { color: #CC342D; background: transparent; }
+        .file-icon.swift { color: #F05138; background: transparent; }
+        .file-icon.kt { color: #7F52FF; background: transparent; }
+        .file-icon.dir { color: #4338ca; background: transparent; }
+        .file-icon.default { color: #6b7280; background: transparent; }
         .file-name {
             flex: 1; font-size: 13px; font-weight: 500;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -326,6 +323,8 @@
                 <button class="go-btn" id="goBtn">跳转</button>
             </div>
             <input type="text" id="searchInput" placeholder="搜索文件...">
+            <span id="syncSkillsBtn" style="display:none;cursor:pointer;font-size:11px;padding:2px 8px;border:1px solid var(--accent);border-radius:4px;color:var(--accent);user-select:none;white-space:nowrap;" title="将公共技能同步到当前工作目录">同步技能</span>
+            <span id="syncProgressSpan" style="display:none;font-size:11px;color:var(--text-muted);white-space:nowrap;"></span>
         </div>
         <div id="breadcrumb" class="breadcrumb"></div>
     </div>
@@ -337,8 +336,6 @@
     </div>
     <div class="status-bar">
         <span id="statusText">就绪</span>
-        <span id="syncSkillsBtn" style="display:none;cursor:pointer;font-size:11px;padding:2px 8px;border:1px solid var(--accent);border-radius:4px;color:var(--accent);user-select:none;" title="将公共技能同步到当前工作目录">同步技能</span>
-        <span id="syncProgressSpan" style="display:none;font-size:11px;color:var(--text-muted);"></span>
         <span class="stats" id="statsInfo"></span>
         <span>根目录: <span id="currentRoot">未打开</span></span>
     </div>
@@ -443,7 +440,7 @@
                 const hint = file.isDir ? '<span class="dir-hint">双击进入</span>' : '';
                 
                 html += '<div class="file-item" draggable="true" data-name="' + escapeHtml(file.name) + '" data-path="' + escapeHtml(pathJoin(currentDir, file.name)) + '">'
-                    + '<div class="file-icon ' + iconInfo.cls + '">' + iconInfo.emoji + '</div>'
+                    + '<div class="file-icon ' + iconInfo.cls + '"><span class="mdi ' + iconInfo.icon + '"></span></div>'
                     + '<div class="file-name ' + (file.isDir ? 'directory' : 'file') + '">' + escapeHtml(file.name) + hint + '</div>'
                     + '<div class="file-size">' + (file.isDir ? '' : formatFileSize(file.size)) + '</div>'
                     + '<div class="file-actions">';
@@ -526,31 +523,91 @@
         }
         
         function getFileIcon(filename, isDir) {
-            if (isDir) return { emoji: '📁', cls: 'dir' };
+            if (isDir) return { icon: 'mdi-folder', cls: 'dir' };
             const ext = filename.split('.').pop().toLowerCase();
             const map = {
-                js: { emoji: '📜', cls: 'code' }, jsx: { emoji: '⚛️', cls: 'code' },
-                ts: { emoji: '📘', cls: 'code' }, tsx: { emoji: '⚛️', cls: 'code' },
-                html: { emoji: '🌐', cls: 'code' }, htm: { emoji: '🌐', cls: 'code' },
-                css: { emoji: '🎨', cls: 'code' }, scss: { emoji: '🎨', cls: 'code' }, sass: { emoji: '🎨', cls: 'code' },
-                json: { emoji: '📋', cls: 'data' }, xml: { emoji: '📋', cls: 'data' }, yaml: { emoji: '📋', cls: 'data' }, yml: { emoji: '📋', cls: 'data' },
-                md: { emoji: '📝', cls: 'doc' }, txt: { emoji: '📄', cls: 'doc' }, rtf: { emoji: '📄', cls: 'doc' },
-                py: { emoji: '🐍', cls: 'code' }, java: { emoji: '☕', cls: 'code' },
-                cpp: { emoji: '⚙️', cls: 'code' }, c: { emoji: '⚙️', cls: 'code' }, h: { emoji: '⚙️', cls: 'code' }, hpp: { emoji: '⚙️', cls: 'code' },
-                cs: { emoji: '#️⃣', cls: 'code' }, go: { emoji: '🐹', cls: 'code' }, rs: { emoji: '🦀', cls: 'code' },
-                php: { emoji: '🐘', cls: 'code' }, rb: { emoji: '💎', cls: 'code' }, swift: { emoji: '🕊️', cls: 'code' }, kt: { emoji: '🟣', cls: 'code' },
-                sql: { emoji: '🗃️', cls: 'data' }, db: { emoji: '🗃️', cls: 'data' }, sqlite: { emoji: '🗃️', cls: 'data' },
-                exe: { emoji: '⚡', cls: 'exe' }, dll: { emoji: '⚡', cls: 'exe' }, bat: { emoji: '⚡', cls: 'exe' }, sh: { emoji: '⚡', cls: 'exe' }, cmd: { emoji: '⚡', cls: 'exe' },
-                jpg: { emoji: '🖼️', cls: 'img' }, jpeg: { emoji: '🖼️', cls: 'img' }, png: { emoji: '🖼️', cls: 'img' },
-                gif: { emoji: '🎬', cls: 'img' }, svg: { emoji: '🎨', cls: 'img' }, webp: { emoji: '🖼️', cls: 'img' }, ico: { emoji: '🖼️', cls: 'img' },
-                bmp: { emoji: '🖼️', cls: 'img' }, tiff: { emoji: '🖼️', cls: 'img' },
-                mp3: { emoji: '🎵', cls: 'media' }, wav: { emoji: '🎵', cls: 'media' }, flac: { emoji: '🎵', cls: 'media' }, ogg: { emoji: '🎵', cls: 'media' },
-                mp4: { emoji: '🎬', cls: 'media' }, avi: { emoji: '🎬', cls: 'media' }, mkv: { emoji: '🎬', cls: 'media' }, mov: { emoji: '🎬', cls: 'media' },
-                pdf: { emoji: '📕', cls: 'doc' }, doc: { emoji: '📘', cls: 'doc' }, docx: { emoji: '📘', cls: 'doc' }, xls: { emoji: '📗', cls: 'doc' }, xlsx: { emoji: '📗', cls: 'doc' }, ppt: { emoji: '📙', cls: 'doc' }, pptx: { emoji: '📙', cls: 'doc' },
-                zip: { emoji: '📦', cls: 'archive' }, rar: { emoji: '📦', cls: 'archive' }, '7z': { emoji: '📦', cls: 'archive' }, tar: { emoji: '📦', cls: 'archive' }, gz: { emoji: '📦', cls: 'archive' },
-                log: { emoji: '📋', cls: 'data' }, cfg: { emoji: '⚙️', cls: 'code' }, ini: { emoji: '⚙️', cls: 'code' }, env: { emoji: '🔐', cls: 'data' }
+                // 编程语言
+                js: { icon: 'mdi-language-javascript', cls: 'js' },
+                jsx: { icon: 'mdi-language-javascript', cls: 'js' },
+                ts: { icon: 'mdi-language-typescript', cls: 'ts' },
+                tsx: { icon: 'mdi-language-typescript', cls: 'ts' },
+                py: { icon: 'mdi-language-python', cls: 'python' },
+                java: { icon: 'mdi-language-java', cls: 'java' },
+                cpp: { icon: 'mdi-language-cpp', cls: 'cpp' },
+                c: { icon: 'mdi-language-c', cls: 'c' },
+                h: { icon: 'mdi-language-c', cls: 'c' },
+                hpp: { icon: 'mdi-language-cpp', cls: 'cpp' },
+                cs: { icon: 'mdi-language-csharp', cls: 'cpp' },
+                go: { icon: 'mdi-language-go', cls: 'go' },
+                rs: { icon: 'mdi-language-rust', cls: 'rs' },
+                php: { icon: 'mdi-language-php', cls: 'php' },
+                rb: { icon: 'mdi-language-ruby', cls: 'rb' },
+                swift: { icon: 'mdi-language-swift', cls: 'swift' },
+                kt: { icon: 'mdi-language-kotlin', cls: 'kt' },
+                // Web
+                html: { icon: 'mdi-language-html5', cls: 'html' },
+                htm: { icon: 'mdi-language-html5', cls: 'html' },
+                css: { icon: 'mdi-language-css3', cls: 'css' },
+                scss: { icon: 'mdi-language-css3', cls: 'css' },
+                sass: { icon: 'mdi-language-css3', cls: 'css' },
+                // 数据/配置
+                json: { icon: 'mdi-code-json', cls: 'json' },
+                xml: { icon: 'mdi-file-code', cls: 'json' },
+                yaml: { icon: 'mdi-file-code', cls: 'json' },
+                yml: { icon: 'mdi-file-code', cls: 'json' },
+                sql: { icon: 'mdi-database', cls: 'sql' },
+                db: { icon: 'mdi-database', cls: 'sql' },
+                sqlite: { icon: 'mdi-database', cls: 'sql' },
+                // 文档
+                md: { icon: 'mdi-language-markdown', cls: 'md' },
+                txt: { icon: 'mdi-file-document', cls: 'default' },
+                rtf: { icon: 'mdi-file-document', cls: 'default' },
+                pdf: { icon: 'mdi-file-pdf-box', cls: 'pdf' },
+                doc: { icon: 'mdi-file-word-box', cls: 'word' },
+                docx: { icon: 'mdi-file-word-box', cls: 'word' },
+                xls: { icon: 'mdi-file-excel-box', cls: 'excel' },
+                xlsx: { icon: 'mdi-file-excel-box', cls: 'excel' },
+                ppt: { icon: 'mdi-file-powerpoint-box', cls: 'ppt' },
+                pptx: { icon: 'mdi-file-powerpoint-box', cls: 'ppt' },
+                // 图片
+                jpg: { icon: 'mdi-file-image', cls: 'image' },
+                jpeg: { icon: 'mdi-file-image', cls: 'image' },
+                png: { icon: 'mdi-file-image', cls: 'image' },
+                gif: { icon: 'mdi-file-image', cls: 'image' },
+                svg: { icon: 'mdi-file-image', cls: 'image' },
+                webp: { icon: 'mdi-file-image', cls: 'image' },
+                ico: { icon: 'mdi-file-image', cls: 'image' },
+                bmp: { icon: 'mdi-file-image', cls: 'image' },
+                tiff: { icon: 'mdi-file-image', cls: 'image' },
+                // 音频
+                mp3: { icon: 'mdi-file-music', cls: 'audio' },
+                wav: { icon: 'mdi-file-music', cls: 'audio' },
+                flac: { icon: 'mdi-file-music', cls: 'audio' },
+                ogg: { icon: 'mdi-file-music', cls: 'audio' },
+                // 视频
+                mp4: { icon: 'mdi-file-video', cls: 'video' },
+                avi: { icon: 'mdi-file-video', cls: 'video' },
+                mkv: { icon: 'mdi-file-video', cls: 'video' },
+                mov: { icon: 'mdi-file-video', cls: 'video' },
+                // 压缩包
+                zip: { icon: 'mdi-folder-zip', cls: 'archive' },
+                rar: { icon: 'mdi-folder-zip', cls: 'archive' },
+                '7z': { icon: 'mdi-folder-zip', cls: 'archive' },
+                tar: { icon: 'mdi-folder-zip', cls: 'archive' },
+                gz: { icon: 'mdi-folder-zip', cls: 'archive' },
+                // 可执行文件
+                exe: { icon: 'mdi-application', cls: 'default' },
+                dll: { icon: 'mdi-application', cls: 'default' },
+                bat: { icon: 'mdi-console', cls: 'default' },
+                sh: { icon: 'mdi-console', cls: 'default' },
+                cmd: { icon: 'mdi-console', cls: 'default' },
+                // 其他
+                log: { icon: 'mdi-file-document', cls: 'default' },
+                cfg: { icon: 'mdi-file-cog', cls: 'default' },
+                ini: { icon: 'mdi-file-cog', cls: 'default' },
+                env: { icon: 'mdi-file-lock', cls: 'default' }
             };
-            return map[ext] || { emoji: '📄', cls: 'default' };
+            return map[ext] || { icon: 'mdi-file', cls: 'default' };
         }
         
         function formatFileSize(bytes) {

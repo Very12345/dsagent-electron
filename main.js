@@ -1,4 +1,4 @@
-﻿﻿// DeepSeek Local Agent - Electron 主进程（双栏布局版）
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿// DeepSeek Local Agent - Electron 主进程（双栏布局版）
 const { app, BrowserWindow, BrowserView, Menu, dialog, session, ipcMain, shell, clipboard, nativeImage, desktopCapturer } = require('electron');
 const path = require('path');
 const agent = require('./server.js');
@@ -11,10 +11,11 @@ const localtunnel = require('localtunnel');
 
 // ==================== 配置 ====================
 const CONFIG = {
-    TARGET_URL: 'https://chat.deepseek.com/',
     WINDOW_WIDTH: 1400,
     WINDOW_HEIGHT: 900,
 };
+
+const DEEPSEEK_URL = 'https://chat.deepseek.com/';
 
 const VIEWBAR_WIDTH = 60;  // 左侧视图选择栏宽度
 const SIDEBAR_WIDTH = 350;
@@ -45,10 +46,10 @@ let viewBarView = null;
 let fileBrowserView = null;
 let controlBarView = null;
 let agentView = null;
-let agentViewVisible = false;
+let agentViewVisible = true;
 let prevAgentViewVisible = false; // 用于 updateBounds 检测 Agent 从隐藏变为可见
 let prevQwenVisible = false;      // 用于 updateBounds 检测 Qwen 从隐藏变为可见
-let currentView = 'deepseek'; // 'deepseek' | 'qwen' | 'agent' | 'follow'
+let currentView = 'agent'; // 'deepseek' | 'qwen' | 'agent' | 'follow'
 let userStoppedGeneration = false;  // 标记用户是否主动点击了停止按钮
 let lastActiveView = 'deepseek';   // 跟随模式下上次活跃的视图
 let currentAppTheme = 'dark';       // 当前应用主题
@@ -62,12 +63,6 @@ function getConfirmMode() {
         return 'smart';
     }
 }
-
-// ==================== 浏览器工具窗口管理 ====================
-let browserToolWindows = new Map();
-let browserWindowIdCounter = 0;
-const BROWSER_TOOL_TEMP_DIR = '.dsa';
-const BROWSER_TOOL_TEMP_SUBDIR = 'temp';
 
 const RECENT_FILE = path.join(app.getPath('userData'), 'recent-projects.json');
 const MAX_RECENT = 10;
@@ -178,7 +173,7 @@ function openFolder(folderPath, opts) {
             try {
                 deepseekView.webContents.loadURL('about:blank');
                 setTimeout(function() {
-                    deepseekView.webContents.loadURL(CONFIG.TARGET_URL);
+                    deepseekView.webContents.loadURL(DEEPSEEK_URL);
                 }, 100);
             } catch(e) {
                 console.warn('[OpenFolder] Navigate home failed:', e);
@@ -190,8 +185,8 @@ function openFolder(folderPath, opts) {
 }
 
 // ==================== 读取注入脚本 ====================
-function getInjectScript() {
-    const injectPath = path.join(__dirname, 'inject.js');
+function getDeepseekInjectScript() {
+    const injectPath = path.join(__dirname, 'inject-deepseek.js');
     const toolsDir = path.join(__dirname, 'tools');
     let combined = '';
     // 1. 加载工具系统核心
@@ -214,8 +209,22 @@ function getInjectScript() {
 }
 
 function getQwenInjectScript() {
-    const qwenPath = path.join(__dirname, 'qwen_inject.js');
-    return fs.readFileSync(qwenPath, 'utf-8');
+    const toolsDir = path.join(__dirname, 'tools');
+    let combined = '';
+    // 1. 加载工具系统核心（共享解析器依赖）
+    const systemPath = path.join(toolsDir, 'tool-system.js');
+    if (fs.existsSync(systemPath)) {
+        combined += fs.readFileSync(systemPath, 'utf-8') + '\n';
+    }
+    // 2. 加载共享解析器
+    const parserPath = path.join(toolsDir, 'tool-parser.js');
+    if (fs.existsSync(parserPath)) {
+        combined += fs.readFileSync(parserPath, 'utf-8') + '\n';
+    }
+    // 3. 加载 Qwen 注入脚本
+    const qwenPath = path.join(__dirname, 'inject-qwen.js');
+    combined += fs.readFileSync(qwenPath, 'utf-8');
+    return combined;
 }
 
 // ==================== 修改 CSP 头 ====================
@@ -396,7 +405,9 @@ function setupAgentIPC() {
 
     // 删除技能
     ipcMain.handle('agent-skills-delete', async (event, skillName) => {
-        return agent.deleteSkill(skillName);
+        var result = agent.deleteSkill(skillName);
+        syncSkillsCount();
+        return result;
     });
 
     ipcMain.handle('agent-ping', async () => {
@@ -417,36 +428,349 @@ function setupAgentIPC() {
         return { success: true, disabledSkills: agent.getDisabledSkills() };
     });
 
-    // 异步同步技能：从 AppData 仓库同步到当前工作目录，发送进度事件
-    ipcMain.on('sync-skills-start', async (event) => {
+    // 同步单个技能到工作目录
+    ipcMain.on('sync-skill-to-workdir', async (event, skillName) => {
         try {
-            var repoDir = agent.getSkillsRepoDir ? agent.getSkillsRepoDir() : null;
-            var skillsDir = agent.getSkillsDir ? agent.getSkillsDir() : null;
-            // 以异步方式执行，避免阻塞
-            event.reply('sync-skills-progress', { status: 'scanning', message: '正在扫描技能仓库...' });
-            setTimeout(function() {
-                try {
-                    var result = agent.syncSkillsFromRepo();
-                    if (result.success) {
-                        event.reply('sync-skills-progress', { status: 'done', message: '技能同步完成' });
-                        // 刷新技能计数
-                        var skills = (agent.loadSkills().skills || []);
-                        if (viewBarView && !viewBarView.webContents.isDestroyed()) {
-                            viewBarView.webContents.send('ctrl-skills-count', skills.length);
-                        }
-                        if (agentView && !agentView.webContents.isDestroyed()) {
-                            agentView.webContents.send('agent-show-skills', skills);
-                        }
-                    } else {
-                        event.reply('sync-skills-progress', { status: 'error', message: result.error || '同步失败' });
-                    }
-                } catch (e) {
-                    event.reply('sync-skills-progress', { status: 'error', message: e.message });
-                }
-            }, 0);
+            var result = agent.syncSkillToWorkDir(skillName);
+            if (result.success) {
+                syncSkillsCount();
+            }
         } catch (e) {
-            event.reply('sync-skills-progress', { status: 'error', message: e.message });
+            console.warn('[SKILLS] Sync failed:', e.message);
         }
+    });
+
+    // 取消同步：从工作目录移除技能
+    ipcMain.on('unsync-skill', async (event, skillName) => {
+        try {
+            var result = agent.unsyncSkill(skillName);
+            if (result.success) {
+                syncSkillsCount();
+                if (controlBarView) {
+                    controlBarView.webContents.send('ctrl-notify', '已取消同步: ' + skillName);
+                }
+            }
+        } catch (e) {
+            console.warn('[SKILLS] Unsync failed:', e.message);
+        }
+    });
+
+    // invoke 版本：供 AI 工具 (dsa) 使用，返回结果
+    ipcMain.handle('agent-skill-sync', async (event, skillName) => {
+        try {
+            var result = agent.syncSkillToWorkDir(skillName);
+            if (result.success) syncSkillsCount();
+            return result;
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ipcMain.handle('agent-skill-unsync', async (event, skillName) => {
+        try {
+            var result = agent.unsyncSkill(skillName);
+            if (result.success) syncSkillsCount();
+            return result;
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ipcMain.handle('agent-skill-delete', async (event, skillName) => {
+        try {
+            var result = agent.deleteSkill(skillName);
+            syncSkillsCount();
+            return result;
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    // 获取技能存储路径
+    ipcMain.handle('agent-skills-storage-path', async () => {
+        return agent.getSkillsStoragePath();
+    });
+
+    // 设置技能存储路径
+    ipcMain.handle('agent-skills-set-storage-path', async (event, newPath) => {
+        return agent.setSkillsStoragePath(newPath);
+    });
+
+    // 获取仓库中技能列表（用于同步选择）
+    ipcMain.handle('agent-skills-repo-list', async () => {
+        return agent.listRepoSkills();
+    });
+
+    // 获取已同步的技能名称列表
+    ipcMain.handle('agent-skills-synced-list', async () => {
+        return { success: true, names: agent.getSyncedSkillNames() };
+    });
+
+    // 选择技能存储路径文件夹
+    ipcMain.handle('agent-skills-select-folder', async () => {
+        var result = await dialog.showOpenDialog(mainWindow, {
+            title: '选择技能存储路径',
+            properties: ['openDirectory']
+        });
+        if (result.canceled || result.filePaths.length === 0) return { success: true, path: null };
+        return { success: true, path: result.filePaths[0] };
+    });
+
+    // ===== 定时任务管理系统（主进程驱动，完整队列+状态机） =====
+    var _intervalTasks = {};
+    var _intervalQueue = [];           // 待发送的消息队列
+    var _intervalState = { isExecuting: false, isGenerating: false };  // AI 状态（由 agentview 同步）
+    var _savedIntervalTasks = [];      // 退出对话时保存的任务列表（用于恢复）
+
+    // agentview 同步 AI 状态
+    ipcMain.on('interval-state-update', (event, state) => {
+        _intervalState.isExecuting = !!state.isExecuting;
+        _intervalState.isGenerating = !!state.isGenerating;
+    });
+
+    // agentview 通知队列清空（工作流结束/生成完成时）
+    ipcMain.on('interval-flush-queue', () => {
+        flushIntervalQueue('workflow-end');
+    });
+
+    function flushIntervalQueue(reason) {
+        if (_intervalQueue.length === 0) return;
+        var combined = _intervalQueue.join('\n\n---\n\n');
+        _intervalQueue = [];
+        console.log('[Interval] Flushing queue (' + reason + '): ' + combined.substring(0, 80) + '...');
+        if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
+            deepseekView.webContents.executeJavaScript(
+                'window.__dsagent_fillAndSend && window.__dsagent_fillAndSend(' + JSON.stringify(combined) + ');'
+            ).catch(function(e) {
+                console.warn('[Interval] flush fillAndSend failed:', e.message);
+                // 失败时放回队列
+                _intervalQueue.push(combined);
+            });
+        }
+    }
+
+    function _intervalScheduleNext(task) {
+        task.timerId = setTimeout(async function() {
+            if (!_intervalTasks[task.taskName]) return;
+            task.iteration++;
+
+            var timestamp = new Date().toLocaleTimeString('zh-CN');
+            var iterMsg;
+
+            if (task.mode === 'command') {
+                try {
+                    var result = await deepseekView.webContents.executeJavaScript(
+                        '(async function(){ try { var r = await window.__dsagent_execLocal(' + JSON.stringify(task.command) + '); return typeof r === "string" ? r : JSON.stringify(r); } catch(e) { return "⚠️ 执行异常: " + e.message; } })()'
+                    );
+                    if (typeof result === 'string' && result.indexOf('命令已超时') >= 0) {
+                        stopMainIntervalTask(task.taskName, '命令执行超时');
+                        return;
+                    }
+                    iterMsg = '【定时信息】[任务: ' + task.taskName + '] [' + timestamp + '] (第' + task.iteration + '次)\n' + (result || '(无输出)');
+                } catch(e) {
+                    iterMsg = '【定时信息】[任务: ' + task.taskName + '] [' + timestamp + '] (第' + task.iteration + '次)\n⚠️ 执行异常: ' + e.message;
+                }
+            } else {
+                iterMsg = '【定时信息】[任务: ' + task.taskName + '] [' + timestamp + '] (第' + task.iteration + '次)\n' + (task.message || '(无内容)');
+            }
+
+            // ===== 核心决策：AI 状态决定发送或入队 =====
+            if (_intervalState.isExecuting || _intervalState.isGenerating) {
+                // AI 忙 → 入队，等 workflow 结束再 flush
+                _intervalQueue.push(iterMsg);
+                console.log('[Interval] Queued: ' + task.taskName + ' #' + task.iteration + ' queue=' + _intervalQueue.length + ' exec=' + _intervalState.isExecuting + ' gen=' + _intervalState.isGenerating);
+            } else {
+                // AI 完全空闲 → 直接发送（入队后一次 flush）
+                _intervalQueue.push(iterMsg);
+                flushIntervalQueue('idle');
+                // 短暂禁用用户发送按钮（通过 executeJavaScript 让 DeepSeek 页面关闭发送）
+                try {
+                    deepseekView.webContents.executeJavaScript(
+                        'var b = document.querySelector("div.ds-button--primary.ds-button--filled"); if(b) { b.style.pointerEvents="none"; setTimeout(function(){ b.style.pointerEvents=""; }, 200); }'
+                    );
+                } catch(e) {}
+            }
+
+            // 通知 agentview 更新 UI
+            if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+                agentView.webContents.send('agent-message', {
+                    type: 'interval-trigger',
+                    taskName: task.taskName,
+                    interval: task.interval,
+                    iteration: task.iteration,
+                    mode: task.mode
+                });
+            }
+
+            // 安排下一轮
+            _intervalScheduleNext(task);
+        }, task.interval);
+    }
+
+    function stopMainIntervalTask(taskName, reason) {
+        var task = _intervalTasks[taskName];
+        if (!task) return;
+        if (task.timerId) clearTimeout(task.timerId);
+        delete _intervalTasks[taskName];
+        console.log('[Interval] STOPPED: ' + taskName + (reason ? ' (' + reason + ')' : ''));
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('agent-message', {
+                type: 'interval-stop', taskName: taskName
+            });
+        }
+    }
+
+    // 从 agentview/工具调用 添加定时任务
+    ipcMain.handle('interval-create', async (event, params) => {
+        var taskName = params.taskName;
+        if (!taskName) return { success: false, error: '缺少 taskName' };
+        if (_intervalTasks[taskName]) return { success: false, error: '任务 "' + taskName + '" 已存在' };
+
+        var task = {
+            taskName: taskName,
+            interval: params.interval || 5000,
+            mode: params.mode || 'command',
+            command: params.command || '',
+            message: params.message || '',
+            iteration: 0,
+            createdAt: Date.now(),
+            timerId: null
+        };
+        _intervalTasks[taskName] = task;
+        _intervalScheduleNext(task);
+
+        console.log('[Interval] CREATED: ' + taskName + ' interval=' + task.interval + 'ms mode=' + task.mode);
+
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('agent-message', {
+                type: 'interval-start',
+                taskName: taskName,
+                command: task.mode === 'command' ? task.command : task.message,
+                interval: task.interval,
+                mode: task.mode
+            });
+        }
+
+        var modeLabel = task.mode === 'command' ? '执行命令' : '定时提醒';
+        var detail = task.mode === 'command' ? task.command : task.message;
+        return {
+            success: true,
+            result: '✅ 后台定时任务 "' + taskName + '" 已创建（' + modeLabel + '，每 ' + (task.interval/1000).toFixed(1) + ' 秒）。\n'
+                + '内容: ' + (detail.length > 60 ? detail.substring(0, 60) + '...' : detail) + '\n'
+                + '对话可正常继续，定时消息将自动注入。使用 stop 停止。'
+        };
+    });
+
+    // 停止定时任务
+    ipcMain.handle('interval-stop', async (event, taskName) => {
+        stopMainIntervalTask(taskName);
+        return { success: true, result: '已停止定时任务 "' + taskName + '"' };
+    });
+
+    // 列出定时任务
+    ipcMain.handle('interval-list', async () => {
+        var names = Object.keys(_intervalTasks);
+        var tasks = names.map(function(n) {
+            var t = _intervalTasks[n];
+            return { taskName: n, interval: t.interval, mode: t.mode, iteration: t.iteration, createdAt: t.createdAt };
+        });
+        return { success: true, tasks: tasks };
+    });
+
+    // 停止所有定时任务（切换对话时保存，可恢复）
+    ipcMain.on('interval-stop-all', () => {
+        // 保存当前任务列表（用于恢复）
+        _savedIntervalTasks = Object.keys(_intervalTasks).map(function(n) {
+            var t = _intervalTasks[n];
+            return { taskName: n, interval: t.interval, mode: t.mode, command: t.command, message: t.message, iteration: t.iteration, createdAt: t.createdAt };
+        });
+        // 停止所有
+        var names = Object.keys(_intervalTasks);
+        names.forEach(function(n) { stopMainIntervalTask(n); });
+        _intervalQueue = [];
+        console.log('[Interval] Saved ' + _savedIntervalTasks.length + ' tasks for restore');
+    });
+
+    // 用户/AI 主动停止所有任务（不保存，直接清）
+    ipcMain.on('interval-stop-all-force', () => {
+        _savedIntervalTasks = [];
+        var names = Object.keys(_intervalTasks);
+        names.forEach(function(n) { stopMainIntervalTask(n); });
+        _intervalQueue = [];
+        console.log('[Interval] Force stopped all tasks');
+    });
+
+    // 获取已保存的任务列表（退出对话时存的）
+    ipcMain.handle('interval-get-saved', async () => {
+        return { success: true, tasks: _savedIntervalTasks };
+    });
+
+    // 清空已保存的任务列表（用户拒绝恢复时）
+    ipcMain.handle('interval-clear-saved', async () => {
+        _savedIntervalTasks = [];
+        return { success: true };
+    });
+
+    // 恢复已保存的定时任务
+    ipcMain.handle('interval-restore-saved', async () => {
+        var restored = [];
+        (_savedIntervalTasks || []).forEach(function(saved) {
+            if (_intervalTasks[saved.taskName]) return; // 已存在则跳过
+            var task = {
+                taskName: saved.taskName,
+                interval: saved.interval || 5000,
+                mode: saved.mode || 'command',
+                command: saved.command || '',
+                message: saved.message || '',
+                iteration: saved.iteration || 0,
+                createdAt: saved.createdAt || Date.now(),
+                timerId: null
+            };
+            _intervalTasks[task.taskName] = task;
+            _intervalScheduleNext(task);
+            restored.push(task.taskName);
+            // 通知 agentview
+            if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+                agentView.webContents.send('agent-message', {
+                    type: 'interval-start',
+                    taskName: task.taskName,
+                    command: task.mode === 'command' ? task.command : task.message,
+                    interval: task.interval,
+                    mode: task.mode
+                });
+            }
+        });
+        _savedIntervalTasks = []; // 恢复后清空保存列表
+        console.log('[Interval] Restored ' + restored.length + ' tasks: ' + restored.join(', '));
+        return { success: true, restored: restored };
+    });
+
+    // ===== 旧的 interval IPC 保持兼容（转发到新系统） =====
+    ipcMain.handle('interval-add-from-ui', async (event, params) => {
+        var taskName = params.taskName;
+        if (!taskName) return { success: false, error: '缺少 taskName' };
+        if (_intervalTasks[taskName]) return { success: false, error: '任务已存在' };
+        var task = {
+            taskName: taskName,
+            interval: params.interval || 5000,
+            mode: params.mode || 'command',
+            command: params.command || '',
+            message: params.message || '',
+            iteration: 0,
+            createdAt: Date.now(),
+            timerId: null
+        };
+        _intervalTasks[taskName] = task;
+        _intervalScheduleNext(task);
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('agent-message', { type: 'interval-start', taskName: taskName, command: task.mode === 'command' ? task.command : task.message, interval: task.interval, mode: task.mode });
+        }
+        return { success: true, result: '✅ 已创建' };
+    });
+
+    ipcMain.handle('interval-stop-from-ui', async (event, taskName) => {
+        stopMainIntervalTask(taskName);
+        return { success: true };
     });
 
     // 剪贴板读取（通过主进程确保访问权限）
@@ -475,7 +799,7 @@ function setupAgentIPC() {
 
     // ==================== Qwen IPC 处理器 ====================
     ipcMain.handle('qwen-exec', async (event, fnName, args) => {
-        if (!qwenView) return { success: false, error: 'Qwen view not initialized' };
+        if (!qwenView || qwenView.webContents.isDestroyed() || qwenView.webContents.isLoading()) return { success: false, error: 'Qwen view not ready' };
         try {
             const argsJson = JSON.stringify(args || []);
             const result = await qwenView.webContents.executeJavaScript(
@@ -488,7 +812,7 @@ function setupAgentIPC() {
     });
 
     ipcMain.handle('qwen-check-ready', async () => {
-        if (!qwenView) return { success: false, ready: false };
+        if (!qwenView || qwenView.webContents.isDestroyed() || qwenView.webContents.isLoading()) return { success: false, ready: false };
         try {
             const ready = await qwenView.webContents.executeJavaScript(
                 'window.__qwen && window.__qwen.ready === true'
@@ -768,8 +1092,8 @@ function setupAgentIPC() {
     });
 
     // ==================== MCP IPC 处理器 ====================
-    ipcMain.handle('mcp-init', async () => {
-        return await agent.initMcp();
+    ipcMain.handle('mcp-init', async (event, force) => {
+        return await agent.initMcp(force);
     });
 
     ipcMain.handle('mcp-get-tools', async () => {
@@ -778,6 +1102,15 @@ function setupAgentIPC() {
 
     ipcMain.handle('mcp-call-tool', async (event, serverName, toolName, args) => {
         return await agent.callMcpTool(serverName, toolName, args);
+    });
+
+    // MCP 工具启用/禁用管理
+    ipcMain.handle('mcp-get-tool-states', async () => {
+        return agent.getMcpToolStates();
+    });
+
+    ipcMain.handle('mcp-set-tool-enabled', async (event, serverName, toolName, enabled) => {
+        return agent.setMcpToolEnabled(serverName, toolName, enabled);
     });
 
     ipcMain.handle('mcp-shutdown', async () => {
@@ -904,6 +1237,18 @@ function setupControlBarIPC() {
         if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
             agentView.webContents.send('agent-show-skills', result.skills || []);
             agentView.webContents.send('agent-open-skills-modal');
+        }
+    });
+
+    // 显示 MCP 工具管理弹窗
+    ipcMain.on('ctrl-show-mcp-tools', async () => {
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            var toolsRes = agent.getMcpTools();
+            var statesRes = agent.getMcpToolStates();
+            agentView.webContents.send('agent-show-mcp-tools', {
+                tools: toolsRes.tools || [],
+                states: statesRes.states || {}
+            });
         }
     });
 
@@ -1320,7 +1665,7 @@ function setupControlBarIPC() {
 
                 // 检查是否有活跃对话（DeepSeek 页面是否在当前对话中）
                 try {
-                    if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+                    if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                         var dsUrl = await deepseekView.webContents.executeJavaScript('window.location.href');
                         var dsBody = await deepseekView.webContents.executeJavaScript('document.body ? document.body.textContent.length > 100 : false');
                         if (!dsUrl || !dsUrl.includes('/chat/')) {
@@ -1433,7 +1778,7 @@ function setupControlBarIPC() {
             saveAppState({ qqBotDeepThink: !current });
             // 实际触发深度思考切换
             try {
-                if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+                if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                     deepseekView.webContents.executeJavaScript(
                         'if (window.__dsagent_toggleDeepThink) window.__dsagent_toggleDeepThink(' + (!current) + ')'
                     );
@@ -1528,7 +1873,7 @@ function setupControlBarIPC() {
             // 实际执行新建对话
             var newUrl = '';
             try {
-                if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+                if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                     var execCode = 'if (window.__dsagent_newChatAndSendInit) window.__dsagent_newChatAndSendInit("' + mode3 + '", ' + (deepVal !== null ? deepVal : state3.qqBotDeepThink !== false) + ')';
                     await deepseekView.webContents.executeJavaScript(execCode);
                     // 等待页面 URL 更新（SPA 导航可能需要时间）
@@ -2038,7 +2383,7 @@ function setupControlBarIPC() {
 
     // Agent 获取/设置 readTools
     ipcMain.handle('agent-get-read-tools', async () => {
-        if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+        if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
             try {
                 return await deepseekView.webContents.executeJavaScript(
                     'window.__dsagent_tools ? window.__dsagent_tools.getReadHistory() : []'
@@ -2048,7 +2393,7 @@ function setupControlBarIPC() {
         return [];
     });
     ipcMain.handle('agent-set-read-tools', async (event, arr) => {
-        if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+        if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
             // 重试最多 15 秒等 inject.js 就绪
             var deadline = Date.now() + 15000;
             while (Date.now() < deadline) {
@@ -2266,6 +2611,11 @@ function setupControlBarIPC() {
         return historyManager.deleteHistory(dir, id);
     });
 
+    ipcMain.handle('history-rename', async (event, id, newTitle) => {
+        var dir = getHistoryDir();
+        return historyManager.renameHistory(dir, id, newTitle);
+    });
+
     // 仅更新历史记录中的 DeepSeek URL（绕过空消息检查）
     ipcMain.handle('history-load-url', async (event, id, url) => {
         var dir = getHistoryDir();
@@ -2474,8 +2824,6 @@ function setupIpcHandlers() {
     setupAgentIPC();
     // 设置控制栏 IPC
     setupControlBarIPC();
-    // 设置浏览器工具 IPC
-    setupBrowserIPC();
 
     // 获取初始目录
     ipcMain.handle('get-initial-dir', async () => {
@@ -2522,12 +2870,12 @@ function setupIpcHandlers() {
                 }
                 break;
             case 'reload-deepseek':
-                if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+                if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                     const currentUrl = deepseekView.webContents.getURL();
                     if (currentUrl && currentUrl !== 'about:blank') {
                         deepseekView.webContents.loadURL(currentUrl);
                     } else {
-                        deepseekView.webContents.loadURL(CONFIG.TARGET_URL);
+                        deepseekView.webContents.loadURL(DEEPSEEK_URL);
                     }
                 }
                 break;
@@ -2539,7 +2887,7 @@ function setupIpcHandlers() {
                     qwenView.webContents.toggleDevTools();
                 } else if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
                     agentView.webContents.toggleDevTools();
-                } else if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+                } else if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                     deepseekView.webContents.toggleDevTools();
                 }
                 break;
@@ -2550,6 +2898,12 @@ function setupIpcHandlers() {
                     message: 'DS Agent Desktop',
                     detail: '版本: ' + require('./package.json').version + '\n基于 Electron + DeepSeek + Qwen\n本地工具系统支持文件操作、代码执行、窗口管理等功能。'
                 });
+                break;
+            case 'skills-storage-path':
+                // 通知 agentView 显示存储路径设置弹窗
+                if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+                    agentView.webContents.send('agent-show-storage-path-dialog');
+                }
                 break;
         }
     }
@@ -2626,8 +2980,16 @@ function setupIpcHandlers() {
     // 获取初始化提示词
     ipcMain.handle('get-init-prompt', async () => {
         try {
-            const promptPath = path.join(__dirname, 'agent-prompt.md');
-            var text = fs.readFileSync(promptPath, 'utf-8');
+            var text = '';
+            const promptDir = path.join(__dirname, 'prompt');
+            if (fs.existsSync(promptDir)) {
+                const files = fs.readdirSync(promptDir)
+                    .filter(f => f.endsWith('.md'))
+                    .sort();  // 按文件名排序，保证 01- 02- 03- 顺序
+                for (const f of files) {
+                    text += fs.readFileSync(path.join(promptDir, f), 'utf-8') + '\n\n';
+                }
+            }
             // 追加已加载技能
             var skillsPrompt = agent.getSkillsPrompt();
             if (skillsPrompt) text += skillsPrompt;
@@ -2805,231 +3167,6 @@ function setupIpcHandlers() {
     });
 }
 
-// ==================== 浏览器工具 IPC 处理 ====================
-function setupBrowserIPC() {
-    // 获取浏览器工具临时目录
-    function getBrowserTempDir() {
-        var tempDir;
-        if (currentRootDir) {
-            tempDir = path.join(currentRootDir, BROWSER_TOOL_TEMP_DIR, BROWSER_TOOL_TEMP_SUBDIR);
-        } else {
-            tempDir = path.join(app.getPath('userData'), '.dsa-agent', BROWSER_TOOL_TEMP_DIR, BROWSER_TOOL_TEMP_SUBDIR);
-        }
-        if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true });
-        }
-        return tempDir;
-    }
-
-    // 强制刷新所有 BrowserView，防止新建 BrowserWindow 时 GPU 合成器丢弃纹理导致白屏
-    // 对每个存在的视图都做 bounds 微调，而不仅是可见视图
-    function forceRepaintBrowserViews() {
-        var views = [deepseekView, qwenView, agentView, fileBrowserView, controlBarView, viewBarView];
-        views.forEach(function(v) {
-            if (!v || !v.webContents || v.webContents.isDestroyed()) return;
-            try {
-                v.webContents.invalidate();
-            } catch(e) {}
-            try {
-                var b = v.getBounds();
-                if (b.width > 2 && b.height > 2) {
-                    v.setBounds({ x: b.x, y: b.y, width: b.width - 1, height: b.height });
-                    v.setBounds(b);
-                }
-            } catch(e) {}
-        });
-    }
-
-    // 创建浏览器窗口
-    var browserRepaintTimer = null;
-    function startBrowserRepaintTimer() {
-        if (browserRepaintTimer) return;
-        browserRepaintTimer = setInterval(function() {
-            if (browserToolWindows.size === 0) {
-                stopBrowserRepaintTimer();
-                return;
-            }
-            forceRepaintBrowserViews();
-        }, 5000); // 每 5 秒强制刷新，防止 GPU 回收纹理
-    }
-    function stopBrowserRepaintTimer() {
-        if (browserRepaintTimer) {
-            clearInterval(browserRepaintTimer);
-            browserRepaintTimer = null;
-        }
-    }
-
-    ipcMain.handle('browser-create', async (event, options) => {
-        try {
-            var id = ++browserWindowIdCounter;
-            var winId = 'browser-' + id;
-
-            var win = new BrowserWindow({
-                width: options.width || 1024,
-                height: options.height || 768,
-                title: options.title || ('Browser Tool #' + id),
-                webPreferences: {
-                    nodeIntegration: false,
-                    contextIsolation: true,
-                    webSecurity: options.webSecurity !== false,
-                },
-                show: true,
-                frame: options.frame !== false,
-                autoHideMenuBar: true,
-            });
-
-            // 若有关闭窗口事件，自动清理并强制刷新视图
-            win.on('closed', function() {
-                browserToolWindows.delete(winId);
-                console.log('[BrowserTool] Window closed:', winId);
-                // 关闭窗口也可能导致 GPU 纹理回收，延迟刷新
-                setTimeout(function() { forceRepaintBrowserViews(); }, 150);
-            });
-
-            // 加载 URL（如果有）
-            if (options.url) {
-                win.loadURL(options.url);
-            }
-
-            browserToolWindows.set(winId, win);
-            console.log('[BrowserTool] Window created:', winId, options.url || '(blank)');
-
-            // 新窗口创建后 GPU 合成器可能丢弃 BrowserView 纹理，延迟强制刷新
-            setTimeout(function() { forceRepaintBrowserViews(); }, 200);
-            startBrowserRepaintTimer();
-
-            return { success: true, id: winId };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    });
-
-    // 在浏览器窗口中执行 JavaScript
-    ipcMain.handle('browser-execute', async (event, winId, code) => {
-        try {
-            var win = browserToolWindows.get(winId);
-            if (!win || win.isDestroyed()) {
-                return { success: false, error: 'Browser window not found or closed: ' + winId };
-            }
-            // 用 try-catch 包裹代码，避免 Chromium 返回泛化的 "Script failed to execute" 错误
-            var wrappedCode = 'try{ ' + code + ' }catch(e){ "___ds_error___:" + e.message }';
-            var result = await win.webContents.executeJavaScript(wrappedCode);
-            if (typeof result === 'string' && result.indexOf('___ds_error___:') === 0) {
-                return { success: false, error: 'JS 执行错误: ' + result.substring(15) };
-            }
-            return { success: true, result: result };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    });
-
-    // 截取浏览器窗口截图
-    ipcMain.handle('browser-screenshot', async (event, winId, saveName) => {
-        try {
-            var win = browserToolWindows.get(winId);
-            if (!win || win.isDestroyed()) {
-                return { success: false, error: 'Browser window not found or closed: ' + winId };
-            }
-
-            var image = await win.webContents.capturePage();
-            var tempDir = getBrowserTempDir();
-            var filename = (saveName || 'browser_screenshot_' + Date.now()) + '.png';
-            var filePath = path.join(tempDir, filename);
-
-            // 保存为 PNG
-            fs.writeFileSync(filePath, image.toPNG());
-
-            // 同时返回 base64 data URL 用于 Qwen 分析
-            var dataUrl = 'data:image/png;base64,' + image.toPNG().toString('base64');
-
-            console.log('[BrowserTool] Screenshot saved:', filePath);
-            return { success: true, path: filePath, dataUrl: dataUrl, size: image.getSize() };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    });
-
-    // 导航到 URL
-    ipcMain.handle('browser-navigate', async (event, winId, url) => {
-        try {
-            var win = browserToolWindows.get(winId);
-            if (!win || win.isDestroyed()) {
-                return { success: false, error: 'Browser window not found or closed: ' + winId };
-            }
-            win.loadURL(url);
-            return { success: true };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    });
-
-    // 关闭浏览器窗口
-    ipcMain.handle('browser-close', async (event, winId) => {
-        try {
-            var win = browserToolWindows.get(winId);
-            if (!win || win.isDestroyed()) {
-                // 已关闭，清理记录
-                browserToolWindows.delete(winId);
-                return { success: true, message: 'Window already closed' };
-            }
-            win.close();
-            browserToolWindows.delete(winId);
-            // 关闭窗口后 GPU 合成器可能丢弃 BrowserView 纹理，延迟强制刷新
-            setTimeout(function() { forceRepaintBrowserViews(); }, 150);
-            return { success: true };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    });
-
-    // 列出所有浏览器窗口
-    ipcMain.handle('browser-list', async () => {
-        try {
-            var windows = [];
-            browserToolWindows.forEach(function(win, id) {
-                var destroyed = win.isDestroyed();
-                if (!destroyed) {
-                    try {
-                        var url = win.webContents.getURL();
-                        var title = win.getTitle();
-                        var size = win.getSize();
-                        windows.push({
-                            id: id,
-                            url: url,
-                            title: title,
-                            width: size[0],
-                            height: size[1]
-                        });
-                    } catch (e) {
-                        windows.push({ id: id, url: '(error)', title: '(error)' });
-                    }
-                }
-            });
-            // 清理已销毁的窗口记录
-            browserToolWindows.forEach(function(win, id) {
-                if (win.isDestroyed()) browserToolWindows.delete(id);
-            });
-            return { success: true, windows: windows };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    });
-
-    // 调整浏览器窗口大小
-    ipcMain.handle('browser-resize', async (event, winId, width, height) => {
-        try {
-            var win = browserToolWindows.get(winId);
-            if (!win || win.isDestroyed()) {
-                return { success: false, error: 'Browser window not found or closed: ' + winId };
-            }
-            win.setSize(width, height);
-            return { success: true };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    });
-}
-
 // ==================== 广播主题切换 ====================
 function broadcastTheme(theme) {
     currentAppTheme = theme;
@@ -3078,12 +3215,12 @@ function buildMenuTemplate() {
         label: '重载 DeepSeek 页面',
         accelerator: 'CmdOrCtrl+Shift+D',
         click: () => {
-            if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+            if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                 const currentUrl = deepseekView.webContents.getURL();
                 if (currentUrl && currentUrl !== 'about:blank') {
                     deepseekView.webContents.loadURL(currentUrl);
                 } else {
-                    deepseekView.webContents.loadURL(CONFIG.TARGET_URL);
+                    deepseekView.webContents.loadURL(DEEPSEEK_URL);
                 }
             }
         }
@@ -3176,7 +3313,7 @@ function buildMenuTemplate() {
                             qwenView.webContents.toggleDevTools();
                         } else if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
                             agentView.webContents.toggleDevTools();
-                        } else if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+                        } else if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                             deepseekView.webContents.toggleDevTools();
                         }
                     }
@@ -3343,6 +3480,24 @@ function createWindow() {
     mainWindow.addBrowserView(deepseekView);
     // 禁止后台节流，保证 deepseekView 即使不可见时 JS 依然全速运行
     deepseekView.webContents.setBackgroundThrottling(false);
+    // 控制台日志
+    deepseekView.webContents.on('console-message', (event, level, message) => {
+        if (message.indexOf('deprecated') !== -1 || message.indexOf('favicon') !== -1) return;
+        if (message.indexOf('[DS') !== -1) {
+            console.log('[DeepSeek:renderer]', message);
+        } else if (level === 3) {
+            if (message.indexOf('Unauthorized') !== -1 || message.indexOf('Failed to load') !== -1
+                || message.indexOf('timeout') !== -1 || message.indexOf('crash') !== -1) {
+                console.error('[DeepSeek]', message);
+            }
+        }
+    });
+    deepseekView.webContents.on('render-process-gone', (event, details) => {
+        console.error('[DeepSeek] Renderer gone:', details.reason);
+    });
+    deepseekView.webContents.on('unresponsive', () => {
+        console.error('[DeepSeek] Page unresponsive');
+    });
 
     // 创建 Qwen 网页视图（后台加载，默认不显示）
     function createQwenView() {
@@ -3356,10 +3511,7 @@ function createWindow() {
                 sandbox: false
             }
         });
-        // 伪装 User-Agent
-        qwenView.webContents.loadURL(QWEN_URL, {
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-        });
+        qwenView.webContents.loadURL(QWEN_URL);
         // 禁止后台节流，保证 qwenView 即使不可见时 JS 依然全速运行
         qwenView.webContents.setBackgroundThrottling(false);
         // 控制台日志
@@ -3383,6 +3535,8 @@ function createWindow() {
         });
         qwenView.webContents.on('did-finish-load', () => {
             console.log('[Qwen] Page loaded, URL:', qwenView.webContents.getURL());
+            // 每次加载完成后重新禁用后台节流
+            qwenView.webContents.setBackgroundThrottling(false);
             const qwenScript = getQwenInjectScript();
             qwenView.webContents.executeJavaScript(qwenScript).catch(console.error);
             // 页面加载后立即应用当前主题滤镜
@@ -3482,7 +3636,7 @@ function createWindow() {
 
     // 加载 DeepSeek 网页
     setupSession();
-    deepseekView.webContents.loadURL(CONFIG.TARGET_URL);
+    deepseekView.webContents.loadURL(DEEPSEEK_URL);
 
     // 加载文件浏览器页面
     const fileBrowserPath = path.join(__dirname, 'filebrowser.html');
@@ -3503,7 +3657,7 @@ function createWindow() {
         // 每次加载完成后重新禁用后台节流
         deepseekView.webContents.setBackgroundThrottling(false);
         // 立即注入，不再等待固定延迟（脚本内部自行判断 DOM 就绪）
-        const injectScript = getInjectScript();
+        const injectScript = getDeepseekInjectScript();
         deepseekView.webContents.executeJavaScript(injectScript).catch(console.error);
         // 页面加载后立即应用当前主题滤镜
         setPageTheme(deepseekView, currentAppTheme);
@@ -3512,7 +3666,7 @@ function createWindow() {
         // 页面重载后从持久化配置恢复审核模式，并同步到 viewbar
         setTimeout(() => {
             var mode = getConfirmMode();
-            if (deepseekView && !deepseekView.webContents.isDestroyed()) {
+            if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                 deepseekView.webContents.executeJavaScript(
                     `window.__dsagent_setConfirmMode && window.__dsagent_setConfirmMode(${JSON.stringify(mode)}, true);`
                 ).catch(() => {});
@@ -3527,6 +3681,24 @@ function createWindow() {
                 });
             }
         }, 800);
+        // 强制渲染 DeepSeek 页面一次，确保 SVG 图标即使屏幕外也已渲染完成
+        setTimeout(() => {
+            if (!deepseekView || deepseekView.webContents.isDestroyed()) return;
+            try {
+                // DeepSeek 初始在屏幕外（x: -10000），Chromium 因此跳过 SVG 渲染。
+                // 短暂置于屏幕内强制完整渲染后移回，此后即使屏幕外 SVG 也可用。
+                var b = deepseekView.getBounds();
+                deepseekView.setBounds({ x: 0, y: 0, width: b.width, height: b.height });
+                setTimeout(() => {
+                    if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
+                        // 移回屏幕外（updateBounds 会在 resize 或视图切换时修正精确位置）
+                        deepseekView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
+                    }
+                }, 200);
+            } catch(e) {
+                console.warn('[DeepSeek] Warmup render failed:', e);
+            }
+        }, 100);
     });
 
     // DeepSeek 导航事件：检测 VPN 切换导致的会话丢失，自动恢复
@@ -3536,8 +3708,8 @@ function createWindow() {
         if (url.indexOf('/chat') === -1 && url.indexOf('chat.deepseek.com') >= 0) {
             console.log('[DeepSeek] 检测到非对话页面，自动跳转回主页...');
             setTimeout(() => {
-                if (deepseekView && !deepseekView.webContents.isDestroyed()) {
-                    deepseekView.webContents.loadURL(CONFIG.TARGET_URL);
+                if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
+                    deepseekView.webContents.loadURL(DEEPSEEK_URL);
                 }
             }, 2000);
         }
@@ -3551,7 +3723,7 @@ function createWindow() {
 
     // 定期从 DeepSeek 页面获取状态并同步到控制栏
     setInterval(() => {
-        if (deepseekView && controlBarView) {
+        if (deepseekView && controlBarView && !deepseekView.webContents.isDestroyed() && !deepseekView.webContents.isLoading()) {
             deepseekView.webContents.executeJavaScript(
                 'window.__dsagent_getStatus && window.__dsagent_getStatus()'
             ).then(status => {
@@ -3560,7 +3732,7 @@ function createWindow() {
                     status.currentView = currentView;
                     
                     // 检查 Qwen 状态
-                    if (qwenView && qwenView.webContents && !qwenView.webContents.isDestroyed()) {
+                    if (qwenView && qwenView.webContents && !qwenView.webContents.isDestroyed() && !qwenView.webContents.isLoading()) {
                         qwenView.webContents.executeJavaScript(
                             'window.__qwen && window.__qwen.isResponding ? window.__qwen.isResponding() : { responding: false }'
                         ).then(qwenResp => {

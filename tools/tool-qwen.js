@@ -14,14 +14,39 @@
         params: [
             { name: 'callback', type: '字符串', default: '—', required: false, description: 'picture=绘图模式, ppt=PPT生成模式（默认普通问答）' },
             { name: 'async', type: '布尔', default: 'false', required: false, description: 'true=异步执行不等待（绘图/PPT时推荐）' },
-            { name: 'path', type: '字符串', default: '—', required: false, description: '要上传的文件路径（普通模式），多文件时每行写一个 path=...' },
+            { name: 'message', type: '字符串', default: '—', required: false, description: '要发送给 Qwen 的消息（也可放在 body 中）' },
+            { name: 'paths', type: '字符串', default: '—', required: false, description: '要上传的文件路径（普通模式），多个用逗号分隔' },
             { name: 'savepath', type: '字符串', default: '系统下载目录', required: false, description: '图片/PPT保存目录（绘图/PPT模式）' },
             { name: 'desc', type: '字符串', default: '—', required: false, description: '附加说明文字（绘图/PPT模式）' },
             { name: 'ref', type: '字符串', default: '—', required: false, description: '参考图片/文件路径（绘图/PPT模式）' }
         ],
-        usage: '# 普通问答\n帮我写一个 Python 脚本\n\n# 图片分析\npath="D:\\screenshot.png"\n这张截图里有什么问题？\n\n# 多文件\npath="D:\\img1.png"\npath="D:\\img2.jpg"\n分析这两张图片的异同\n\n# 同步绘图\ncallback=picture\nsavepath="D:\\images"\ndesc="水墨风格"\n一只熊猫在竹林里吃竹子\n\n# 异步绘图（推荐）\ncallback=picture\nasync=true\nsavepath="D:\\images"\n一只熊猫在竹林里吃竹子\n\n# PPT 生成\ncallback=ppt\nsavepath="D:\\ppt"\n请生成一份关于固体物理学的 PPT',
+        usage: '# 普通问答\n{"tool": "qwen", "params": {"message": "帮我写一个 Python 脚本"}}\n\n# 图片分析\n{"tool": "qwen", "params": {"paths": "D:\\\\screenshot.png"}, "body": "这张截图里有什么问题？"}\n\n# 同步绘图\n{"tool": "qwen", "params": {"callback": "picture", "savepath": "D:\\\\images"}, "body": "一只熊猫在竹林里吃竹子"}\n\n# 异步绘图（推荐）\n{"tool": "qwen", "params": {"callback": "picture", "async": true, "savepath": "D:\\\\images"}, "body": "一只熊猫在竹林里吃竹子"}\n\n# PPT 生成\n{"tool": "qwen", "params": {"callback": "ppt", "savepath": "D:\\\\ppt"}, "body": "请生成一份关于固体物理学的 PPT"}',
         notes: 'callback=picture 启用绘图模式；callback=ppt 启用 PPT 生成模式；async=true 不阻塞等待，后续轮次自动获取结果。对话内容会在完成后自动清理。',
-        handler: async function(content) {
+        handler: async function(params, body) {
+            var makeResult = window.__dsagent_tools.makeResult;
+            var content;
+
+            // Check if new params format is being used
+            var hasNewParams = params.callback || params.async || params.message || params.paths || params.savepath || params.desc || params.ref;
+            if (hasNewParams) {
+                // Build content string for backward compat with old functions
+                var parts = [];
+                if (params.callback) parts.push('callback=' + params.callback);
+                if (params.async) parts.push('async=' + params.async);
+                if (params.paths) {
+                    // Handle multiple paths: split by comma, join as multiple path= lines
+                    var pathList = params.paths.split(',').map(function(p) { return p.trim(); }).filter(Boolean);
+                    pathList.forEach(function(p) { parts.push('path=' + p); });
+                }
+                if (params.savepath) parts.push('savepath=' + params.savepath);
+                if (params.desc) parts.push('desc=' + params.desc);
+                if (params.ref) parts.push('ref=' + params.ref);
+                content = parts.join('\n') + '\n' + (params.message || body || '');
+            } else {
+                // Old format: body IS the full content (first line has key=value pairs)
+                content = body || '';
+            }
+
             var lines = content.trim().split('\n');
             var firstLine = lines[0].trim();
             var kv = (typeof window.__dsagent_parseKeyValuePairs === 'function')
@@ -32,78 +57,85 @@
             var isPPT = (kv.callback || '').toLowerCase() === 'ppt';
             var isAsync = (kv.async || '').toLowerCase() === 'true' || kv.async === true;
 
-            if (isPicture) {
-                // 绘图模式
-                if (typeof window.__dsagent_qwenDraw !== 'function') {
-                    throw new Error('qwenDraw not initialized');
-                }
-                if (isAsync) {
-                    var taskId = 'qwen_draw_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-                    var promise = window.__dsagent_qwenDraw(content);
-                    if (!window.__dsagent_pendingAsyncTasks) {
-                        window.__dsagent_pendingAsyncTasks = [];
+            try {
+                if (isPicture) {
+                    // 绘图模式
+                    if (typeof window.__dsagent_qwenDraw !== 'function') {
+                        return makeResult(false, null, 'qwenDraw not initialized');
                     }
-                    window.__dsagent_pendingAsyncTasks.push({
-                        id: taskId,
-                        lang: 'local-qwen',
-                        promise: promise,
-                        startedAt: Date.now(),
-                        desc: 'Qwen 绘图'
-                    });
-                    promise.catch(function(e) {});
-                    console.log('[AsyncQwen] Started async draw task:', taskId);
-                    return '⏳ Qwen 绘图任务已启动（' + taskId + '），正在后台生成图片...\n（后续轮次将自动获取结果）';
-                } else {
-                    return await window.__dsagent_qwenDraw(content);
-                }
-            } else if (isPPT) {
-                // PPT 生成模式
-                if (typeof window.__dsagent_qwenPPT !== 'function') {
-                    throw new Error('qwenPPT not initialized');
-                }
-                if (isAsync) {
-                    var taskId3 = 'qwen_ppt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-                    var promise3 = window.__dsagent_qwenPPT(content);
-                    if (!window.__dsagent_pendingAsyncTasks) {
-                        window.__dsagent_pendingAsyncTasks = [];
+                    if (isAsync) {
+                        var taskId = 'qwen_draw_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+                        var promise = window.__dsagent_qwenDraw(content);
+                        if (!window.__dsagent_pendingAsyncTasks) {
+                            window.__dsagent_pendingAsyncTasks = [];
+                        }
+                        window.__dsagent_pendingAsyncTasks.push({
+                            id: taskId,
+                            lang: 'local-qwen',
+                            promise: promise,
+                            startedAt: Date.now(),
+                            desc: 'Qwen 绘图'
+                        });
+                        promise.catch(function(e) {});
+                        console.log('[AsyncQwen] Started async draw task:', taskId);
+                        return makeResult(true, '⏳ Qwen 绘图任务已启动（' + taskId + '），正在后台生成图片...\n（后续轮次将自动获取结果）');
+                    } else {
+                        var result = await window.__dsagent_qwenDraw(content);
+                        return makeResult(true, result);
                     }
-                    window.__dsagent_pendingAsyncTasks.push({
-                        id: taskId3,
-                        lang: 'local-qwen',
-                        promise: promise3,
-                        startedAt: Date.now(),
-                        desc: 'Qwen PPT 生成'
-                    });
-                    promise3.catch(function(e) {});
-                    console.log('[AsyncQwen] Started async PPT task:', taskId3);
-                    return '⏳ Qwen PPT 生成任务已启动（' + taskId3 + '），正在后台生成...\n（后续轮次将自动获取结果）';
-                } else {
-                    return await window.__dsagent_qwenPPT(content);
-                }
-            } else {
-                // 普通问答模式
-                if (typeof window.__dsagent_qwenGeneral !== 'function') {
-                    throw new Error('qwenGeneral not initialized');
-                }
-                if (isAsync) {
-                    var taskId2 = 'qwen_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-                    var promise2 = window.__dsagent_qwenGeneral(content);
-                    if (!window.__dsagent_pendingAsyncTasks) {
-                        window.__dsagent_pendingAsyncTasks = [];
+                } else if (isPPT) {
+                    // PPT 生成模式
+                    if (typeof window.__dsagent_qwenPPT !== 'function') {
+                        return makeResult(false, null, 'qwenPPT not initialized');
                     }
-                    window.__dsagent_pendingAsyncTasks.push({
-                        id: taskId2,
-                        lang: 'local-qwen',
-                        promise: promise2,
-                        startedAt: Date.now(),
-                        desc: 'Qwen 问答'
-                    });
-                    promise2.catch(function(e) {});
-                    console.log('[AsyncQwen] Started async general task:', taskId2);
-                    return '⏳ Qwen 问答任务已启动（' + taskId2 + '），正在后台运行...\n（后续轮次将自动获取结果）';
+                    if (isAsync) {
+                        var taskId3 = 'qwen_ppt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+                        var promise3 = window.__dsagent_qwenPPT(content);
+                        if (!window.__dsagent_pendingAsyncTasks) {
+                            window.__dsagent_pendingAsyncTasks = [];
+                        }
+                        window.__dsagent_pendingAsyncTasks.push({
+                            id: taskId3,
+                            lang: 'local-qwen',
+                            promise: promise3,
+                            startedAt: Date.now(),
+                            desc: 'Qwen PPT 生成'
+                        });
+                        promise3.catch(function(e) {});
+                        console.log('[AsyncQwen] Started async PPT task:', taskId3);
+                        return makeResult(true, '⏳ Qwen PPT 生成任务已启动（' + taskId3 + '），正在后台生成...\n（后续轮次将自动获取结果）');
+                    } else {
+                        var result3 = await window.__dsagent_qwenPPT(content);
+                        return makeResult(true, result3);
+                    }
                 } else {
-                    return await window.__dsagent_qwenGeneral(content);
+                    // 普通问答模式
+                    if (typeof window.__dsagent_qwenGeneral !== 'function') {
+                        return makeResult(false, null, 'qwenGeneral not initialized');
+                    }
+                    if (isAsync) {
+                        var taskId2 = 'qwen_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+                        var promise2 = window.__dsagent_qwenGeneral(content);
+                        if (!window.__dsagent_pendingAsyncTasks) {
+                            window.__dsagent_pendingAsyncTasks = [];
+                        }
+                        window.__dsagent_pendingAsyncTasks.push({
+                            id: taskId2,
+                            lang: 'local-qwen',
+                            promise: promise2,
+                            startedAt: Date.now(),
+                            desc: 'Qwen 问答'
+                        });
+                        promise2.catch(function(e) {});
+                        console.log('[AsyncQwen] Started async general task:', taskId2);
+                        return makeResult(true, '⏳ Qwen 问答任务已启动（' + taskId2 + '），正在后台运行...\n（后续轮次将自动获取结果）');
+                    } else {
+                        var result2 = await window.__dsagent_qwenGeneral(content);
+                        return makeResult(true, result2);
+                    }
                 }
+            } catch(e) {
+                return makeResult(false, null, e.message || 'qwen 调用异常');
             }
         }
     });

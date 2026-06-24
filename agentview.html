@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -40,6 +40,7 @@
     --transition-normal: 0.25s var(--transition);
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+}
 body.light-theme {
     background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent) 0%, color-mix(in srgb, var(--accent-2) 3%, transparent) 40%, transparent 80%), var(--bg-base);
     --bg-base: #ffffff;
@@ -74,6 +75,9 @@ body.light-theme {
     border-radius: var(--radius-md);
 }
 
+html, body {
+    margin: 0; padding: 0; height: 100%;
+}
 body {
     background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent) 0%, color-mix(in srgb, var(--accent-2) 3%, transparent) 40%, transparent 80%), var(--bg-base);
     color: var(--text-primary);
@@ -122,33 +126,7 @@ body {
 .mb-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .mb-btn:active, .mb-btn.open { background: var(--bg-active); color: var(--accent); }
 
-/* Header buttons */
-#new-chat-btn {
-    padding: 7px 18px;
-    border: none;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    transition: all var(--transition-normal);
-    letter-spacing: .3px;
-    background: linear-gradient(135deg, var(--success), #2da44e);
-    color: #fff;
-    box-shadow: var(--shadow-sm);
-}
-#new-chat-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(63,185,80,0.3), var(--shadow-glow);
-    filter: brightness(1.08);
-}
-#new-chat-btn:disabled {
-    background: var(--bg-elevated);
-    color: var(--text-muted);
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
-    filter: none;
-}
+
 
 /* Custom scrollbar */
 #chat-area::-webkit-scrollbar, #history-list::-webkit-scrollbar { width: 5px; }
@@ -262,6 +240,26 @@ body {
     background: rgba(248,81,73,0.15);
     color: var(--danger);
 }
+.history-item .hi-rename {
+    position: absolute;
+    top: 8px;
+    right: 32px;
+    display: none;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    text-align: center;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+}
+.history-item:hover .hi-rename { display: block; }
+.history-item .hi-rename:hover {
+    background: rgba(56,139,253,0.15);
+    color: var(--accent);
+}
 .history-expired-badge {
     display: inline-block;
     font-size: 11px;
@@ -367,7 +365,7 @@ body {
 .mode-selector { display: flex; gap: 10px; margin-bottom: 12px; }
 .mode-btn {
     flex: 1;
-    padding: 10px 8px;
+    padding: 12px 8px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: transparent;
@@ -377,6 +375,10 @@ body {
     font-weight: 500;
     text-align: center;
     transition: all var(--transition-fast);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
 }
 .mode-btn:hover {
     border-color: var(--accent);
@@ -969,13 +971,13 @@ body {
 }
 /* 启动按钮 */
 #qqbot-start-btn {
-    background: linear-gradient(135deg, var(--success), #2da44e) !important;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)) !important;
     border: none !important;
     color: #fff !important;
 }
 #qqbot-start-btn:hover {
     transform: translateY(-1px);
-    box-shadow: var(--shadow-md), 0 0 16px rgba(63,185,80,0.25);
+    box-shadow: var(--shadow-md), var(--shadow-glow);
     filter: brightness(1.08);
 }
 /* 停止按钮 */
@@ -1077,6 +1079,62 @@ body {
      font-family: monospace;
      font-size: 13px;
  }
+/* 删除/操作进行中的阻塞遮罩 */
+#blocking-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.6); z-index: 10000;
+    display: none; align-items: center; justify-content: center;
+    cursor: not-allowed;
+}
+#blocking-overlay > div {
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px;
+    padding: 28px 40px; text-align: center; color: var(--text-primary); font-size: 14px;
+}
+#blocking-spinner {
+    width: 36px; height: 36px;
+    border: 3px solid color-mix(in srgb, var(--accent) 20%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ============ 后台任务状态面板（适配亮暗主题） ============ */
+#status-panel-body .sp-section {
+    margin: 4px 0; padding: 8px 10px;
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 12px;
+}
+#status-panel-body .sp-section-title {
+    color: var(--text-secondary); font-size: 11px; font-weight: 600;
+}
+#status-panel-body .sp-divider {
+    border-top: 1px solid var(--border-light);
+}
+#status-panel-body .sp-item {
+    display: flex; align-items: center; gap: 6px; padding: 2px 0;
+}
+#status-panel-body .sp-item-dot {
+    font-size: 10px; flex-shrink: 0;
+}
+#status-panel-body .sp-item-code {
+    color: var(--text-primary); font-size: 11px; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#status-panel-body .sp-item-meta {
+    color: var(--text-muted); font-size: 10px; flex-shrink: 0;
+}
+#status-panel-body .sp-empty {
+    color: var(--text-muted);
+}
+#status-panel-body .sp-refresh-btn {
+    margin-left: auto; padding: 1px 6px; font-size: 9px;
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text-secondary); cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -1086,7 +1144,6 @@ body {
         <div id="menubar-btns" style="display:flex;align-items:center;gap:2px;margin-left:4px;"></div>
     </div>
     <div id="header-actions" style="display:flex;align-items:center;gap:6px;-webkit-app-region:no-drag;">
-        <button id="new-chat-btn" onclick="showNewChatModal()">+ 新对话</button>
     </div>
 </div>
 
@@ -1100,7 +1157,9 @@ body {
         <div class="panel-title">
             历史对话
             <span class="hist-refresh" onclick="loadHistoryList()" title="刷新">&#x21bb;</span>
+            <button id="history-new-chat-btn" onclick="showPreInitPanel()" title="新建对话" style="margin-left:auto;width:26px;height:26px;border:none;border-radius:6px;cursor:pointer;font-size:16px;font-weight:700;transition:all var(--transition-normal);background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;line-height:1;display:flex;align-items:center;justify-content:center;">+</button>
         </div>
+
         <div id="history-list">
             <div class="history-empty">没有历史对话</div>
         </div>
@@ -1128,17 +1187,34 @@ body {
 
     <div id="chat-container">
         <div id="chat-area">
-            <div class="empty-msg">点击「+新对话」开始新对话</div>
+            <div class="empty-msg">选择模式后点击「创建对话」开始</div>
         </div>
         <button id="scroll-to-bottom-btn" onclick="scrollToBottom(true)" title="回到最新消息" style="display:none;position:absolute;left:50%;bottom:16px;width:40px;height:40px;border-radius:50%;background:#2a2a4a;border:1px solid #3a3a6a;color:#aaa;cursor:pointer;font-size:18px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.4);align-items:center;justify-content:center;transform:translateX(-50%);">↓</button>
     </div>
 </div>
 
 <div id="bottom-panel">
-    <!-- 初始化前：模式选择 + 开始按钮 -->
+    <!-- 初始化前：模式选择 + 创建对话按钮 -->
     <div id="pre-init-section">
+        <div class="mode-selector" id="pre-init-mode-selector" style="margin-bottom:16px;">
+            <button class="mode-btn active" data-mode="expert" onclick="selectPreInitMode('expert', this)">
+                <span style="font-size:18px;">🧿</span>
+                <span style="font-weight:600;font-size:13px;">专家模式</span>
+                <span style="font-size:10px;color:#7a7a9a;">深度思考，逐步推理</span>
+            </button>
+            <button class="mode-btn" data-mode="image" onclick="selectPreInitMode('image', this)">
+                <span style="font-size:18px;">🖼</span>
+                <span style="font-weight:600;font-size:13px;">识图模式</span>
+                <span style="font-size:10px;color:#7a7a9a;">快速看图，找控件</span>
+            </button>
+            <button class="mode-btn" data-mode="quick" onclick="selectPreInitMode('quick', this)">
+                <span style="font-size:18px;">⚡</span>
+                <span style="font-weight:600;font-size:13px;">快速模式</span>
+                <span style="font-size:10px;color:#7a7a9a;">快速响应，简洁回答</span>
+            </button>
+        </div>
         <div id="init-btn-row">
-            <button id="init-btn" onclick="showNewChatModal()">开始新对话</button>
+            <button id="init-btn" onclick="startNewChat()">创建对话</button>
         </div>
     </div>
 
@@ -1147,7 +1223,7 @@ body {
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="font-size:12px;color:#888;" id="mode-label">专家模式</span>
             <!-- 状态栏 -->
-            <div id="status-bar" style="display:none;"></div>
+            <div id="status-bar" style="display:none;overflow-x:auto;white-space:nowrap;flex-shrink:0;max-width:100%;scrollbar-width:thin;"></div>
             <button id="bottom-collapse-btn" onclick="toggleBottomExtras()" title="折叠/展开下方面板" style="padding:2px 8px;background:transparent;border:1px solid #3a3a6a;border-radius:6px;color:#8a8aaa;cursor:pointer;font-size:11px;line-height:1;">▼</button>
         </div>
         <div id="prompt-row">
@@ -1189,10 +1265,10 @@ body {
         </div>
     </div>
 
-    <!-- QQ 托管切换 -->
-    <div class="toggle-row" style="margin:8px 0 4px 0;display:flex;align-items:center;gap:8px;">
-        <div id="qqbot-switch" class="switch" onclick="toggleQQBot()" style="flex-shrink:0;"></div>
-        <label onclick="toggleQQBot()" style="cursor:pointer;font-size:12px;">🐧 QQ 托管</label>
+    <!-- QQ 托管展开/折叠 -->
+    <div class="toggle-row" style="margin:8px 0 4px 0;display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="toggleQQBot()">
+        <span id="qqbot-arrow" style="font-size:10px;color:#8a8aaa;transition:transform 0.2s;display:inline-block;">▶</span>
+        <label style="cursor:pointer;font-size:12px;pointer-events:none;">🐧 QQ 托管</label>
         <span id="qqbot-status-text" style="font-size:11px;color:#6a6a8a;margin-left:auto;">未启动</span>
     </div>
 
@@ -1214,7 +1290,7 @@ body {
         </div>
         <!-- 启动/停止 -->
         <div style="display:flex;gap:8px;align-items:center;">
-            <button id="qqbot-start-btn" onclick="doStartQQBot()" style="flex:1;padding:6px 0;background:linear-gradient(135deg,var(--success),#2da44e);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;box-shadow:0 2px 8px rgba(63,185,80,0.2);">启动</button>
+            <button id="qqbot-start-btn" onclick="doStartQQBot()" style="flex:1;padding:6px 0;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;box-shadow:0 2px 8px rgba(56,139,253,0.2);">启动</button>
             <button id="qqbot-stop-btn" onclick="doStopQQBot()" style="display:none;flex:1;padding:6px 0;background:linear-gradient(135deg,var(--danger),#ff6b6b);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;box-shadow:0 2px 8px rgba(248,81,73,0.2);">停止</button>
         </div>
         <!-- 外网模式开关 -->
@@ -1234,6 +1310,35 @@ body {
     </div>
 
     <!-- Robot 编辑弹窗 -->
+    <div id="status-panel" class="toggle-row" style="margin:8px 0 4px 0;display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="toggleStatusPanel()">
+        <span id="status-panel-arrow" style="font-size:10px;color:#8a8aaa;transition:transform 0.2s;display:inline-block;">▶</span>
+        <label style="cursor:pointer;font-size:12px;pointer-events:none;">⏱️ 后台任务</label>
+        <span id="status-panel-badge" style="font-size:10px;color:var(--text-muted);margin-left:auto;display:flex;align-items:center;gap:4px;"></span>
+    </div>
+    <div id="status-panel-body" style="display:none;">
+        <div class="sp-section">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                <span class="sp-section-title">🔄 定时任务</span>
+                <span id="interval-count" style="font-size:10px;color:var(--text-muted);">0</span>
+                <button onclick="showAddIntervalModal()" style="margin-left:auto;padding:2px 8px;background:linear-gradient(135deg,var(--accent),var(--accent-2));border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:10px;font-weight:500;">+添加</button>
+            </div>
+            <div id="interval-list" style="max-height:120px;overflow-y:auto;line-height:1.8;font-size:11px;">
+                <span class="sp-empty">无活跃定时任务</span>
+            </div>
+        </div>
+        <div class="sp-section sp-divider" style="padding-top:6px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                <span class="sp-section-title">💻 活跃终端</span>
+                <span id="terminal-count" style="font-size:10px;color:var(--text-muted);">0</span>
+                <button onclick="refreshTerminals()" class="sp-refresh-btn">刷新</button>
+            </div>
+            <div id="terminal-list" style="max-height:100px;overflow-y:auto;line-height:1.8;font-size:11px;">
+                <span class="sp-empty">无活跃终端</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Robot 编辑弹窗 -->
     <div id="qqbot-edit-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
         <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:24px;max-width:380px;width:90%;margin:20px;">
             <h3 style="margin:0 0 16px;color:#e0e0f0;font-size:15px;" id="qqbot-edit-title">新建 Bot</h3>
@@ -1247,11 +1352,11 @@ body {
         </div>
     </div>
 
-    <!-- MCP 配置切换 -->
-    <div class="toggle-row" style="margin:8px 0 4px 0;display:flex;align-items:center;gap:8px;">
-        <div id="mcp-switch" class="switch" onclick="toggleMcpPanel()" style="flex-shrink:0;"></div>
-        <label onclick="toggleMcpPanel()" style="cursor:pointer;font-size:12px;">🔌 MCP 服务器</label>
-        <span id="mcp-status-text" style="font-size:11px;color:#6a6a8a;margin-left:auto;">已连接: 0</span>
+    <!-- MCP 配置展开/折叠 -->
+    <div class="toggle-row" style="margin:8px 0 4px 0;display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="toggleMcpPanel()">
+        <span id="mcp-arrow" style="font-size:10px;color:#8a8aaa;transition:transform 0.2s;display:inline-block;">▶</span>
+        <label style="cursor:pointer;font-size:12px;pointer-events:none;">🔌 MCP 服务器</label>
+        <span id="mcp-status-text" style="font-size:11px;color:#6a6a8a;margin-left:auto;">已配置: 0</span>
     </div>
 
     <!-- MCP 配置面板 -->
@@ -1267,8 +1372,21 @@ body {
             <span style="color:#666;font-size:11px;">暂无配置</span>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
-            <button onclick="applyMcpToCurrentFolder()" style="flex:1;padding:6px 0;background:linear-gradient(135deg,var(--accent),var(--accent-2));border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;font-weight:600;box-shadow:0 2px 8px rgba(56,139,253,0.2);">📁 应用到当前文件夹</button>
-            <button onclick="reloadMcpServers()" style="padding:6px 14px;background:linear-gradient(135deg,var(--accent),var(--accent-2));border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;font-weight:500;box-shadow:0 2px 8px rgba(56,139,253,0.2);">🔄 重载</button>
+            <button onclick="reloadMcpServers()" style="flex:1;padding:6px 0;background:linear-gradient(135deg,var(--accent),var(--accent-2));border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;font-weight:600;box-shadow:0 2px 8px rgba(56,139,253,0.2);">🔄 重载</button>
+        </div>
+    </div>
+
+    <!-- MCP 工具管理展开/折叠 -->
+    <div class="toggle-row" style="margin:8px 0 4px 0;display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="toggleMcpToolsPanel()">
+        <span id="mcp-tools-arrow" style="font-size:10px;color:var(--text-muted);transition:transform 0.2s;display:inline-block;">▶</span>
+        <label style="cursor:pointer;font-size:12px;pointer-events:none;color:var(--text-secondary);">🛠️ MCP 工具管理</label>
+        <span id="mcp-tools-badge" style="font-size:10px;color:var(--text-muted);margin-left:auto;">未加载</span>
+    </div>
+
+    <!-- MCP 工具管理面板 -->
+    <div id="mcp-tools-panel" style="display:none;margin:4px 0;padding:8px 10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;font-size:12px;">
+        <div id="mcp-tools-list" style="max-height:200px;overflow-y:auto;">
+            <span style="color:var(--text-muted);font-size:11px;">点击 🔄 重载 或使用 mcp-init 初始化连接</span>
         </div>
     </div>
 
@@ -1276,13 +1394,42 @@ body {
     <div id="mcp-edit-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
         <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:24px;max-width:420px;width:90%;margin:20px;">
             <h3 style="margin:0 0 16px;color:#e0e0f0;font-size:15px;" id="mcp-edit-title">添加 MCP 服务器</h3>
-            <input id="mcp-edit-name" placeholder="名称（如：adk-docs-mcp）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
-            <input id="mcp-edit-command" placeholder="命令（如：python、node）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
-            <input id="mcp-edit-args" placeholder="参数（用空格分隔，如：-m mcp_adk_docs）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
-            <input id="mcp-edit-cwd" placeholder="工作目录（可选）" style="width:100%;padding:8px 10px;margin-bottom:16px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
-            <div style="display:flex;gap:10px;">
+            <input id="mcp-edit-name" placeholder="名称（如：tencent-map）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+            <div style="display:flex;gap:6px;margin-bottom:8px;">
+                <button id="mcp-type-stdio" onclick="setMcpType('stdio')" style="flex:1;padding:6px 0;background:#0d7377;color:#fff;border:1px solid #0ea5e9;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">命令行 (stdio)</button>
+                <button id="mcp-type-url" onclick="setMcpType('url')" style="flex:1;padding:6px 0;background:transparent;color:#8a8aaa;border:1px solid #3a3a6a;border-radius:6px;cursor:pointer;font-size:11px;">URL (SSE)</button>
+            </div>
+            <div id="mcp-fields-stdio">
+                <input id="mcp-edit-command" placeholder="命令（如：npx、python、node）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+                <input id="mcp-edit-args" placeholder="参数（用空格分隔，如：-y @amap/amap-maps-mcp-server）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+                <input id="mcp-edit-cwd" placeholder="工作目录（可选）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+            </div>
+            <div id="mcp-fields-url" style="display:none;">
+                <input id="mcp-edit-url" placeholder="URL（如：https://mcp.map.qq.com/sse?key=xxx）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+            </div>
+            <div style="display:flex;gap:10px;margin-top:8px;">
                 <button onclick="document.getElementById('mcp-edit-modal').style.display='none'" style="flex:1;padding:10px 0;background:transparent;color:#8a8aaa;border:1px solid #3a3a6a;border-radius:8px;cursor:pointer;font-size:13px;">取消</button>
                 <button id="mcp-edit-save" onclick="doSaveMcpServer()" style="flex:1;padding:10px 0;background:linear-gradient(135deg,#0d7377,#0ea5e9);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加定时任务弹窗 -->
+    <div id="interval-add-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+        <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:420px;width:90%;margin:20px;">
+            <h3 style="margin:0 0 16px;color:var(--text-primary);font-size:15px;">➕ 添加定时任务</h3>
+            <input id="interval-add-name" placeholder="任务名称（如：监控CPU）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px;box-sizing:border-box;">
+            <div style="display:flex;gap:8px;margin-bottom:8px;">
+                <input id="interval-add-interval" type="number" placeholder="间隔（毫秒，默认5000）" value="5000" style="flex:1;padding:8px 10px;background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px;box-sizing:border-box;">
+                <select id="interval-add-mode" style="padding:8px 10px;background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px;cursor:pointer;">
+                    <option value="command">执行命令</option>
+                    <option value="trigger">定时提醒</option>
+                </select>
+            </div>
+            <textarea id="interval-add-content" placeholder="命令或提醒消息内容" rows="3" style="width:100%;padding:8px 10px;margin-bottom:12px;background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+            <div style="display:flex;gap:10px;">
+                <button onclick="document.getElementById('interval-add-modal').style.display='none'" style="flex:1;padding:10px 0;background:transparent;color:var(--text-secondary);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;">取消</button>
+                <button onclick="doAddIntervalFromUI()" style="flex:1;padding:10px 0;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">创建</button>
             </div>
         </div>
     </div>
@@ -1304,22 +1451,41 @@ body {
 
 <!-- 技能弹窗 -->
 <div id="skills-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;" onclick="if(event.target===this)closeSkillsModal()">
-    <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:24px;max-width:440px;width:90%;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.5);">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-            <h3 style="margin:0;color:#e0e0f0;font-size:15px;">🧩 已加载的技能</h3>
+    <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:24px;max-width:480px;width:90%;max-height:75vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h3 style="margin:0;color:#e0e0f0;font-size:15px;">🧩 技能管理</h3>
             <button onclick="closeSkillsModal()" style="background:none;border:none;color:#8a8aaa;font-size:18px;cursor:pointer;padding:0 4px;">✕</button>
         </div>
         <div id="skills-modal-list" style="overflow-y:auto;flex:1;min-height:0;">
             <div class="skill-empty" style="padding:32px;text-align:center;color:#6a6a8a;font-size:13px;">无已加载技能<br><span style="font-size:11px;opacity:0.7;">请通过侧边栏 📥 按钮导入技能文件夹</span></div>
         </div>
         <div style="margin-top:12px;padding-top:12px;border-top:1px solid #3a3a5a;font-size:11px;color:#6a6a8a;text-align:center;">
-            点击「使用」按钮将技能指令发送给 AI
+            <span style="color:#22d3ee;">已同步</span> = 已复制到工作目录可自定义 | <span style="color:#8a8aaa;">仓库中</span> = 直接使用仓库版本
+        </div>
+    </div>
+</div>
+
+<!-- 存储路径设置弹窗（偏好设置 → 技能存储路径...） -->
+<div id="storage-path-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:10000;align-items:center;justify-content:center;" onclick="if(event.target===this)closeStoragePathDialog()">
+    <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:24px;max-width:440px;width:90%;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h3 style="margin:0;color:#e0e0f0;font-size:15px;">📁 技能存储路径</h3>
+            <button onclick="closeStoragePathDialog()" style="background:none;border:none;color:#8a8aaa;font-size:18px;cursor:pointer;padding:0 4px;">✕</button>
+        </div>
+        <p style="font-size:12px;color:#8a8aaa;margin:0 0 12px;">技能等大文件存储路径。留空则使用默认 AppData 路径。AppData 中仅保留小型配置文件。</p>
+        <div id="storage-path-current" style="font-size:11px;color:#6a6a8a;margin-bottom:12px;word-break:break-all;"></div>
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+            <button onclick="selectStoragePathFolder()" style="padding:8px 16px;background:rgba(255,255,255,0.06);border:1px solid #3a3a6a;border-radius:8px;color:#ccc;cursor:pointer;font-size:13px;">选择文件夹...</button>
+            <button onclick="resetStoragePathToDefault()" style="padding:8px 16px;background:transparent;border:1px solid #5a3a3a;border-radius:8px;color:#e88;cursor:pointer;font-size:13px;">恢复默认</button>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button onclick="closeStoragePathDialog()" style="padding:8px 16px;background:transparent;color:#8a8aaa;border:1px solid #3a3a6a;border-radius:8px;cursor:pointer;font-size:13px;">关闭</button>
         </div>
     </div>
 </div>
 
 <!-- 确认弹窗（DOM 弹窗，替代原生 confirm 以避免焦点丢失） -->
-<div id="confirm-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+<div id="confirm-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:10001;align-items:center;justify-content:center;">
     <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:28px 24px;max-width:400px;width:90%;margin:20px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
         <p id="confirm-modal-text" style="margin:0 0 24px;color:#e0e0f0;font-size:15px;line-height:1.6;text-align:center;"></p>
         <div style="display:flex;gap:12px;justify-content:center;">
@@ -1346,16 +1512,21 @@ body {
     <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:32px 28px;max-width:420px;width:92%;margin:20px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
         <h3 id="ncm-title" style="margin:0 0 4px;color:#e0e0f0;font-size:22px;font-weight:700;text-align:center;">新建对话</h3>
         <p id="ncm-desc" style="margin:0 0 24px;color:#8a8aaa;font-size:13px;text-align:center;">选择对话模式以开始</p>
-        <div id="newchat-modal-modes" style="display:flex;gap:14px;margin-bottom:28px;">
-            <button class="ncm-mode active" data-mode="expert" style="flex:1;padding:18px 10px;border:2px solid #0ea5e9;border-radius:12px;background:rgba(14,165,233,.1);color:#c0e0ff;cursor:pointer;font-size:14px;text-align:center;transition:all .2s ease;display:flex;flex-direction:column;gap:6px;">
-                <span style="font-size:24px;">🔍</span>
-                <span style="font-weight:700;font-size:15px;">专家模式</span>
-                <span style="font-size:11px;color:#7a9aba;line-height:1.4;">深度思考，逐步推理<br>适合复杂问题分析</span>
+        <div id="newchat-modal-modes" style="display:flex;gap:10px;margin-bottom:28px;">
+            <button class="ncm-mode active" data-mode="expert" style="flex:1;padding:14px 8px;border:2px solid #0ea5e9;border-radius:12px;background:rgba(14,165,233,.1);color:#c0e0ff;cursor:pointer;font-size:13px;text-align:center;transition:all .2s ease;display:flex;flex-direction:column;gap:4px;">
+                <span style="font-size:22px;">🧿</span>
+                <span style="font-weight:700;font-size:14px;">专家模式</span>
+                <span style="font-size:10px;color:#7a9aba;line-height:1.3;">深度思考，逐步推理</span>
             </button>
-            <button class="ncm-mode" data-mode="quick" style="flex:1;padding:18px 10px;border:2px solid #3a3a6a;border-radius:12px;background:transparent;color:#8a8aaa;cursor:pointer;font-size:14px;text-align:center;transition:all .2s ease;display:flex;flex-direction:column;gap:6px;">
-                <span style="font-size:24px;">⚡</span>
-                <span style="font-weight:700;font-size:15px;">快速模式</span>
-                <span style="font-size:11px;color:#5a5a7a;line-height:1.4;">快速响应，简洁回答<br>适合日常问答查询</span>
+            <button class="ncm-mode" data-mode="image" style="flex:1;padding:14px 8px;border:2px solid #3a3a6a;border-radius:12px;background:transparent;color:#8a8aaa;cursor:pointer;font-size:13px;text-align:center;transition:all .2s ease;display:flex;flex-direction:column;gap:4px;">
+                <span style="font-size:22px;">🖼</span>
+                <span style="font-weight:700;font-size:14px;">识图模式</span>
+                <span style="font-size:10px;color:#5a5a7a;line-height:1.3;">快速看图，找控件</span>
+            </button>
+            <button class="ncm-mode" data-mode="quick" style="flex:1;padding:14px 8px;border:2px solid #3a3a6a;border-radius:12px;background:transparent;color:#8a8aaa;cursor:pointer;font-size:13px;text-align:center;transition:all .2s ease;display:flex;flex-direction:column;gap:4px;">
+                <span style="font-size:22px;">⚡</span>
+                <span style="font-weight:700;font-size:14px;">快速模式</span>
+                <span style="font-size:10px;color:#5a5a7a;line-height:1.3;">快速响应，简洁回答</span>
             </button>
         </div>
         <div style="display:flex;gap:12px;justify-content:center;">
@@ -1570,6 +1741,111 @@ function updateSendBtn() {
     }
 }
 
+// 工具图标映射
+function getToolIcon(toolName) {
+    var iconMap = {
+        'read': '📖', 'local-read': '📖',
+        'write': '✏️', 'local-write': '✏️',
+        'exec': '⚙️', 'local-exec': '⚙️',
+        'cmd': '🖥️', 'local-cmd': '🖥️',
+        'edit': '🔧', 'local-edit': '🔧',
+        'delete': '🗑️', 'local-delete': '🗑️',
+        'exists': '🔍', 'local-exists': '🔍',
+        'list': '📂', 'local-list': '📂',
+        'break': '⏹️', 'local-break': '⏹️',
+        'skill': '🧩', 'local-skill': '🧩',
+        'mcp-list': '🔌',
+        'mcp-init': '🔄',
+        'browser': '🌐', 'local-browser': '🌐',
+        'save': '💾', 'local-save': '💾',
+        'interval': '⏰', 'local-interval': '⏰',
+        'file': '📄', 'local-file': '📄',
+        'open': '📂', 'local-open': '📂',
+        'rename': '📝', 'local-rename': '📝',
+        'mkdir': '📁', 'local-mkdir': '📁',
+        'copy': '📋', 'local-copy': '📋',
+        'move': '📤', 'local-move': '📤',
+        'url': '🔗', 'local-url': '🔗',
+        'grep': '🔎', 'local-grep': '🔎',
+        'help': '❓', 'local-help': '❓',
+        'config': '⚙️', 'local-config': '⚙️',
+        'env': '🌍', 'local-env': '🌍',
+        'shell': '🐚', 'local-shell': '🐚',
+        'python': '🐍', 'local-python': '🐍',
+        'node': '🟢', 'local-node': '🟢',
+        'npm': '📦', 'local-npm': '📦',
+        'git': '📤', 'local-git': '📤',
+        'ssh': '🔒', 'local-ssh': '🔒',
+        'http': '🌐', 'local-http': '🌐',
+        'api': '🔌', 'local-api': '🔌',
+        'json': '📋', 'local-json': '📋',
+        'yaml': '📄', 'local-yaml': '📄',
+        'xml': '📄', 'local-xml': '📄',
+        'csv': '📊', 'local-csv': '📊',
+        'pdf': '📕', 'local-pdf': '📕',
+        'image': '🖼️', 'local-image': '🖼️',
+        'audio': '🎵', 'local-audio': '🎵',
+        'video': '🎬', 'local-video': '🎬',
+        'zip': '📦', 'local-zip': '📦',
+        'tar': '📦', 'local-tar': '📦',
+        '7z': '📦', 'local-7z': '📦',
+        'unzip': '📂', 'local-unzip': '📂',
+        'extract': '📂', 'local-extract': '📂',
+        'convert': '🔄', 'local-convert': '🔄',
+        'resize': '🔲', 'local-resize': '🔲',
+        'crop': '✂️', 'local-crop': '✂️',
+        'ocr': '📝', 'local-ocr': '📝',
+        'translate': '🌍', 'local-translate': '🌍',
+        'summary': '📋', 'local-summary': '📋',
+        'analyze': '🧠', 'local-analyze': '🧠',
+        'search': '🔍', 'local-search': '🔍',
+        'websearch': '🔍', 'local-websearch': '🔍',
+        'weather': '🌤️', 'local-weather': '🌤️',
+        'time': '⏰', 'local-time': '⏰',
+        'date': '📅', 'local-date': '📅',
+        'calc': '🧮', 'local-calc': '🧮',
+        'math': '∑', 'local-math': '∑',
+        'crypto': '🔐', 'local-crypto': '🔐',
+        'hash': '🔑', 'local-hash': '🔑',
+        'base64': '🔢', 'local-base64': '🔢',
+        'encode': '🔢', 'local-encode': '🔢',
+        'decode': '🔓', 'local-decode': '🔓',
+        'uuid': '🔢', 'local-uuid': '🔢',
+        'random': '🎲', 'local-random': '🎲',
+        'sleep': '😴', 'local-sleep': '😴',
+        'ping': '📡', 'local-ping': '📡',
+        'dns': '🌐', 'local-dns': '🌐',
+        'port': '🔌', 'local-port': '🔌',
+        'network': '🌐', 'local-network': '🌐',
+        'system': '💻', 'local-system': '💻',
+        'memory': '💾', 'local-memory': '💾',
+        'cpu': '⚙️', 'local-cpu': '⚙️',
+        'disk': '💿', 'local-disk': '💿',
+        'process': '⚙️', 'local-process': '⚙️',
+        'kill': '💀', 'local-kill': '💀',
+        'ps': '📋', 'local-ps': '📋',
+        'top': '📊', 'local-top': '📊',
+        'log': '📝', 'local-log': '📝',
+        'debug': '🐛', 'local-debug': '🐛',
+        'trace': '🔍', 'local-trace': '🔍',
+        'test': '🧪', 'local-test': '🧪',
+        'build': '🔨', 'local-build': '🔨',
+        'deploy': '🚀', 'local-deploy': '🚀',
+        'run': '▶️', 'local-run': '▶️',
+        'start': '▶️', 'local-start': '▶️',
+        'stop': '⏹️', 'local-stop': '⏹️',
+        'restart': '🔄', 'local-restart': '🔄',
+        'status': '📊', 'local-status': '📊',
+        'info': 'ℹ️', 'local-info': 'ℹ️',
+        'version': '📌', 'local-version': '📌',
+        'about': 'ℹ️', 'local-about': 'ℹ️',
+        'exit': '🚪', 'local-exit': '🚪',
+        'quit': '🚪', 'local-quit': '🚪',
+        'help': '❓', 'local-help': '❓'
+    };
+    return iconMap[toolName] || iconMap[toolName.replace(/^local-/, '')] || '📦';
+}
+
 // 生成状态（用于停止按钮）
 let isGenerating = false;
 let isExecutingTasks = false;
@@ -1579,6 +1855,19 @@ let isInWorkflow = false;
 let workflowWrappers = []; // 多个 <details>，每轮一个
 function getCurrentWorkflowWrapper() { return workflowWrappers[workflowWrappers.length - 1] || null; }
 let currentRootDir = ''; // 用于解析本地图片路径
+
+// 同步定时任务状态到主进程
+function syncIntervalState() {
+    if (window.electronAPI && window.electronAPI.intervalStateUpdate) {
+        window.electronAPI.intervalStateUpdate({ isExecuting: isExecutingTasks, isGenerating: isGenerating });
+    }
+}
+// 通知主进程清空定时消息队列
+function flushIntervalQueue() {
+    if (window.electronAPI && window.electronAPI.intervalFlushQueue) {
+        window.electronAPI.intervalFlushQueue();
+    }
+}
 
 // 初始化时获取根目录
 window.electronAPI.getRootDir().then(function(dir) { currentRootDir = dir || ''; });
@@ -1626,19 +1915,55 @@ function loadHistoryList() {
             item.innerHTML = '<div class="hi-title">' + escapeHtml(h.title || '(无标题)') + '</div>'
                 + '<div class="hi-meta">' + formatTime(h.updatedAt) + ' | ' + h.messageCount + '条'
                 + (h.subSessionCount > 0 ? ' +' + h.subSessionCount + '子' : '') + '</div>'
+                + '<span class="hi-rename" title="重命名">&#x270E;</span>'
                 + '<span class="hi-delete" title="删除此对话">&#x2715;</span>';
             var deleteBtn = item.querySelector('.hi-delete');
             deleteBtn.addEventListener('click', async function(e) {
                 e.stopPropagation();
                 if (!await confirmModal('确定删除此历史对话？')) return;
-                // 加载历史详情，获取 deepseekUrl
-                var detailRes = await window.electronAPI.historyLoad(h.id);
-                var deepseekUrl = (detailRes && detailRes.success && detailRes.history) ? detailRes.history.deepseekUrl : '';
-                if (deepseekUrl && await confirmModal('是否同时也删除 DeepSeek 上的原始对话？')) {
-                    await window.electronAPI.agentDeleteDeepseekConversation(deepseekUrl);
+                showBlockingOverlay('正在删除对话...');
+                try {
+                    var detailRes = await window.electronAPI.historyLoad(h.id);
+                    var deepseekUrl = (detailRes && detailRes.success && detailRes.history) ? detailRes.history.deepseekUrl : '';
+                    if (deepseekUrl && await confirmModal('是否同时也删除 DeepSeek 上的原始对话？')) {
+                        await window.electronAPI.agentDeleteDeepseekConversation(deepseekUrl);
+                    }
+                    deleteHistoryItem(h.id);
+                } finally {
+                    hideBlockingOverlay();
                 }
-                deleteHistoryItem(h.id);
             });
+            // 双击标题重命名
+            var titleEl = item.querySelector('.hi-title');
+            var renameBtn = item.querySelector('.hi-rename');
+            var renameTitle = function() {
+                if (titleEl.querySelector('input')) return;
+                var oldTitle = titleEl.textContent;
+                var input = document.createElement('input');
+                input.type = 'text';
+                input.value = oldTitle;
+                input.style.cssText = 'width:100%;border:1px solid var(--accent);border-radius:4px;padding:2px 4px;font-size:12px;background:var(--bg-base);color:var(--text-primary);outline:none;';
+                titleEl.textContent = '';
+                titleEl.appendChild(input);
+                input.focus();
+                input.select();
+                var finish = async function(save) {
+                    var newTitle = input.value.trim();
+                    titleEl.textContent = oldTitle;
+                    input.remove();
+                    if (save && newTitle && newTitle !== oldTitle) {
+                        titleEl.textContent = newTitle;
+                        await window.electronAPI.historyRename(h.id, newTitle);
+                    }
+                };
+                input.addEventListener('blur', function() { finish(true); });
+                input.addEventListener('keydown', function(ev) {
+                    if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+                    if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+                });
+            };
+            titleEl.addEventListener('dblclick', function(e) { e.stopPropagation(); renameTitle(); });
+            renameBtn.addEventListener('click', function(e) { e.stopPropagation(); renameTitle(); });
             item.onclick = function() { loadHistoryConversation(h.id); };
             listEl.appendChild(item);
         });
@@ -1717,7 +2042,7 @@ function loadHistoryConversation(id) {
         document.getElementById('deepthink-switch').classList.toggle('on', agentDeepThink);
         document.getElementById('pre-init-section').style.display = 'none';
         document.getElementById('post-init-section').style.display = 'block';
-        document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : '快速模式';
+        document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : (agentMode === 'image' ? '识图模式' : '快速模式');
 
         currentHistoryId = h.id;
         conversationId = parseInt(h.id) || Date.now();
@@ -1741,6 +2066,27 @@ function loadHistoryConversation(id) {
 
         // ======== 渲染消息（workflow 容器在渲染过程中按需创建） ========
         renderHistoryMessages(area, h.messages || [], h.workflowCollapsed);
+
+        // 检查是否有上一轮对话保存的定时任务，提示恢复
+        setTimeout(function() {
+            if (window.electronAPI && window.electronAPI.intervalGetSaved) {
+                window.electronAPI.intervalGetSaved().then(function(r) {
+                    if (r && r.success && r.tasks && r.tasks.length > 0) {
+                        var names = r.tasks.map(function(t) { return t.taskName; }).join('、');
+                        if (confirm('检测到上一轮对话有 ' + r.tasks.length + ' 个定时任务（' + names + '），是否恢复？')) {
+                            window.electronAPI.intervalRestoreSaved().then(function(rr) {
+                                if (rr && rr.success) {
+                                    addAssistantSegments([{ type: 'text', content: '♻️ 已恢复 ' + rr.restored.length + ' 个定时任务：' + rr.restored.join('、') }]);
+                                }
+                            });
+                        } else {
+                            // 用户拒绝恢复，清空保存列表
+                            window.electronAPI.intervalClearSaved();
+                        }
+                    }
+                });
+            }
+        }, 500);
 
         // ======== 然后异步校验 DeepSeek 会话有效性 ========
         if (currentHistoryDeepseekUrl) {
@@ -1877,7 +2223,9 @@ function renderWorkflowSegments(container, segments) {
             toolCard.style.marginLeft = '20px';
             var toolHeader = document.createElement('div');
             toolHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;font-size:13px;user-select:none;transition:background .2s;';
-            toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span class="tool-name" style="font-weight:600;">' + escapeHtml(seg.lang || 'unknown') + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;">● 已返回</span>';
+            var toolName = (seg.lang || 'unknown').replace(/^local-/, '');
+            var toolIcon = getToolIcon(seg.lang || '');
+            toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span style="font-size:14px;margin-right:6px;">' + toolIcon + '</span><span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;">● 已返回</span>';
             var toolBody = document.createElement('div');
             toolBody.className = 'tool-card-body';
             toolBody.style.cssText = 'display:none;padding:0;border-top:1px solid var(--border-light);';
@@ -1997,7 +2345,7 @@ function deleteHistoryItem(id) {
             area.innerHTML = '';
             var empty = document.createElement('div');
             empty.className = 'empty-msg';
-            empty.textContent = '点击「+新对话」开始新对话';
+            empty.textContent = '选择模式后点击「创建对话」开始';
             area.appendChild(empty);
             document.getElementById('pre-init-section').style.display = '';
             document.getElementById('post-init-section').style.display = 'none';
@@ -2028,7 +2376,7 @@ function toggleDeepThink() {
 async function startNewChat() {
     // 清除 qwen 进度指示
     // qwenProgressEl 已迁移到状态栏
-    var btn = document.getElementById('new-chat-btn');
+    var btn = document.getElementById('history-new-chat-btn');
     var initBtn = document.getElementById('init-btn');
     var sendBtn = document.getElementById('send-prompt-btn');
 
@@ -2041,6 +2389,10 @@ async function startNewChat() {
     initCompleted = false;
     document.getElementById('pre-init-section').style.display = '';
     document.getElementById('post-init-section').style.display = 'none';
+    // 同步预初始化模式选择器
+    document.querySelectorAll('#pre-init-mode-selector .mode-btn').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-mode') === agentMode);
+    });
     hideLoading();
 
     btn.disabled = true;
@@ -2084,7 +2436,7 @@ async function startNewChat() {
         // 初始化成功：隐藏模式选择，显示输入框和模式标签
         document.getElementById('pre-init-section').style.display = 'none';
         document.getElementById('post-init-section').style.display = 'block';
-        document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : '快速模式';
+        document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : (agentMode === 'image' ? '识图模式' : '快速模式');
 
         conversationId = Date.now();
         showStatus('初始化完成');
@@ -2102,6 +2454,15 @@ async function startNewChat() {
 
 // ==================== 新建对话弹窗 ====================
 var newchatModalMode = 'expert';
+
+// 预初始化模式选择（直接在界面上切换）
+function selectPreInitMode(mode, btn) {
+    agentMode = mode;
+    document.querySelectorAll('#pre-init-mode-selector .mode-btn').forEach(function(b) {
+        b.classList.remove('active');
+    });
+    btn.classList.add('active');
+}
 
 function showNewChatModal() {
     newchatModalMode = agentMode || 'expert';
@@ -2487,7 +2848,9 @@ function addAssistantSegments(segments, skipSave) {
             toolCard.style.marginLeft = '20px';
             var toolHeader = document.createElement('div');
             toolHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;font-size:13px;user-select:none;transition:background .2s;';
-            toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span class="tool-name" style="font-weight:600;">' + escapeHtml(seg.lang || 'unknown') + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;display:flex;align-items:center;gap:4px;"><span class="tool-pulse" style="width:6px;height:6px;border-radius:50%;background:var(--warning);display:inline-block;"></span>执行中...</span>';
+            var toolName2 = (seg.lang || 'unknown').replace(/^local-/, '');
+            var toolIcon2 = getToolIcon(seg.lang || '');
+            toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span style="font-size:14px;margin-right:6px;">' + toolIcon2 + '</span><span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName2) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;display:flex;align-items:center;gap:4px;"><span class="tool-pulse" style="width:6px;height:6px;border-radius:50%;background:var(--warning);display:inline-block;"></span>执行中...</span>';
             var toolBody = document.createElement('div');
             toolBody.className = 'tool-card-body';
             toolBody.style.cssText = 'display:none;padding:0;border-top:1px solid var(--border-light);';
@@ -2642,7 +3005,8 @@ function addAssistantSegments(segments, skipSave) {
                 var autoHeader = document.createElement('div');
                 autoHeader.className = 'tool-header';
                 autoHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;font-size:13px;user-select:none;';
-                autoHeader.innerHTML = '<span class="tool-name" style="font-weight:600;">' + escapeHtml(seg.lang || 'tool') + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;">● 已返回</span>';
+                var toolName3 = (seg.lang || 'tool').replace(/^local-/, '');
+                autoHeader.innerHTML = '<span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName3) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;">● 已返回</span>';
                 autoCard.appendChild(autoHeader);
                 var autoResult = document.createElement('div');
                 autoResult.className = 'tool-result-section';
@@ -2702,7 +3066,7 @@ function showLoading() {
     // 先标记生成状态，再滚动，避免 scrollToBottom 误判为未读新消息从而弹出箭头
     isTaskChainActive = true;
     var btn = document.getElementById('send-prompt-btn');
-    if (btn) { isGenerating = true; updateSendBtn(); }
+    if (btn) { isGenerating = true; updateSendBtn(); syncIntervalState(); }
     scrollToBottom();
     showStatus('正在处理...');
     // 动态省略号动画
@@ -2789,6 +3153,229 @@ function scrollToBottomRAF(area, attempts) {
 var bottomExtrasCollapsed = false;
 var MODAL_IDS = ['qqbot-edit-modal', 'mcp-edit-modal', 'form-modal'];
 
+// ==================== 后台任务状态管理 ====================
+var _activeIntervals = [];  // [{ taskName, command, interval, mode, createdAt, id }]
+var _statusPanelCollapsed = true;
+var _intervalCountdownTimer = null;
+var _lastIntervalCount = 0;
+
+function startIntervalCountdown() {
+    if (_intervalCountdownTimer) return;
+    _intervalCountdownTimer = setInterval(function() {
+        if (_activeIntervals.length > 0) {
+            updateIntervalDisplay();
+        }
+    }, 1000);
+}
+
+function stopIntervalCountdown() {
+    if (_intervalCountdownTimer) {
+        clearInterval(_intervalCountdownTimer);
+        _intervalCountdownTimer = null;
+    }
+}
+
+function toggleStatusPanel() {
+    var body = document.getElementById('status-panel-body');
+    var arrow = document.getElementById('status-panel-arrow');
+    if (!body || !arrow) return;
+    _statusPanelCollapsed = !_statusPanelCollapsed;
+    body.style.display = _statusPanelCollapsed ? 'none' : 'block';
+    arrow.style.transform = _statusPanelCollapsed ? '' : 'rotate(90deg)';
+    if (!_statusPanelCollapsed) {
+        refreshTerminals();
+    }
+}
+
+function addActiveInterval(data) {
+    // data: { taskName, command, interval, mode }
+    // 去重：同名任务已存在则跳过
+    var existing = _activeIntervals.filter(function(item) { return item.taskName === (data.taskName || '未命名'); });
+    if (existing.length > 0) return existing[0].id;
+    
+    var id = 'int_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    _activeIntervals.push({
+        taskName: data.taskName || '未命名',
+        command: data.command || '',
+        interval: data.interval || 5000,
+        mode: data.mode || 'command',
+        createdAt: Date.now(),
+        id: id
+    });
+    updateIntervalDisplay();
+    // 在聊天区显示简洁提示（仅首次）
+    var intervalSec = ((data.interval || 5000) / 1000).toFixed((data.interval || 5000) >= 10000 ? 0 : 1);
+    var modeLabel = data.mode === 'trigger' ? '定时提醒' : '执行命令';
+    if (typeof addAssistantSegments === 'function') {
+        addAssistantSegments([{ type: 'text', content: '⏰ 创建后台定时任务: `' + (data.taskName || '未命名') + '`（' + modeLabel + '，每 ' + intervalSec + ' 秒）' }]);
+    }
+    return id;
+}
+
+function removeActiveInterval(taskNameOrId) {
+    var removed = [];
+    _activeIntervals = _activeIntervals.filter(function(item) {
+        if (item.id === taskNameOrId || item.taskName === taskNameOrId) {
+            removed.push(item);
+            return false;
+        }
+        return true;
+    });
+    updateIntervalDisplay();
+    if (removed.length > 0 && typeof addAssistantSegments === 'function') {
+        addAssistantSegments([{ type: 'text', content: '⏹️ 终止定时任务: `' + removed[0].taskName + '`' }]);
+    }
+}
+
+function clearActiveIntervals() {
+    _activeIntervals = [];
+    _lastIntervalCount = 0;
+    updateIntervalDisplay();
+}
+
+function updateIntervalDisplay() {
+    var list = document.getElementById('interval-list');
+    var count = document.getElementById('interval-count');
+    if (!list) return;
+    var prevCount = _lastIntervalCount || 0;
+    _lastIntervalCount = _activeIntervals.length;
+    if (count) count.textContent = _activeIntervals.length;
+    if (_activeIntervals.length === 0) {
+        list.innerHTML = '<span class="sp-empty">无活跃定时任务</span>';
+        stopIntervalCountdown();
+        // 清除 controlbar 定时任务状态
+        var oldEl = statusMap['_ctrl_interval_count'];
+        if (oldEl) { oldEl.remove(); delete statusMap['_ctrl_interval_count']; }
+        var bar = document.getElementById('status-bar');
+        if (bar && Object.keys(statusMap).length === 0) bar.style.display = 'none';
+        if (window.electronAPI && window.electronAPI.agentStatusToControlbar) {
+            window.electronAPI.agentStatusToControlbar('', '');
+        }
+    } else {
+        startIntervalCountdown();
+        // 只在数量变化时更新 controlbar（避免每秒刷屏）
+        if (_activeIntervals.length !== prevCount) {
+            addStatus('_ctrl_interval_count', '⏰ ' + _activeIntervals.length + '个定时任务', 'tool', true);
+        }
+        var now = Date.now();
+        list.innerHTML = _activeIntervals.map(function(item) {
+            var display = item.taskName || item.command;
+            if (display.length > 28) display = display.substring(0, 28) + '…';
+            var elapsed = now - item.createdAt;
+            var remaining = item.interval - (elapsed % item.interval);
+            var remainSec = (remaining / 1000).toFixed(remaining >= 10000 ? 0 : 1);
+            var modeIcon = item.mode === 'trigger' ? '💬' : '⚡';
+            return '<div class="sp-item">' +
+                '<span class="sp-item-dot" style="color:#8bc88b;">●</span>' +
+                '<code class="sp-item-code" title="' + escapeHtml(item.taskName || '') + '">' + escapeHtml(display) + '</code>' +
+                '<span class="sp-item-meta" title="下次触发: ' + remainSec + 's">' + modeIcon + remainSec + 's</span>' +
+                '<span class="sp-item-stop" onclick="stopIntervalFromUI(\'' + escapeHtml(item.taskName || item.id) + '\')" style="cursor:pointer;color:var(--danger);margin-left:4px;font-size:12px;flex-shrink:0;padding:0 2px;border-radius:3px;" title="停止任务">✕</span>' +
+                '</div>';
+        }).join('');
+    }
+    // 更新 badge
+    var badge = document.getElementById('status-panel-badge');
+    if (badge) {
+        if (_activeIntervals.length > 0) {
+            badge.textContent = '🔄 ' + _activeIntervals.length;
+        } else {
+            badge.textContent = '';
+        }
+    }
+}
+
+function showAddIntervalModal() {
+    document.getElementById('interval-add-modal').style.display = 'flex';
+    document.getElementById('interval-add-name').value = '';
+    document.getElementById('interval-add-interval').value = '5000';
+    document.getElementById('interval-add-content').value = '';
+}
+
+function doAddIntervalFromUI() {
+    var name = document.getElementById('interval-add-name').value.trim();
+    var interval = parseInt(document.getElementById('interval-add-interval').value) || 5000;
+    var mode = document.getElementById('interval-add-mode').value;
+    var content = document.getElementById('interval-add-content').value.trim();
+
+    if (!name) { alert('请输入任务名称'); return; }
+    if (!content) { alert('请输入命令或消息内容'); return; }
+
+    document.getElementById('interval-add-modal').style.display = 'none';
+
+    // 先本地添加到面板（确保 UI 立即更新）
+    addActiveInterval({ taskName: name, command: content, interval: interval, mode: mode });
+
+    // 通过 IPC 发送到 DeepSeek 页面创建实际定时器
+    if (window.electronAPI && window.electronAPI.intervalAddFromUI) {
+        window.electronAPI.intervalAddFromUI({
+            taskName: name,
+            interval: interval,
+            mode: mode,
+            command: mode === 'command' ? content : '',
+            message: mode === 'trigger' ? content : ''
+        }).then(function(result) {
+            if (!result || !result.success) {
+                // IPC 创建失败，从面板移除
+                removeActiveInterval(name);
+                alert('创建失败: ' + ((result && result.error) || 'DeepSeek 页面不可用'));
+            }
+        }).catch(function(e) {
+            removeActiveInterval(name);
+            alert('创建失败: ' + e.message);
+        });
+    }
+}
+
+function stopIntervalFromUI(taskName) {
+    if (!taskName) return;
+    // 通过 IPC 发送到 DeepSeek 页面停止
+    if (window.electronAPI && window.electronAPI.intervalStopFromUI) {
+        window.electronAPI.intervalStopFromUI(taskName).then(function(result) {
+            // 结果会在 agent-message 中处理
+        }).catch(function(e) {
+            console.warn('[Interval] Stop failed:', e);
+        });
+    }
+    // 同时也从本地列表中移除
+    removeActiveInterval(taskName);
+}
+
+async function refreshTerminals() {
+    try {
+        var result = await window.electronAPI.terminalList();
+        var list = document.getElementById('terminal-list');
+        var count = document.getElementById('terminal-count');
+        if (!list) return;
+        if (!result || !Array.isArray(result)) {
+            list.innerHTML = '<span class="sp-empty">无活跃终端</span>';
+            if (count) count.textContent = '0';
+            return;
+        }
+        var active = result.filter(function(t) { return t.running; });
+        if (count) count.textContent = active.length;
+        if (active.length === 0) {
+            list.innerHTML = '<span class="sp-empty">无活跃终端</span>';
+        } else {
+            list.innerHTML = active.map(function(t) {
+                return '<div class="sp-item">' +
+                    '<span class="sp-item-dot" style="color:#3fb950;">●</span>' +
+                    '<code class="sp-item-code">' + escapeHtml(t.name) + '</code>' +
+                    '<span class="sp-item-meta">' + (t.stdoutLen || 0) + 'B</span>' +
+                    '</div>';
+            }).join('');
+        }
+    } catch (e) {
+        console.warn('[Status] Refresh terminals failed:', e);
+    }
+}
+
+// 定时刷新终端状态（打开面板时才有效）
+setInterval(function() {
+    if (!_statusPanelCollapsed) {
+        refreshTerminals();
+    }
+}, 5000);
+
 function toggleBottomExtras(forceCollapse) {
     var extras = document.getElementById('bottom-extras');
     var btn = document.getElementById('bottom-collapse-btn');
@@ -2859,6 +3446,7 @@ window.electronAPI.onAgentMessage(function(data) {
             workflowWrappers.push(details);
         }
         isExecutingTasks = true;
+        syncIntervalState();
         // isGenerating 保持 true（由 showLoading 设置），确保后续内容到达时自动滚动
         hideLoading();
         scrollToBottom();
@@ -2869,12 +3457,15 @@ window.electronAPI.onAgentMessage(function(data) {
         // 当前命令执行完毕，但任务链未结束（结果还要反馈给 DeepSeek，DeepSeek 可能继续生成）
         // 只有用户主动停止时才结束任务链
         isExecutingTasks = false;
+        syncIntervalState();
         if (data.stopped) {
             // 用户停止：任务链彻底结束
             isTaskChainActive = false;
             isGenerating = false;
+            syncIntervalState();
+            flushIntervalQueue(); // 停止时清空队列
         }
-        // 未停止时 isTaskChainActive 保持 true，等待最终响应或新一轮 tasks-start
+        // 未停止：排队消息等最终 response 再发
         // 兜底：将所有仍处于"执行中"的卡片更新为"已完成"
         var allCards = document.querySelectorAll('.tool-card');
         for (var ci = 0; ci < allCards.length; ci++) {
@@ -2887,6 +3478,37 @@ window.electronAPI.onAgentMessage(function(data) {
         updateSendBtn();
         // 如果在等待停止确认，清除等待
         if (_stopWaitingResolve) { _stopWaitingResolve(); _stopWaitingResolve = null; }
+        return;
+    }
+    // 定时任务状态更新
+    if (data.type === 'interval-start') {
+        addActiveInterval(data);
+        return;
+    }
+    if (data.type === 'interval-stop') {
+        removeActiveInterval(data.taskName);
+        return;
+    }
+    // 定时任务调试日志（从 inject-deepseek.js 转发）
+    if (data.type === 'interval-debug') {
+        console.log('[Interval] ' + (data.msg || ''));
+        return;
+    }
+    // 定时任务触发通知（仅显示在 controlbar，不重复显示在对话框上方）
+    if (data.type === 'interval-trigger') {
+        if (window.electronAPI && window.electronAPI.agentStatusToControlbar) {
+            var modeIcon = data.mode === 'trigger' ? '💬' : '⚡';
+            var intervalSec = (data.interval / 1000).toFixed(data.interval >= 10000 ? 0 : 1);
+            window.electronAPI.agentStatusToControlbar(modeIcon + data.taskName + ' (#' + data.iteration + ' / ' + intervalSec + 's)', 'tool');
+        }
+        return;
+    }
+    // 定时消息即将发送 → 通知代理视图准备接收新内容，强制自动滚动
+    if (data.type === 'interval-msg-sending') {
+        isGenerating = true;
+        userScrolledAway = false;
+        updateSendBtn();
+        scrollToBottom(true);
         return;
     }
     hideLoading();
@@ -2904,10 +3526,13 @@ window.electronAPI.onAgentMessage(function(data) {
         }
         addAssistantSegments(data.segments);
         isExecutingTasks = hasCommands;
+        syncIntervalState();
         // isTaskChainActive 保持 true，直到 tasks-end 或无命令的最终响应
         if (!hasCommands) {
             isGenerating = false;
             isTaskChainActive = false;  // 无命令的最终响应，任务链结束
+            syncIntervalState();
+            flushIntervalQueue(); // 最终响应，清空定时消息队列
             showStatus('任务完成');
         }
         updateSendBtn();
@@ -2915,6 +3540,9 @@ window.electronAPI.onAgentMessage(function(data) {
         addAssistantSegments(data.segments);
     } else if (data.type === 'tool-result') {
         addAssistantSegments([{ type: 'tool-result', content: data.result }]);
+    } else if (data.type === 'error') {
+        hideLoading();
+        addAssistantSegments([{ type: 'text', content: '⚠️ **错误**: ' + (data.message || '') }]);
     }
 });
 
@@ -2925,29 +3553,38 @@ window.electronAPI.onQwenProgress(function(msg) {
 
 // 状态栏管理：支持多条状态，自动过期 → 同时发送到 controlbar 统一任务栏
 var statusMap = {};
-function addStatus(id, text, type) {
+function addStatus(id, text, type, noExpire) {
     var bar = document.getElementById('status-bar');
     if (bar) {
         var el = statusMap[id];
         if (!el) {
             el = document.createElement('span');
-            el.style.cssText = 'padding:0 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;transition:opacity .5s;';
+            el.style.cssText = 'padding:0 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;transition:opacity .5s;flex-shrink:0;';
             bar.appendChild(el);
             statusMap[id] = el;
         }
+        bar.style.display = ''; // 确保 visible
         var colors = { qwen: '#6a8acc', tool: '#8a8a6a', confirm: '#cc8a6a', success: '#5a9a5a', error: '#cc5a5a' };
         el.style.color = colors[type] || '#6a6a8a';
         el.style.background = (colors[type] || '#6a6a8a') + '18';
         el.textContent = text;
-        // 清空过期状态
-        var expires = Date.now() + 15000;
-        el._expires = expires;
-        setTimeout(function() {
-            if (el._expires <= Date.now()) {
-                el.style.opacity = '0';
-                setTimeout(function() { if (el._expires <= Date.now()) { el.remove(); delete statusMap[id]; } }, 500);
-            }
-        }, 15000);
+        if (!noExpire) {
+            var expires = Date.now() + 15000;
+            el._expires = expires;
+            setTimeout(function() {
+                if (el._expires <= Date.now()) {
+                    el.style.opacity = '0';
+                    setTimeout(function() {
+                        if (el._expires <= Date.now()) {
+                            el.remove(); delete statusMap[id];
+                            // 没有状态时隐藏 bar
+                            var bar = document.getElementById('status-bar');
+                            if (bar && Object.keys(statusMap).length === 0) bar.style.display = 'none';
+                        }
+                    }, 500);
+                }
+            }, 15000);
+        }
     }
     // 同步发送到 controlbar 统一任务栏
     if (window.electronAPI && window.electronAPI.agentStatusToControlbar) {
@@ -3020,7 +3657,10 @@ var qqBotEnabled = false;
 
 function toggleQQBot() {
     qqBotEnabled = !qqBotEnabled;
-    document.getElementById('qqbot-switch').classList.toggle('on', qqBotEnabled);
+    var arrowEl = document.getElementById('qqbot-arrow');
+    if (arrowEl) {
+        arrowEl.textContent = qqBotEnabled ? '▼' : '▶';
+    }
     document.getElementById('qqbot-panel').style.display = qqBotEnabled ? '' : 'none';
     if (qqBotEnabled) {
         loadQQBotList();
@@ -3344,7 +3984,7 @@ window.electronAPI.onQQBotCommand(function(data) {
             // 同步 mode / deepthink（由 IPC 传入）
             if (data.mode) {
                 agentMode = data.mode;
-                document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : '快速模式';
+                document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : (agentMode === 'image' ? '识图模式' : '快速模式');
             }
             if (typeof data.deepthink === 'boolean') {
                 agentDeepThink = data.deepthink;
@@ -3417,18 +4057,67 @@ setInterval(function() {
 // ==================== MCP 配置管理 ====================
 var mcpServersGlobal = [];
 var mcpEditingIndex = -1;
+var mcpEditType = 'stdio';
 
 function toggleMcpPanel() {
     var panel = document.getElementById('mcp-panel');
-    var sw = document.getElementById('mcp-switch');
+    var arrow = document.getElementById('mcp-arrow');
     if (panel.style.display === 'none') {
         panel.style.display = 'block';
-        sw.classList.add('on');
+        arrow.textContent = '▼';
         refreshMcpServerList();
     } else {
         panel.style.display = 'none';
-        sw.classList.remove('on');
+        arrow.textContent = '▶';
     }
+}
+
+function setMcpType(type) {
+    mcpEditType = type;
+    var btnStdio = document.getElementById('mcp-type-stdio');
+    var btnUrl = document.getElementById('mcp-type-url');
+    var fieldsStdio = document.getElementById('mcp-fields-stdio');
+    var fieldsUrl = document.getElementById('mcp-fields-url');
+    if (type === 'url') {
+        btnStdio.style.background = 'transparent';
+        btnStdio.style.color = '#8a8aaa';
+        btnStdio.style.borderColor = '#3a3a6a';
+        btnUrl.style.background = '#0d7377';
+        btnUrl.style.color = '#fff';
+        btnUrl.style.borderColor = '#0ea5e9';
+        fieldsStdio.style.display = 'none';
+        fieldsUrl.style.display = 'block';
+    } else {
+        btnStdio.style.background = '#0d7377';
+        btnStdio.style.color = '#fff';
+        btnStdio.style.borderColor = '#0ea5e9';
+        btnUrl.style.background = 'transparent';
+        btnUrl.style.color = '#8a8aaa';
+        btnUrl.style.borderColor = '#3a3a6a';
+        fieldsStdio.style.display = 'block';
+        fieldsUrl.style.display = 'none';
+    }
+}
+
+function toggleMcpServer(index) {
+    if (index < 0 || index >= mcpServersGlobal.length) return;
+    var srv = mcpServersGlobal[index];
+    srv.disabled = !srv.disabled;
+    // 保存到配置
+    window.electronAPI.agentConfigLoad().then(function(res) {
+        if (!res.success) return;
+        var config = res.config || {};
+        config.mcpServers = mcpServersGlobal;
+        window.electronAPI.agentConfigSave(config).then(function() {
+            renderMcpServerList();
+            // 重新加载 MCP
+            window.electronAPI.mcpInit(true).then(function(initRes) {
+                if (initRes.success) {
+                    showStatus('MCP 已重载');
+                }
+            });
+        });
+    });
 }
 
 function refreshMcpServerList() {
@@ -3444,17 +4133,25 @@ function renderMcpServerList() {
     var listEl = document.getElementById('mcp-server-list');
     var countEl = document.getElementById('mcp-global-count');
     var statusEl = document.getElementById('mcp-status-text');
+    var enabledCount = mcpServersGlobal.filter(function(s) { return !s.disabled; }).length;
     countEl.textContent = mcpServersGlobal.length + ' 个服务器';
-    statusEl.textContent = '已配置: ' + mcpServersGlobal.length;
+    statusEl.textContent = '已启用: ' + enabledCount + '/' + mcpServersGlobal.length;
     if (mcpServersGlobal.length === 0) {
         listEl.innerHTML = '<span style="color:#666;font-size:11px;">暂无配置</span>';
         return;
     }
     var html = '';
     mcpServersGlobal.forEach(function(srv, idx) {
+        var enabled = !srv.disabled;
         html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 6px;background:rgba(255,255,255,.03);border-radius:4px;margin-bottom:4px;">';
-        html += '<span style="flex:1;font-size:11px;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (srv.name || '未命名') + '</span>';
-        html += '<span style="font-size:10px;color:#6a6a8a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px;">' + (srv.command || '') + '</span>';
+        // 独立开关
+        html += '<div class="switch' + (enabled ? ' on' : '') + '" onclick="toggleMcpServer(' + idx + ')" style="flex-shrink:0;transform:scale(0.65);transform-origin:left center;"></div>';
+        html += '<span style="flex:1;font-size:11px;color:' + (enabled ? '#ccc' : '#666') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (srv.name || '未命名') + '</span>';
+        if (srv.url) {
+            html += '<span style="font-size:10px;color:#4a9a8a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px;" title="' + srv.url + '">SSE</span>';
+        } else {
+            html += '<span style="font-size:10px;color:#6a6a8a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px;">' + (srv.command || '') + '</span>';
+        }
         html += '<button onclick="showMcpEditModal(' + idx + ')" style="padding:2px 6px;background:transparent;border:1px solid #3a3a6a;border-radius:4px;color:#8a8aaa;cursor:pointer;font-size:10px;">编辑</button>';
         html += '<button onclick="deleteMcpServer(' + idx + ')" style="padding:2px 6px;background:transparent;border:1px solid #6e3a3a;border-radius:4px;color:#e88;cursor:pointer;font-size:10px;">删除</button>';
         html += '</div>';
@@ -3470,19 +4167,32 @@ function showMcpEditModal(index) {
     var cmdInput = document.getElementById('mcp-edit-command');
     var argsInput = document.getElementById('mcp-edit-args');
     var cwdInput = document.getElementById('mcp-edit-cwd');
+    var urlInput = document.getElementById('mcp-edit-url');
     if (mcpEditingIndex >= 0 && mcpServersGlobal[mcpEditingIndex]) {
         var srv = mcpServersGlobal[mcpEditingIndex];
         title.textContent = '编辑 MCP 服务器';
         nameInput.value = srv.name || '';
-        cmdInput.value = srv.command || '';
-        argsInput.value = (srv.args || []).join(' ');
-        cwdInput.value = srv.cwd || '';
+        if (srv.url) {
+            setMcpType('url');
+            urlInput.value = srv.url || '';
+            cmdInput.value = '';
+            argsInput.value = '';
+            cwdInput.value = '';
+        } else {
+            setMcpType('stdio');
+            cmdInput.value = srv.command || '';
+            argsInput.value = (srv.args || []).join(' ');
+            cwdInput.value = srv.cwd || '';
+            urlInput.value = '';
+        }
     } else {
         title.textContent = '添加 MCP 服务器';
         nameInput.value = '';
         cmdInput.value = '';
         argsInput.value = '';
         cwdInput.value = '';
+        urlInput.value = '';
+        setMcpType('stdio');
     }
     modal.style.display = 'flex';
 }
@@ -3492,11 +4202,21 @@ function doSaveMcpServer() {
     var command = document.getElementById('mcp-edit-command').value.trim();
     var argsStr = document.getElementById('mcp-edit-args').value.trim();
     var cwd = document.getElementById('mcp-edit-cwd').value.trim();
+    var url = document.getElementById('mcp-edit-url').value.trim();
     if (!name) { alert('请输入服务器名称'); return; }
-    if (!command) { alert('请输入命令'); return; }
-    var args = argsStr ? argsStr.split(/\s+/) : [];
-    var srv = { name: name, command: command, args: args };
-    if (cwd) srv.cwd = cwd;
+    if (mcpEditType === 'url') {
+        if (!url) { alert('请输入 URL'); return; }
+    } else {
+        if (!command) { alert('请输入命令'); return; }
+    }
+    var srv;
+    if (mcpEditType === 'url') {
+        srv = { name: name, url: url };
+    } else {
+        var args = argsStr ? argsStr.split(/\s+/) : [];
+        srv = { name: name, command: command, args: args };
+        if (cwd) srv.cwd = cwd;
+    }
     window.electronAPI.agentConfigLoad().then(function(res) {
         if (!res.success) { alert('加载配置失败'); return; }
         var config = res.config || {};
@@ -3513,7 +4233,7 @@ function doSaveMcpServer() {
                 mcpServersGlobal = servers;
                 renderMcpServerList();
                 // 自动重新加载 MCP
-                window.electronAPI.mcpInit().then(function(initRes) {
+                window.electronAPI.mcpInit(true).then(function(initRes) {
                     if (initRes.success && initRes.tools) {
                         showStatus('MCP 已重载: ' + initRes.tools.length + ' 个工具');
                     }
@@ -3544,37 +4264,18 @@ async function deleteMcpServer(index) {
     });
 }
 
-function applyMcpToCurrentFolder() {
-    if (mcpServersGlobal.length === 0) {
-        showStatus('全局没有配置 MCP 服务器');
-        return;
-    }
-    window.electronAPI.agentConfigLoad().then(function(res) {
-        if (!res.success) { showStatus('读取配置失败'); return; }
-        var config = res.config || {};
-        config.mcpServers = JSON.parse(JSON.stringify(mcpServersGlobal));
-        window.electronAPI.agentConfigSave(config).then(function(saveRes) {
-            if (saveRes.success) {
-                showStatus('已将 ' + mcpServersGlobal.length + ' 个 MCP 服务器应用到当前文件夹');
-                // 重新初始化 MCP
-                window.electronAPI.mcpInit().then(function(initRes) {
-                    if (initRes.success && initRes.tools) {
-                        showStatus('MCP 已重载: ' + initRes.tools.length + ' 个工具');
-                    }
-                });
-            } else {
-                showStatus('应用失败: ' + (saveRes.error || '未知错误'));
-            }
-        });
-    });
-}
-
 function reloadMcpServers() {
-    window.electronAPI.mcpInit().then(function(res) {
+    window.electronAPI.mcpInit(true).then(function(res) {
         if (res.success) {
             var toolCount = res.tools ? res.tools.length : 0;
             showStatus('MCP 重载完成: ' + toolCount + ' 个工具');
             refreshMcpServerList();
+            // 刷新工具管理面板
+            mcpToolsData = res.tools || [];
+            window.electronAPI.mcpGetToolStates().then(function(res2) {
+                mcpToolStates = (res2 && res2.states) || {};
+                renderMcpToolsPanel();
+            });
         } else {
             showStatus('MCP 重载失败: ' + (res.error || res.message || '未知错误'));
         }
@@ -3602,7 +4303,17 @@ function handleMcpImportFile(input) {
                 var addedCount = 0;
                 keys.forEach(function(key) {
                     var item = imported[key];
-                    if (!item || !item.command) return;
+                    if (!item) return;
+                    // URL 类型
+                    if (item.url) {
+                        var exists = servers.some(function(s) { return s.name === key; });
+                        if (exists) return;
+                        servers.push({ name: key, url: item.url });
+                        addedCount++;
+                        return;
+                    }
+                    // 命令行类型
+                    if (!item.command) return;
                     var exists = servers.some(function(s) { return s.name === key; });
                     if (exists) return;
                     var srv = {
@@ -3620,7 +4331,7 @@ function handleMcpImportFile(input) {
                         mcpServersGlobal = servers;
                         renderMcpServerList();
                         showStatus('已导入 ' + addedCount + ' 个 MCP 服务器');
-                        window.electronAPI.mcpInit().then(function(initRes) {
+                        window.electronAPI.mcpInit(true).then(function(initRes) {
                             if (initRes.success && initRes.tools) {
                                 showStatus('MCP 已重载: ' + initRes.tools.length + ' 个工具');
                             }
@@ -3908,13 +4619,71 @@ function closeCurrentConversation() {
     area.innerHTML = '';
     var empty = document.createElement('div');
     empty.className = 'empty-msg';
-    empty.textContent = '点击「+新对话」开始新对话';
+    empty.textContent = '选择模式后点击「创建对话」开始';
     area.appendChild(empty);
     document.getElementById('pre-init-section').style.display = '';
     document.getElementById('post-init-section').style.display = 'none';
     document.getElementById('newchat-modal').style.display = 'none';
     var input = document.getElementById('prompt-input');
     if (input) { input.disabled = false; input.value = ''; }
+}
+
+// 阻塞遮罩
+function showBlockingOverlay(msg) {
+    var overlay = document.getElementById('blocking-overlay');
+    if (overlay) {
+        var span = overlay.querySelector('span');
+        if (span) span.textContent = msg || '正在处理，请稍候...';
+        overlay.style.display = 'flex';
+    }
+}
+function hideBlockingOverlay() {
+    var overlay = document.getElementById('blocking-overlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+// + 按钮：展开预创建面板（不真正创建对话）
+function showPreInitPanel() {
+    // 如果已有对话，先保存
+    if (currentHistoryId && currentHistoryMessages.length > 0) {
+        saveCurrentHistory();
+    }
+    // 重置为预初始化状态
+    initCompleted = false;
+    currentHistoryId = null;
+    currentHistoryMessages = [];
+    currentSubSessions = [];
+    currentHistoryDeepseekUrl = null;
+    currentHistoryExpired = false;
+    isGenerating = false;
+    isExecutingTasks = false;
+    isTaskChainActive = false;
+    conversationId = null;
+    window.electronAPI.setLastHistoryId(null);
+    // 清理残留
+    var progressEl = document.querySelector('[id="qwen-progress-msg"]');
+    if (progressEl && progressEl.parentNode) progressEl.parentNode.remove();
+    document.querySelectorAll('.tool-section-result').forEach(function(el) { delete el.dataset.filled; });
+    // 重置聊天区
+    var area = document.getElementById('chat-area');
+    area.innerHTML = '';
+    var empty = document.createElement('div');
+    empty.className = 'empty-msg';
+    empty.textContent = '选择模式后点击「创建对话」开始';
+    area.appendChild(empty);
+    // 显示预创建面板
+    document.getElementById('pre-init-section').style.display = '';
+    document.getElementById('post-init-section').style.display = 'none';
+    document.getElementById('newchat-modal').style.display = 'none';
+    document.getElementById('send-prompt-btn').disabled = false;
+    document.getElementById('send-prompt-btn').textContent = '发送';
+    document.getElementById('send-prompt-btn').classList.remove('stop-btn');
+    hideLoading();
+    // 同步模式选择器
+    document.querySelectorAll('#pre-init-mode-selector .mode-btn').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-mode') === agentMode);
+    });
+    loadHistoryList();
 }
 
 // 监听主进程的关闭对话指令（目录切换时触发）
@@ -4002,7 +4771,7 @@ function getSkillPrefix() {
     return activeSkills.map(function(s) {
         var skillPath = '.dsa/skills/' + s.name + '/';
         var header = '请按照以下技能指令来帮助我完成任务。';
-        header += '\n技能文件位于 `' + skillPath + '` 目录下，可使用 `local-list` 和 `local-read` 读取附加文件。';
+        header += '\n技能文件位于 `' + skillPath + '` 目录下，可使用 `list` 和 `read` 读取附加文件。';
         return header + '\n\n---\n## 技能: ' + s.name + '\n\n**路径:** `' + skillPath + '`\n\n' + s.instructions + '\n---';
     }).join('\n\n') + '\n\n';
 }
@@ -4279,7 +5048,17 @@ async function loadDisabledSkills() {
         var res = await window.electronAPI.agentSkillGetDisabled();
         disabledSkills = (res && res.disabledSkills) ? res.disabledSkills : [];
     } catch(e) { disabledSkills = []; }
+    // 加载已同步的技能名称列表
+    await loadSyncedSkillNames();
     renderSkillsModal();
+}
+
+var syncedSkillNames = [];
+async function loadSyncedSkillNames() {
+    try {
+        var res = await window.electronAPI.agentSkillsSyncedList();
+        syncedSkillNames = (res && res.names) ? res.names : [];
+    } catch(e) { syncedSkillNames = []; }
 }
 
 window.electronAPI.onAgentOpenSkillsModal(async function() {
@@ -4300,25 +5079,32 @@ window.renderSkillsModal = function() {
     var html = '';
     skillsModalData.forEach(function(s, idx) {
         var isDisabled = disabledSkills.indexOf(s.name) !== -1;
-        // 解析 YAML frontmatter 获取 description
+        var isSynced = syncedSkillNames.indexOf(s.name) !== -1;
         var fm = parseSkillFrontmatter(s.instructions || '');
         var desc = fm.description || '';
         var displayName = fm.name || s.name;
         var itemBg = isDisabled ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.04)';
         var itemOpacity = isDisabled ? 'opacity:0.55;' : '';
+
         html += '<div class="skill-item" style="padding:10px 12px;border-radius:8px;margin-bottom:6px;background:' + itemBg + ';color:#d4d4d4;font-size:13px;' + itemOpacity + '">';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">';
         html += '<strong style="color:#e0e0f0;">' + escapeHtml(displayName) + (isDisabled ? ' <span style="font-size:10px;color:#6a6a8a;">(已禁用)</span>' : '') + '</strong>';
-        html += '<div style="display:flex;gap:6px;">';
-        html += '<button class="skill-use-btn" onclick="window.useSkill(' + idx + ')" style="padding:4px 10px;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;color:#22d3ee;background:rgba(34,211,238,0.12);">使用</button>';
-        html += '<button onclick="window.toggleSkillDisabled(\'' + escapeHtml(s.name) + '\')" style="padding:4px 8px;border:none;border-radius:6px;cursor:pointer;font-size:11px;' + (isDisabled ? 'color:#4ade80;background:rgba(74,222,128,0.12);' : 'color:#f59e0b;background:rgba(245,158,11,0.12);') + '" title="' + (isDisabled ? '启用' : '禁用') + '">' + (isDisabled ? '▶' : '⏸') + '</button>';
-        html += '<button onclick="window.deleteSkillFromModal(\'' + escapeHtml(s.name) + '\')" style="padding:4px 8px;border:none;border-radius:6px;cursor:pointer;font-size:11px;color:#ef4444;background:rgba(239,68,68,0.12);">✕</button>';
-        html += '</div></div>';
+        html += '<span style="font-size:10px;color:' + (isSynced ? '#22d3ee' : '#6a6a8a') + ';">' + (isSynced ? '已同步' : '仓库中') + '</span>';
+        html += '</div>';
         if (desc) {
             html += '<div class="skill-desc" style="font-size:11px;color:#8a8aaa;margin-top:2px;">' + escapeHtml(desc) + '</div>';
         }
-        html += '<div style="font-size:10px;color:#6a6a8a;margin-top:2px;">额外文件: ' + (s.files && s.files.length > 0 ? s.files.join(', ') : '无') + '</div>';
-        html += '</div>';
+        html += '<div style="font-size:10px;color:#6a6a8a;margin-top:2px;">文件: ' + (s.files && s.files.length > 0 ? s.files.join(', ') : '无') + '</div>';
+        html += '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">';
+        html += '<button class="skill-use-btn" onclick="window.useSkill(' + idx + ')" style="padding:3px 8px;border:none;border-radius:5px;cursor:pointer;font-size:10px;font-weight:600;color:#22d3ee;background:rgba(34,211,238,0.12);">使用</button>';
+        html += '<button onclick="window.toggleSkillDisabled(\'' + escapeHtml(s.name) + '\')" style="padding:3px 8px;border:none;border-radius:5px;cursor:pointer;font-size:10px;' + (isDisabled ? 'color:#4ade80;background:rgba(74,222,128,0.12);' : 'color:#f59e0b;background:rgba(245,158,11,0.12);') + '" title="' + (isDisabled ? '启用' : '禁用') + '">' + (isDisabled ? '▶' : '⏸') + '</button>';
+        if (isSynced) {
+            html += '<button onclick="window.unsyncSkillFromModal(\'' + escapeHtml(s.name) + '\')" style="padding:3px 8px;border:none;border-radius:5px;cursor:pointer;font-size:10px;color:#f59e0b;background:rgba(245,158,11,0.12);" title="取消同步（保留仓库版本）">取消同步</button>';
+        } else {
+            html += '<button onclick="window.syncSkillFromModal(\'' + escapeHtml(s.name) + '\')" style="padding:3px 8px;border:none;border-radius:5px;cursor:pointer;font-size:10px;color:#22d3ee;background:rgba(34,211,238,0.12);" title="同步到工作目录以便自定义">同步</button>';
+        }
+        html += '<button onclick="window.deleteSkillFromModal(\'' + escapeHtml(s.name) + '\')" style="padding:3px 8px;border:none;border-radius:5px;cursor:pointer;font-size:10px;color:#ef4444;background:rgba(239,68,68,0.12);">删除</button>';
+        html += '</div></div>';
     });
     listEl.innerHTML = html;
 };
@@ -4336,7 +5122,6 @@ window.toggleSkillDisabled = async function(name) {
 window.useSkill = function(idx) {
     var skill = skillsModalData[idx];
     if (!skill) return;
-    // 将技能添加到附件面板，作为 chip 展示
     activeSkills.push({ name: skill.name, instructions: skill.instructions });
     renderFilePanel();
     document.getElementById('file-panel-bar').style.display = '';
@@ -4344,9 +5129,203 @@ window.useSkill = function(idx) {
 };
 
 window.deleteSkillFromModal = async function(name) {
-    if (!await confirmModal('确定删除技能 "' + name + '"？')) return;
+    if (!await confirmModal('确定删除技能 "' + name + '"？此操作会从仓库和工作目录中彻底移除。')) return;
     window.electronAPI.deleteSkill(name);
 };
+
+window.syncSkillFromModal = function(name) {
+    window.electronAPI.syncSkillToWorkdir(name);
+};
+
+window.unsyncSkillFromModal = function(name) {
+    window.electronAPI.unsyncSkill(name);
+};
+
+// ==================== 存储路径设置弹窗（偏好设置菜单触发） ====================
+
+window.electronAPI.onAgentShowStoragePathDialog(async function() {
+    try {
+        var res = await window.electronAPI.agentSkillsStoragePath();
+        var currentPath = (res && res.path) ? res.path : '(默认 AppData)';
+        document.getElementById('storage-path-current').textContent = '当前路径: ' + currentPath;
+        document.getElementById('storage-path-modal').style.display = 'flex';
+    } catch(e) {
+        console.error('showStoragePathDialog failed:', e);
+    }
+});
+
+window.closeStoragePathDialog = function() {
+    document.getElementById('storage-path-modal').style.display = 'none';
+};
+
+window.selectStoragePathFolder = async function() {
+    try {
+        var res = await window.electronAPI.agentSkillsSelectFolder();
+        if (res && res.path) {
+            var setRes = await window.electronAPI.agentSkillsSetStoragePath(res.path);
+            if (setRes.success) {
+                document.getElementById('storage-path-current').textContent = '当前路径: ' + res.path;
+                document.getElementById('storage-path-modal').style.display = 'none';
+            } else {
+                alert('设置失败: ' + (setRes.error || '未知错误'));
+            }
+        }
+    } catch(e) {
+        console.error('selectStoragePathFolder failed:', e);
+    }
+};
+
+window.resetStoragePathToDefault = async function() {
+    try {
+        var setRes = await window.electronAPI.agentSkillsSetStoragePath('');
+        if (setRes.success) {
+            document.getElementById('storage-path-current').textContent = '当前路径: (默认 AppData)';
+            document.getElementById('storage-path-modal').style.display = 'none';
+        }
+    } catch(e) {
+        console.error('resetStoragePathToDefault failed:', e);
+    }
+};
+
+// ==================== MCP 工具管理面板 ====================
+
+var mcpToolsData = [];
+var mcpToolStates = {};
+
+window.electronAPI.onAgentShowMcpTools(function(data) {
+    mcpToolsData = data.tools || [];
+    mcpToolStates = data.states || {};
+    renderMcpToolsPanel();
+    // 自动展开面板
+    if (document.getElementById('mcp-tools-panel').style.display === 'none') {
+        toggleMcpToolsPanel();
+    }
+});
+
+function toggleMcpToolsPanel() {
+    var panel = document.getElementById('mcp-tools-panel');
+    var arrow = document.getElementById('mcp-tools-arrow');
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+        arrow.style.transform = 'rotate(90deg)';
+        // 加载数据
+        window.electronAPI.mcpGetTools().then(function(res) {
+            if (res && res.success) {
+                mcpToolsData = res.tools || [];
+                return window.electronAPI.mcpGetToolStates();
+            }
+        }).then(function(res2) {
+            if (res2 && res2.success) {
+                mcpToolStates = res2.states || {};
+            }
+            renderMcpToolsPanel();
+        }).catch(function(e) { console.error('load mcp tools failed:', e); });
+    } else {
+        panel.style.display = 'none';
+        arrow.style.transform = 'rotate(0deg)';
+    }
+}
+
+window.toggleMcpTool = async function(server, tool, checkbox) {
+    try {
+        var enabled = checkbox.checked;
+        await window.electronAPI.mcpSetToolEnabled(server, tool, enabled);
+        var key = server + '/' + tool;
+        mcpToolStates[key] = enabled;
+        updateMcpToolsBadge();
+    } catch(e) {
+        checkbox.checked = !checkbox.checked;
+        console.error('toggleMcpTool failed:', e);
+    }
+};
+
+// 整个服务器的工具全部启用/禁用
+window.toggleMcpServerTools = async function(server, checkbox) {
+    try {
+        var enabled = checkbox.checked;
+        // 找到该服务器下所有工具
+        var tools = mcpToolsData.filter(function(t) { return (t._mcpServer || 'unknown') === server; });
+        for (var i = 0; i < tools.length; i++) {
+            await window.electronAPI.mcpSetToolEnabled(server, tools[i].name, enabled);
+            mcpToolStates[server + '/' + tools[i].name] = enabled;
+        }
+        renderMcpToolsPanel();
+    } catch(e) {
+        checkbox.checked = !checkbox.checked;
+        console.error('toggleMcpServerTools failed:', e);
+    }
+};
+
+function updateMcpToolsBadge() {
+    var badge = document.getElementById('mcp-tools-badge');
+    if (!mcpToolsData || mcpToolsData.length === 0) {
+        badge.textContent = '未加载';
+        return;
+    }
+    var enabledCount = mcpToolsData.filter(function(t) {
+        return mcpToolStates[(t._mcpServer || 'unknown') + '/' + t.name] !== false;
+    }).length;
+    badge.textContent = enabledCount + '/' + mcpToolsData.length + ' 已启用';
+}
+
+function renderMcpToolsPanel() {
+    var listEl = document.getElementById('mcp-tools-list');
+    if (!mcpToolsData || mcpToolsData.length === 0) {
+        listEl.innerHTML = '<span style="color:var(--text-muted);font-size:11px;">无已连接的 MCP 服务器。点击上方 🔄 重载 或使用 mcp-init 初始化。</span>';
+        updateMcpToolsBadge();
+        return;
+    }
+
+    // 按服务器分组
+    var byServer = {};
+    mcpToolsData.forEach(function(t) {
+        var s = t._mcpServer || 'unknown';
+        if (!byServer[s]) byServer[s] = [];
+        byServer[s].push(t);
+    });
+
+    var html = '';
+    for (var server in byServer) {
+        var tools = byServer[server];
+        var enabledCount = tools.filter(function(t) {
+            return mcpToolStates[server + '/' + t.name] !== false;
+        }).length;
+        var allEnabled = enabledCount === tools.length;
+
+        html += '<div style="margin-bottom:10px;">';
+        html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border-light);margin-bottom:4px;">';
+        html += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:1;">';
+        html += '<input type="checkbox" ' + (allEnabled ? 'checked' : '') + ' onchange="window.toggleMcpServerTools(\'' + escapeHtml(server) + '\', this)" style="cursor:pointer;accent-color:var(--accent);" />';
+        html += '<strong style="color:var(--accent);font-size:12px;">' + escapeHtml(server) + '</strong>';
+        html += '</label>';
+        html += '<span style="font-size:10px;color:var(--text-muted);">' + enabledCount + '/' + tools.length + '</span>';
+        html += '</div>';
+
+        tools.forEach(function(t) {
+            var key = server + '/' + t.name;
+            var isEnabled = mcpToolStates[key] !== false;
+            var desc = t.description || '';
+            if (desc.length > 60) desc = desc.substring(0, 57) + '...';
+
+            html += '<div style="display:flex;align-items:flex-start;gap:6px;padding:3px 6px 3px 20px;">';
+            html += '<label style="display:flex;align-items:flex-start;gap:6px;cursor:pointer;flex:1;min-width:0;">';
+            html += '<input type="checkbox" ' + (isEnabled ? 'checked' : '') + ' onchange="window.toggleMcpTool(\'' + escapeHtml(server) + '\', \'' + escapeHtml(t.name) + '\', this)" style="margin-top:1px;cursor:pointer;accent-color:var(--accent);" />';
+            html += '<div style="flex:1;min-width:0;">';
+            html += '<span style="font-size:11px;color:var(--text-primary);">' + escapeHtml(t.name) + '</span>';
+            if (desc) {
+                html += '<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">— ' + escapeHtml(desc) + '</span>';
+            }
+            html += '</div>';
+            html += '</label>';
+            html += '</div>';
+        });
+
+        html += '</div>';
+    }
+
+    listEl.innerHTML = html;
+    updateMcpToolsBadge();
+}
 
 function escapeHtml(str) {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -4507,13 +5486,14 @@ setTimeout(loadMenubarConfig, 200);
 </script>
 
 <!-- 更新进度条覆盖层 -->
+<div id="blocking-overlay"><div><div id="blocking-spinner"></div><span style="color:var(--text-primary);">正在处理，请稍候...</span></div></div>
 <div id="update-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;">
-    <div style="background:#1a1a2e;border:1px solid #3a3a6a;border-radius:12px;padding:30px 40px;min-width:320px;text-align:center;">
-        <div style="font-size:16px;color:#ccc;margin-bottom:16px;">正在下载更新...</div>
-        <div style="height:8px;background:#2a2a4a;border-radius:4px;overflow:hidden;">
-            <div id="update-progress-bar" style="width:0%;height:100%;background:linear-gradient(90deg,#6a6aff,#8a8aff);border-radius:4px;transition:width 0.3s;"></div>
+    <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:30px 40px;min-width:320px;text-align:center;">
+        <div style="font-size:16px;color:var(--text-primary);margin-bottom:16px;">正在下载更新...</div>
+        <div style="height:8px;background:var(--bg-panel);border-radius:4px;overflow:hidden;">
+            <div id="update-progress-bar" style="width:0%;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-2));border-radius:4px;transition:width 0.3s;"></div>
         </div>
-        <div id="update-progress-text" style="font-size:13px;color:#8a8aaa;margin-top:10px;">0%</div>
+        <div id="update-progress-text" style="font-size:13px;color:var(--text-secondary);margin-top:10px;">0%</div>
     </div>
 </div>
 

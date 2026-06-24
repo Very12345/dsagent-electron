@@ -94,9 +94,26 @@ function deleteHistory(rootDir, id) {
     }
 }
 
+function renameHistory(rootDir, id, newTitle) {
+    const dir = getBaseDir(rootDir);
+    if (!dir) return { success: false, error: 'No root directory' };
+    try {
+        const filePath = path.join(dir, id + '.json');
+        if (!fs.existsSync(filePath)) return { success: false, error: 'History not found' };
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        data.title = newTitle;
+        data.updatedAt = new Date().toISOString();
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
 module.exports = {
     listHistories,
     loadHistory,
     saveHistory,
-    deleteHistory
+    deleteHistory,
+    renameHistory
 };

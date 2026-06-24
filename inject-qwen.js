@@ -1243,4 +1243,25 @@
     };
 
     console.log('[Qwen Auto] Script loaded');
+
+    // ==================== local 指令解析（使用共享解析器） ====================
+    // 从 Qwen 最后回复中提取 local 指令块
+    Q.parseLocalCommands = function() {
+        var text = Q.getLastResponseText();
+        if (!text) return [];
+        if (window.__dsagent_parseCommands) {
+            return window.__dsagent_parseCommands(text);
+        }
+        return [];
+    };
+
+    // 获取最后回复的完整分段（文字 + 指令），供 agent 视图展示
+    Q.parseLastResponseSegments = function() {
+        var text = Q.getLastResponseText();
+        if (!text) return [];
+        if (window.__dsagent_parseSegments) {
+            return window.__dsagent_parseSegments(text);
+        }
+        return [{ type: 'text', content: text }];
+    };
 })();

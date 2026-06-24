@@ -29,9 +29,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     agentPlanDelete: () => ipcRenderer.invoke('agent-plan-delete'),
     agentSkillsLoad: () => ipcRenderer.invoke('agent-skills-load'),
     agentSkillsDelete: (name) => ipcRenderer.invoke('agent-skills-delete', name),
+    deleteSkill: (name) => ipcRenderer.invoke('agent-skills-delete', name),
     agentSkillGetContent: (skillName) => ipcRenderer.invoke('agent-skill-get-content', skillName),
     agentSkillToggleDisabled: (skillName) => ipcRenderer.invoke('agent-skill-toggle-disabled', skillName),
     agentSkillGetDisabled: () => ipcRenderer.invoke('agent-skill-get-disabled'),
+    agentSkillsStoragePath: () => ipcRenderer.invoke('agent-skills-storage-path'),
+    agentSkillsSetStoragePath: (path) => ipcRenderer.invoke('agent-skills-set-storage-path', path),
+    agentSkillsRepoList: () => ipcRenderer.invoke('agent-skills-repo-list'),
+    agentSkillsSyncedList: () => ipcRenderer.invoke('agent-skills-synced-list'),
+    agentSkillsSelectFolder: () => ipcRenderer.invoke('agent-skills-select-folder'),
+    syncSkillToWorkdir: (skillName) => ipcRenderer.send('sync-skill-to-workdir', skillName),
+    unsyncSkill: (skillName) => ipcRenderer.send('unsync-skill', skillName),
     agentPing: () => ipcRenderer.invoke('agent-ping'),
     agentExecAdmin: (cmd) => ipcRenderer.invoke('agent-exec-admin', cmd),
     agentRequestConfirm: (data) => ipcRenderer.invoke('agent-request-confirm', data),
@@ -74,20 +82,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Agent 视图
     agentForwardResult: (data) => ipcRenderer.send('agent-forward-result', data),
 
+    // 定时任务管理（主进程驱动）
+    intervalCreate: (params) => ipcRenderer.invoke('interval-create', params),
+    intervalStop: (taskName) => ipcRenderer.invoke('interval-stop', taskName),
+    intervalList: () => ipcRenderer.invoke('interval-list'),
+    intervalStopAll: () => ipcRenderer.send('interval-stop-all'),
+    intervalStopAllForce: () => ipcRenderer.send('interval-stop-all-force'),
+    intervalGetSaved: () => ipcRenderer.invoke('interval-get-saved'),
+    intervalRestoreSaved: () => ipcRenderer.invoke('interval-restore-saved'),
+    intervalClearSaved: () => ipcRenderer.invoke('interval-clear-saved'),
+
     // 继续生成按钮检测通知（返回用户选择：true=继续生成，false=取消）
     notifyContinueGeneration: () => ipcRenderer.invoke('notify-continue-generation'),
 
     // 频率限制/服务器繁忙通知（返回用户选择：true=重试，false=取消）
     agentRateLimitNotify: (waitSeconds, errorType) => ipcRenderer.invoke('agent-rate-limit-notify', waitSeconds, errorType),
 
-    // 浏览器工具
-    browserCreate: (options) => ipcRenderer.invoke('browser-create', options),
-    browserExecute: (winId, code) => ipcRenderer.invoke('browser-execute', winId, code),
-    browserScreenshot: (winId, saveName) => ipcRenderer.invoke('browser-screenshot', winId, saveName),
-    browserNavigate: (winId, url) => ipcRenderer.invoke('browser-navigate', winId, url),
-    browserClose: (winId) => ipcRenderer.invoke('browser-close', winId),
-    browserList: () => ipcRenderer.invoke('browser-list'),
-    browserResize: (winId, width, height) => ipcRenderer.invoke('browser-resize', winId, width, height),
     winapiInvoke: (command) => ipcRenderer.invoke('winapi-invoke', command),
 
     // 多终端管理
@@ -99,7 +109,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     terminalList: () => ipcRenderer.invoke('terminal-list'),
 
     // MCP 桥接
-    mcpInit: () => ipcRenderer.invoke('mcp-init'),
+    mcpInit: (force) => ipcRenderer.invoke('mcp-init', force),
     mcpGetTools: () => ipcRenderer.invoke('mcp-get-tools'),
     mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp-call-tool', serverName, toolName, args),
     mcpShutdown: () => ipcRenderer.invoke('mcp-shutdown'),

@@ -23,10 +23,11 @@ const DEFAULT_CONFIG = {
         'powershell remove-item', 'rm -rf', 'rm -r', 'dd if=/dev/zero',
         'move ', 'ren ', 'rename '
     ],
-    safeOperations: ['local-read', 'local-list', 'local-info', 'local-exists', 'local-subreader'],
+    safeOperations: ['local-read', 'local-list', 'local-info', 'local-exists', 'local-subreader', 'local-interval', 'local-interval-list'],
     confirmMode: 'smart',
     commandWhitelist: [],    // 用户信任的命令列表（如 python xxx、node xxx）
-    mcpServers: []           // MCP 服务器配置列表
+    mcpServers: [],          // MCP 服务器配置列表
+    skillsStoragePath: ''    // 技能大文件存储路径（空则默认 AppData）
 };
 
 // ==================== 内部工具函数 ====================
@@ -341,9 +342,17 @@ function saveConfig(config) {
 }
 
 // ==================== 技能持久化（SKILL.md 标准格式） ====================
-// 两级存储：AppData 主仓库 → 按需同步到工作目录 .dsa/skills/
+// 两级存储：大文件仓库（可配置路径） → 按需同步到工作目录 .dsa/skills/
+// 默认直接使用仓库中的技能（节省空间），只有特殊化需求时才同步到工作目录
 
 function getSkillsRepoDir() {
+    // 优先使用配置中的自定义路径
+    var configResult = loadConfig();
+    var customPath = configResult.config.skillsStoragePath || '';
+    if (customPath && fs.existsSync(customPath)) {
+        return customPath;
+    }
+    // 默认：AppData 下的 skills-repo
     var appData;
     if (process.platform === 'win32') {
         appData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
@@ -355,79 +364,245 @@ function getSkillsRepoDir() {
     return dir;
 }
 
-function getSkillsDir() {
+function getSkillsWorkDir() {
+    // 工作目录下的 .dsa/skills/（仅存放已同步/自定义的技能）
     var dir = path.join(getDsaPath('skills'));
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     return dir;
 }
 
-// 从 AppData 仓库同步所有技能到当前工作目录
-function syncSkillsFromRepo() {
+// 获取技能存储路径配置
+function getSkillsStoragePath() {
+    var configResult = loadConfig();
+    return { success: true, path: configResult.config.skillsStoragePath || getSkillsRepoDir() };
+}
+
+// 设置技能存储路径
+function setSkillsStoragePath(newPath) {
     try {
-        var repoDir = getSkillsRepoDir();
-        var skillsDir = getSkillsDir();
-        var repoEntries = fs.readdirSync(repoDir, { withFileTypes: true });
-        var repoDirs = new Set();
-        repoEntries.forEach(function(entry) {
-            if (!entry.isDirectory()) return;
-            repoDirs.add(entry.name);
-            var srcPath = path.join(repoDir, entry.name);
-            var destPath = path.join(skillsDir, entry.name);
-            // 如果目标已存在且时间较新，跳过
-            if (fs.existsSync(destPath)) {
-                try {
-                    var srcMdStat = fs.statSync(path.join(srcPath, 'SKILL.md'));
-                    var destMdStat = fs.statSync(path.join(destPath, 'SKILL.md'));
-                    if (destMdStat.mtimeMs >= srcMdStat.mtimeMs) return;
-                } catch(e) {}
-                fs.rmSync(destPath, { recursive: true, force: true });
-            }
-            copyFolderSync(srcPath, destPath);
-        });
-        // 清理工作目录中已不在仓库的孤立技能目录
-        if (fs.existsSync(skillsDir)) {
-            var workEntries = fs.readdirSync(skillsDir, { withFileTypes: true });
-            workEntries.forEach(function(entry) {
-                if (!entry.isDirectory()) return;
-                if (!repoDirs.has(entry.name)) {
-                    fs.rmSync(path.join(skillsDir, entry.name), { recursive: true, force: true });
-                    console.log('[SKILLS] Cleaned orphan:', entry.name);
-                }
-            });
+        var configResult = loadConfig();
+        var config = configResult.config;
+        config.skillsStoragePath = newPath || '';
+        saveConfig(config);
+        // 如果路径非空，确保目录存在
+        if (newPath && !fs.existsSync(newPath)) {
+            fs.mkdirSync(newPath, { recursive: true });
         }
+        console.log('[SKILLS] Storage path set to:', newPath || '(default AppData)');
         return { success: true };
     } catch (e) {
-        console.warn('[SKILLS] Sync from repo failed:', e.message);
         return { success: false, error: e.message };
     }
 }
 
+// 加载技能：工作目录（已同步/自定义）优先，仓库（默认）作为回退
+// 对于未同步的仓库技能，自动创建 junction 链接到工作目录（不占额外空间）
 function loadSkills() {
-    // 注意：不再自动同步，需要用户点击"同步技能"按钮触发
     try {
-        var skillsDir = getSkillsDir();
-        var entries = fs.readdirSync(skillsDir, { withFileTypes: true });
-        var skills = [];
-        entries.forEach(function(entry) {
-            if (!entry.isDirectory()) return;
-            var skillName = entry.name;
-            var skillPath = path.join(skillsDir, skillName);
-            var mdPath = path.join(skillPath, 'SKILL.md');
-            if (!fs.existsSync(mdPath)) return;
-            var instructions = fs.readFileSync(mdPath, 'utf-8');
-            var files = fs.readdirSync(skillPath).filter(function(f) {
-                return f !== 'SKILL.md';
+        var skillsMap = {};
+        var repoDir = getSkillsRepoDir();
+        var workDir = getSkillsWorkDir();
+
+        // 清理指向无效目标的旧 junction
+        if (fs.existsSync(workDir)) {
+            var existingEntries = fs.readdirSync(workDir, { withFileTypes: true });
+            existingEntries.forEach(function(entry) {
+                if (!entry.isDirectory()) return;
+                var fullPath = path.join(workDir, entry.name);
+                try {
+                    if (fs.lstatSync(fullPath).isSymbolicLink()) {
+                        // 检查 junction 目标是否仍然有效
+                        var target = fs.readlinkSync(fullPath);
+                        if (!fs.existsSync(target)) {
+                            try { fs.rmdirSync(fullPath); } catch(e) {}
+                        }
+                    }
+                } catch(e) {}
             });
-            skills.push({
-                name: skillName,
-                instructions: instructions,
-                files: files
+        }
+
+        // 1. 先从仓库加载（作为默认），并为未同步的技能创建 junction
+        if (fs.existsSync(repoDir)) {
+            var repoEntries = fs.readdirSync(repoDir, { withFileTypes: true });
+            repoEntries.forEach(function(entry) {
+                if (!entry.isDirectory()) return;
+                var skillName = entry.name;
+                var skillPath = path.join(repoDir, skillName);
+                var mdPath = path.join(skillPath, 'SKILL.md');
+                if (!fs.existsSync(mdPath)) return;
+                var instructions = fs.readFileSync(mdPath, 'utf-8');
+                var files = fs.readdirSync(skillPath).filter(function(f) {
+                    return f !== 'SKILL.md';
+                });
+                skillsMap[skillName] = {
+                    name: skillName,
+                    instructions: instructions,
+                    files: files,
+                    source: 'repo'
+                };
+                // 为未同步的技能创建 junction（不占额外空间）
+                var workPath = path.join(workDir, skillName);
+                if (!fs.existsSync(workPath)) {
+                    try {
+                        fs.symlinkSync(skillPath, workPath, 'junction');
+                    } catch(e) {
+                        // junction 创建失败（如权限不足），回退到复制
+                        try { copyFolderSync(skillPath, workPath); } catch(e2) {}
+                    }
+                }
             });
-        });
+        }
+
+        // 2. 工作目录的覆盖仓库（已同步/自定义的版本优先）
+        if (fs.existsSync(workDir)) {
+            var workEntries = fs.readdirSync(workDir, { withFileTypes: true });
+            workEntries.forEach(function(entry) {
+                if (!entry.isDirectory()) return;
+                var skillName = entry.name;
+                var skillPath = path.join(workDir, skillName);
+                // 跳过 junction（指向 repo 的链接）
+                try {
+                    if (fs.lstatSync(skillPath).isSymbolicLink()) return;
+                } catch(e) {}
+                var mdPath = path.join(skillPath, 'SKILL.md');
+                if (!fs.existsSync(mdPath)) return;
+                var instructions = fs.readFileSync(mdPath, 'utf-8');
+                var files = fs.readdirSync(skillPath).filter(function(f) {
+                    return f !== 'SKILL.md';
+                });
+                skillsMap[skillName] = {
+                    name: skillName,
+                    instructions: instructions,
+                    files: files,
+                    source: 'work'
+                };
+            });
+        }
+
+        var skills = Object.keys(skillsMap).map(function(k) { return skillsMap[k]; });
         return { success: true, skills: skills };
     } catch (e) {
         console.warn('[SKILLS] Failed to load:', e.message);
         return { success: true, skills: [] };
+    }
+}
+
+// 获取仓库中所有技能列表（用于同步选择界面）
+function listRepoSkills() {
+    try {
+        var repoDir = getSkillsRepoDir();
+        if (!fs.existsSync(repoDir)) return { success: true, skills: [] };
+        var entries = fs.readdirSync(repoDir, { withFileTypes: true });
+        var skills = [];
+        entries.forEach(function(entry) {
+            if (!entry.isDirectory()) return;
+            var mdPath = path.join(repoDir, entry.name, 'SKILL.md');
+            if (!fs.existsSync(mdPath)) return;
+            var instructions = fs.readFileSync(mdPath, 'utf-8');
+            var fm = parseSkillFrontmatter(instructions);
+            skills.push({
+                name: entry.name,
+                displayName: fm.name || entry.name,
+                description: fm.description || ''
+            });
+        });
+        return { success: true, skills: skills };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+// 获取已同步到工作目录的技能名称列表（排除 junction 链接）
+function getSyncedSkillNames() {
+    try {
+        var workDir = getSkillsWorkDir();
+        if (!fs.existsSync(workDir)) return [];
+        return fs.readdirSync(workDir, { withFileTypes: true })
+            .filter(function(e) {
+                if (!e.isDirectory()) return false;
+                // 排除 junction（指向 repo 的符号链接）
+                try {
+                    var fullPath = path.join(workDir, e.name);
+                    return !fs.lstatSync(fullPath).isSymbolicLink();
+                } catch(ex) {
+                    return true;
+                }
+            })
+            .map(function(e) { return e.name; });
+    } catch (e) {
+        return [];
+    }
+}
+
+// 将指定技能从仓库同步到工作目录（用于特殊化定制）
+// 会替换 junction 为实际文件副本
+function syncSkillToWorkDir(skillName) {
+    try {
+        var safeName = skillName.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fff]/g, '');
+        if (!safeName) return { success: false, error: '无效的技能名称' };
+        var repoDir = getSkillsRepoDir();
+        var srcPath = path.join(repoDir, safeName);
+        if (!fs.existsSync(srcPath)) {
+            return { success: false, error: '仓库中未找到技能: ' + safeName };
+        }
+        var workDir = getSkillsWorkDir();
+        var destPath = path.join(workDir, safeName);
+        // 如果已存在（junction 或真实目录），先删除
+        if (fs.existsSync(destPath)) {
+            // 如果是 junction，用 rmdir 删除（否则 rmSync 可能删除源文件）
+            try {
+                var stat = fs.lstatSync(destPath);
+                if (stat.isSymbolicLink()) {
+                    fs.rmdirSync(destPath);
+                } else {
+                    fs.rmSync(destPath, { recursive: true, force: true });
+                }
+            } catch(e) {
+                fs.rmSync(destPath, { recursive: true, force: true });
+            }
+        }
+        copyFolderSync(srcPath, destPath);
+        console.log('[SKILLS] Synced to work dir:', safeName);
+        return { success: true, name: safeName };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+// 从工作目录取消同步（删除工作目录副本，重新创建 junction 指向仓库）
+function unsyncSkill(skillName) {
+    try {
+        var safeName = skillName.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fff]/g, '');
+        if (!safeName) return { success: false, error: '无效的技能名称' };
+        var workDir = getSkillsWorkDir();
+        var workPath = path.join(workDir, safeName);
+        if (fs.existsSync(workPath)) {
+            // 删除工作目录副本（注意：如果是 junction，用 rmdir）
+            try {
+                var stat = fs.lstatSync(workPath);
+                if (stat.isSymbolicLink()) {
+                    fs.rmdirSync(workPath);
+                } else {
+                    fs.rmSync(workPath, { recursive: true, force: true });
+                }
+            } catch(e) {
+                fs.rmSync(workPath, { recursive: true, force: true });
+            }
+            console.log('[SKILLS] Unsynced from work dir:', safeName);
+        }
+        // 重新创建 junction 指向仓库
+        var repoDir = getSkillsRepoDir();
+        var srcPath = path.join(repoDir, safeName);
+        if (fs.existsSync(srcPath) && !fs.existsSync(workPath)) {
+            try {
+                fs.symlinkSync(srcPath, workPath, 'junction');
+            } catch(e) {
+                try { copyFolderSync(srcPath, workPath); } catch(e2) {}
+            }
+        }
+        return { success: true, name: safeName };
+    } catch (e) {
+        return { success: false, error: e.message };
     }
 }
 
@@ -438,7 +613,7 @@ function importSkill(sourceFolderPath) {
         if (!fs.existsSync(sourceMd)) {
             return { success: false, error: '所选文件夹中未找到 SKILL.md 文件' };
         }
-        // 1. 保存到 AppData 主仓库
+        // 仅保存到仓库，不自动同步到工作目录
         var repoDir = getSkillsRepoDir();
         var repoPath = path.join(repoDir, skillName);
         if (fs.existsSync(repoPath)) {
@@ -446,8 +621,6 @@ function importSkill(sourceFolderPath) {
         }
         copyFolderSync(sourceFolderPath, repoPath);
         console.log('[SKILLS] Imported to repo:', repoPath);
-        // 2. 同步到当前工作目录
-        syncSkillsFromRepo();
         return { success: true, name: skillName };
     } catch (e) {
         return { success: false, error: e.message };
@@ -456,17 +629,27 @@ function importSkill(sourceFolderPath) {
 
 function deleteSkill(name) {
     try {
-        var safeName = name.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fff]/g, '');
-        if (!safeName) return { success: false, error: '无效的技能名称' };
-        // 1. 从 AppData 主仓库删除
+        // 使用 path.basename 防止路径穿越，与 importSkill 保持一致
+        var safeName = path.basename(name);
+        if (!safeName || safeName === '.' || safeName === '..') return { success: false, error: '无效的技能名称' };
+        // 1. 从仓库删除
         var repoPath = path.join(getSkillsRepoDir(), safeName);
         if (fs.existsSync(repoPath)) {
             fs.rmSync(repoPath, { recursive: true, force: true });
         }
-        // 2. 从工作目录也删除（否则 loadSkills 仍会读到旧副本）
-        var workPath = path.join(getSkillsDir(), safeName);
+        // 2. 从工作目录也删除（junction 或真实目录）
+        var workPath = path.join(getSkillsWorkDir(), safeName);
         if (fs.existsSync(workPath)) {
-            fs.rmSync(workPath, { recursive: true, force: true });
+            try {
+                var stat = fs.lstatSync(workPath);
+                if (stat.isSymbolicLink()) {
+                    fs.rmdirSync(workPath);
+                } else {
+                    fs.rmSync(workPath, { recursive: true, force: true });
+                }
+            } catch(e) {
+                fs.rmSync(workPath, { recursive: true, force: true });
+            }
         }
         return { success: true };
     } catch (e) {
@@ -483,12 +666,12 @@ function getSkillsPrompt() {
     if (enabledSkills.length === 0) return '';
     var prompt = '\n\n## 已加载的技能\n\n';
     prompt += '以下是当前工作区中已加载的技能列表（已禁用的技能不显示）。每个技能包含名称和描述，帮助判断何时使用。\n';
-    prompt += '当用户的请求匹配某个技能的用途时，请使用 `local-skill` 命令获取该技能的完整指令内容后再执行。\n';
-    prompt += '使用 `local-skill all` 可重新列出所有技能及其描述。\n\n';
+    prompt += '当用户的请求匹配某个技能的用途时，请使用 `skill` 工具获取该技能的完整指令内容后再执行。\n';
+    prompt += '使用 `skill` + `all` 可重新列出所有技能及其描述。\n\n';
     prompt += '**技能文件位置：** 每个技能的附加文件存放在 `.dsa/skills/{技能名}/` 目录下。\n';
-    prompt += '使用 `local-read` 读取技能文件时，路径格式为 `.dsa/skills/{技能名}/{文件名}`。\n';
-    prompt += '使用 `local-skill` 获取完整 SKILL.md 指令，例如：\n';
-    prompt += '```local-skill\n技能名称\n```\n\n';
+    prompt += '使用 `read` 读取技能文件时，路径格式为 `.dsa/skills/{技能名}/{文件名}`。\n';
+    prompt += '使用 `skill` 获取完整 SKILL.md 指令，例如：\n';
+    prompt += '```functioncall\n{"tool": "skill", "params": {"name": "技能名称"}}\n```\n\n';
     enabledSkills.forEach(function(s) {
         var fm = parseSkillFrontmatter(s.instructions);
         var displayName = fm.name || s.name;
@@ -501,7 +684,7 @@ function getSkillsPrompt() {
         }
         prompt += '\n';
     });
-    prompt += '\n> 使用 `local-skill` + 技能名称获取该技能的完整指令内容。\n';
+    prompt += '\n> 使用 `skill` + 技能名称获取该技能的完整指令内容。\n';
     return prompt;
 }
 
@@ -740,9 +923,14 @@ function terminalList() {
 
 var mcpInitialized = false;
 
-async function initMcp() {
-    if (mcpInitialized) return { success: true, message: 'Already initialized' };
+async function initMcp(force) {
+    if (mcpInitialized && !force) return { success: true, message: 'Already initialized' };
     try {
+        // 强制重新初始化时先关闭现有连接
+        if (force && mcpInitialized) {
+            await mcpManager.shutdown();
+            mcpInitialized = false;
+        }
         var result = loadConfig();
         var config = result.config;
         var mcpServers = config.mcpServers || [];
@@ -751,6 +939,10 @@ async function initMcp() {
         }
         var results = await mcpManager.initFromConfig(mcpServers);
         mcpInitialized = true;
+        // 加载已保存的工具状态
+        if (config.mcpToolStates) {
+            mcpManager.setToolStates(config.mcpToolStates);
+        }
         return { success: true, results: results, tools: mcpManager.getAllTools() };
     } catch (e) {
         return { success: false, error: e.message };
@@ -759,6 +951,45 @@ async function initMcp() {
 
 function getMcpTools() {
     return { success: true, tools: mcpManager.getAllTools() };
+}
+
+function getMcpToolStates() {
+    // 从配置文件加载
+    try {
+        var result = loadConfig();
+        return { success: true, states: result.config.mcpToolStates || {} };
+    } catch(e) {
+        return { success: true, states: {} };
+    }
+}
+
+function setMcpToolStates(states) {
+    try {
+        var result = loadConfig();
+        var config = result.config;
+        config.mcpToolStates = states || {};
+        saveConfig(config);
+        // 同步到内存中的 manager
+        mcpManager.setToolStates(config.mcpToolStates);
+        return { success: true };
+    } catch(e) {
+        return { success: false, error: e.message };
+    }
+}
+
+function setMcpToolEnabled(serverName, toolName, enabled) {
+    try {
+        mcpManager.setToolEnabled(serverName, toolName, enabled);
+        // 持久化到配置
+        var result = loadConfig();
+        var config = result.config;
+        if (!config.mcpToolStates) config.mcpToolStates = {};
+        config.mcpToolStates[serverName + '/' + toolName] = enabled;
+        saveConfig(config);
+        return { success: true };
+    } catch(e) {
+        return { success: false, error: e.message };
+    }
 }
 
 function getMcpPrompt() {
@@ -836,13 +1067,18 @@ module.exports = {
     loadConfig,
     saveConfig,
     loadSkills,
-    syncSkillsFromRepo,
+    syncSkillToWorkDir,
+    unsyncSkill,
+    listRepoSkills,
+    getSyncedSkillNames,
     importSkill,
     deleteSkill,
     getSkillsPrompt,
     getSkillContent,
     getSkillsRepoDir,
-    getSkillsDir,
+    getSkillsWorkDir,
+    getSkillsStoragePath,
+    setSkillsStoragePath,
     getDisabledSkills,
     toggleSkillDisabled,
     addWhitelist,
@@ -856,6 +1092,8 @@ module.exports = {
     terminalList,
     initMcp,
     getMcpTools,
+    getMcpToolStates,
+    setMcpToolEnabled,
     getMcpPrompt,
     callMcpTool,
     shutdownMcp,

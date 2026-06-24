@@ -147,23 +147,45 @@ body {
 #stop-btn:active { transform: scale(0.95); }
 #stop-btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
 
-/* 状态文字 - 走马灯效果 */
+/* 状态文字 - 滚动容器 */
 #status-text {
     flex: 1;
     min-width: 0;
-    font-size: 11px;
-    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    scrollbar-width: thin;
+    font-size: 11px;
     line-height: 1;
-    transition: color var(--transition-normal);
     letter-spacing: 0.2px;
 }
-#status-text.idle { color: var(--text-muted); font-style: italic; }
-#status-text.active { color: var(--cyan); font-weight: 500; }
-#status-text.done { color: var(--success); font-weight: 500; }
-#status-text.error { color: var(--danger); font-weight: 500; }
+#status-text::-webkit-scrollbar { height: 2px; }
+#status-text::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 1px; }
+#status-main {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    transition: color var(--transition-normal);
+}
+#status-main.generating { color: var(--cyan); }
+#status-main.done { color: var(--success); }
+#status-main.error { color: var(--danger); }
+#status-text .status-item {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    transition: opacity var(--transition-fast);
+    cursor: default;
+}
+#status-text .status-item.tool { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 12%, transparent); }
+#status-text .status-item.success { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+#status-text .status-item.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+#status-text .status-item.qwen { color: #6a8acc; background: color-mix(in srgb, #6a8acc 12%, transparent); }
 
 /* 调试区域 */
 #debug-toggle {
@@ -326,7 +348,7 @@ body {
     <div id="pause-btn" onclick="togglePause()" title="点击暂停/恢复 Agent 操作"></div>
 
     <!-- 状态文字 -->
-    <span id="status-text" class="idle">就绪</span>
+    <span id="status-text" class="idle"><span id="status-main">就绪</span></span>
 
     <!-- 停止按钮 -->
     <button id="stop-btn" disabled onclick="doStop()">⏹ 停止</button>
@@ -379,15 +401,13 @@ body {
                 document.getElementById('stop-btn').textContent = isGen ? '⏹ 停止' : '⏹';
             }
 
-            // 状态文字
-            var statusEl = document.getElementById('status-text');
+            // 状态文字（使用持久元素，不重复创建）
             var text = '';
-            var cls = 'idle';
-
+            var cls = '';
             switch (data.buttonState) {
                 case 'generating':
                     text = 'DeepSeek 正在输出...';
-                    cls = 'active';
+                    cls = 'generating';
                     break;
                 case 'done':
                     text = '对话完成 ✓';
@@ -395,52 +415,62 @@ body {
                     break;
                 case 'sending':
                     text = '正在发送...';
-                    cls = 'active';
+                    cls = 'generating';
                     break;
                 case 'ready':
                     text = '就绪';
-                    cls = 'idle';
+                    cls = '';
                     break;
                 default:
                     text = data.statusText || '就绪';
-                    cls = 'idle';
+                    cls = '';
             }
 
             // Qwen 状态覆盖
             if (data.qwenState === 'generating') {
                 text = 'Qwen 正在输出...';
-                cls = 'active';
+                cls = 'generating';
             }
 
-            statusEl.textContent = text;
-            statusEl.className = cls;
+            var mainEl = document.getElementById('status-main');
+            if (mainEl) {
+                mainEl.textContent = text;
+                mainEl.className = cls;
+            }
         });
 
         // 接收通知/状态消息（来自主进程）
         ipcRenderer.on('ctrl-notify', (event, msg) => {
-            var statusEl = document.getElementById('status-text');
-            statusEl.textContent = msg || '就绪';
-            statusEl.className = 'done';
-            // 3秒后恢复
-            setTimeout(function() {
-                statusEl.textContent = '就绪';
-                statusEl.className = 'idle';
-            }, 3000);
+            addStatusItem(msg || '就绪', 'success', 3000);
         });
 
         // 接收 Agent 状态消息（来自 agentview 的 addStatus/showStatus）
-        ipcRenderer.on('ctrl-agent-status', (event, data) => {
-            var statusEl = document.getElementById('status-text');
-            var msg = data.msg || '';
-            statusEl.textContent = msg || '就绪';
-            statusEl.className = 'active';
-            // 10秒后自动清除（状态消息时效性较长）
+        var _statusSeq = 0;
+        function addStatusItem(text, type, timeout) {
+            if (!text) return;
+            if (text === '就绪') return; // 不显示冗余的就绪状态
+            var container = document.getElementById('status-text');
+            var el = document.createElement('span');
+            el.className = 'status-item' + (type ? ' ' + type : '');
+            el.textContent = text;
+            container.appendChild(el);
+            // 滚动到最新
+            container.scrollLeft = container.scrollWidth;
+
+            var ttl = timeout || 10000;
             setTimeout(function() {
-                if (statusEl.textContent === msg) {
-                    statusEl.textContent = '就绪';
-                    statusEl.className = 'idle';
-                }
-            }, 10000);
+                el.style.opacity = '0';
+                setTimeout(function() {
+                    if (el.parentNode) el.remove();
+                }, 400);
+            }, ttl);
+        }
+
+        ipcRenderer.on('ctrl-agent-status', (event, data) => {
+            var msg = data.msg || data || '';
+            if (typeof msg === 'string' && msg) {
+                addStatusItem(msg, data.type || 'tool', 10000);
+            }
         });
 
         // 主题

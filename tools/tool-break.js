@@ -1,20 +1,47 @@
-// local-break - 停止 local-interval 循环
+// local-break - 停止后台定时任务
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._break_registered) return;
 
     window.__dsagent_tools.register({
         name: 'local-break',
-        scope: '停止正在运行的 local-interval 循环监控',
-        description: '停止当前正在执行的 local-interval 循环。直接发送此代码块即可，无需内容。',
-        params: [],
-        usage: '',
-        notes: '不需要任何参数和内容，发送空代码块即可。相当于强制终止循环。',
-        handler: async function() {
+        scope: '停止正在运行的后台定时任务',
+        description: '停止指定的后台定时任务。\n\n'
+            + '- 无参数：停止正在执行的循环任务（向后兼容）\n'
+            + '- `taskName=任务名`：停止指定名称的后台定时任务\n\n'
+            + '使用 `interval-list` 查看所有活跃任务。',
+        params: [
+            { name: 'taskName', type: '字符串', default: '—', required: false, description: '要停止的任务名称' }
+        ],
+        usage: '// 停止指定任务\n{"tool": "break", "params": {"taskName": "监控CPU"}}\n\n// 停止所有任务\n{"tool": "break", "params": {"taskName": "*"}}',
+        notes: '指定 taskName 停止特定任务，不指定时向后兼容旧版循环。',
+        handler: async function(params, body) {
+            var makeResult = window.__dsagent_tools.makeResult;
+            var taskName = params && params.taskName;
+
+            if (taskName === '*') {
+                try {
+                    await window.electronAPI.intervalStopAllForce();
+                    return makeResult(true, '已停止所有后台定时任务');
+                } catch(e) {
+                    return makeResult(true, '(no interval system)');
+                }
+            }
+
+            if (taskName) {
+                try {
+                    var result = await window.electronAPI.intervalStop(taskName);
+                    return makeResult(true, (result && result.result) || '已停止');
+                } catch(e) {
+                    return makeResult(true, '(no interval system)');
+                }
+            }
+
+            // 向后兼容：停止旧版循环
             if (typeof window.__dsagent_breakInterval === 'function') {
                 window.__dsagent_breakInterval();
-                return '(Interval stopped)';
+                return makeResult(true, '(Interval stopped)');
             }
-            return '(ignored)';
+            return makeResult(true, '(ignored)');
         }
     });
     window.__dsagent_tools._break_registered = true;

@@ -1,27 +1,37 @@
-// local-subreader - 子代理文件读取（新建独立对话读取文件）
+// local-subreader - 子代理读取文件
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._subreader_registered) return;
 
     window.__dsagent_tools.register({
         name: 'local-subreader',
-        scope: '通过子代理读取大文件、多文件、PDF等。新建独立对话读取，不污染主对话上下文。',
-        description: '创建独立的 DeepSeek 子对话来读取文件，读取完毕后自动清理临时对话。\n支持多文件同时读取、快速模式（上传文件）和专家模式（文本粘贴）。\nPDF 等二进制文件必须使用快速模式（mode=quick）。',
+        scope: '使用子代理读取和分析文件内容',
+        description: '在独立对话中读取文件并由 AI 分析总结，适合大文件或需要深度分析的文件。',
         params: [
-            { name: 'path', type: '字符串', default: '—', required: true, description: '文件路径（必填），多文件时每行写一个 path=...' },
-            { name: 'mode', type: '字符串', default: 'quick', required: false, description: '模式：quick（快速模式，上传文件，适合大文件和PDF）或 professional（专家模式，文本粘贴，有大小限制）' },
-            { name: 'search', type: '字符串', default: 'off', required: false, description: '是否启用联网搜索：on 或 off' },
-            { name: 'think', type: '字符串', default: 'off', required: false, description: '是否启用深度思考：on 或 off' },
-            { name: 'prompt', type: '字符串', default: '—', required: false, description: '额外的分析指令，在换行后直接写也行' }
+            { name: 'paths', type: '字符串', default: '—', required: true, description: '文件路径，多个用逗号分隔' },
+            { name: 'mode', type: '字符串', default: 'quick', required: false, description: 'quick 或 professional 模式' },
+            { name: 'search', type: '字符串', default: 'off', required: false, description: '是否启用联网搜索 on/off' },
+            { name: 'think', type: '字符串', default: 'off', required: false, description: '是否启用深度思考 on/off' },
+            { name: 'prompt', type: '字符串', default: '—', required: false, description: '额外分析提示' }
         ],
-        usage: 'path="D:\\report.pdf"\n提取报告中的核心数据和结论\n\n# 多文件\npath="D:\\file1.txt"\npath="D:\\file2.pdf"\nmode=quick\n比较两个文件的内容差异',
-        notes: 'PDF 文件只能用 mode=quick。图片文件建议使用 local-qwen-vision 进行视觉分析。多文件时每行写一个 path=...，不要用逗号分隔。完成后会自动清理临时对话。extraPrompt 可以直接写在换行后。',
-        handler: async function(content) {
-            // 委托给 inject.js 中的 handleSingleRead
-            if (typeof window.__dsagent_handleSingleRead === 'function') {
-                var params = window.__dsagent_parseSingleReadParams(content);
-                return await window.__dsagent_handleSingleRead(params);
+        usage: '{"tool": "subreader", "params": {"paths": "D:\\\\file1.txt, D:\\\\file2.txt", "mode": "quick"}}',
+        notes: '适合大文件和 PDF 文件。支持多个文件同时读取。',
+        handler: async function(params, body) {
+            var makeResult = window.__dsagent_tools.makeResult;
+            // Build content for backward compat
+            var content = '';
+            if (params.paths) content += 'paths=' + params.paths + '\n';
+            if (params.mode) content += 'mode=' + params.mode + '\n';
+            if (params.search) content += 'search=' + params.search + '\n';
+            if (params.think) content += 'think=' + params.think + '\n';
+            if (params.prompt) content += 'prompt=' + params.prompt + '\n';
+            if (!content && body) content = body;
+
+            if (typeof window.__dsagent_parseSingleReadParams === 'function' && typeof window.__dsagent_handleSingleRead === 'function') {
+                var parsed = window.__dsagent_parseSingleReadParams(content);
+                var result = await window.__dsagent_handleSingleRead(parsed);
+                return makeResult(true, result);
             }
-            throw new Error('handleSingleRead not initialized');
+            return makeResult(false, null, 'subreader not initialized');
         }
     });
     window.__dsagent_tools._subreader_registered = true;

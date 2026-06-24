@@ -1,5 +1,6 @@
-// Tool System - 标准工具注册/加载器
+// Tool System - 标准工具注册/加载器（JSON 标准化版）
 // 每个工具按标准格式注册，支持元数据查询和执行调度
+// 工具调用输入和返回均为 JSON 格式
 
 ;(function() {
     'use strict';
@@ -9,13 +10,47 @@
 
     var registry = {};
     var toolOrder = [];
-    var utils = null;  // 由 inject.js 注入工具函数
+    var utils = null;  // 由 inject-deepseek.js 注入工具函数
 
     // 已通过 local-help 阅读过文档的工具集合
     var readTools = new Set();
 
     // 免检白名单 — 这些工具不需要先阅读文档即可使用
-    var READ_WHITELIST = ['local-help', 'local-break', 'local-skill'];
+    var READ_WHITELIST = ['local-help', 'local-break', 'local-mcp-list', 'local-mcp-init'];
+
+    // ==================== JSON 解析 ====================
+
+    // 解析代码块内容为 { params, body }
+    // 如果内容以 { 开头，尝试 JSON 解析，提取 params 和 body
+    // 否则回退到旧格式：将整个 content 作为 body，params 为空
+    function parseJsonContent(content) {
+        if (!content) return { params: {}, body: '' };
+        var trimmed = content.trim();
+        if (trimmed[0] === '{') {
+            try {
+                var parsed = JSON.parse(trimmed);
+                return {
+                    params: parsed.params || {},
+                    body: typeof parsed.body === 'string' ? parsed.body : (parsed.body ? JSON.stringify(parsed.body) : '')
+                };
+            } catch(e) {
+                // JSON 解析失败，回退到旧格式
+                return { params: {}, body: content };
+            }
+        }
+        // 旧格式：整个内容作为 body
+        return { params: {}, body: content };
+    }
+
+    // 构建标准 JSON 返回结果
+    function makeResult(success, data, error, meta) {
+        return {
+            success: !!success,
+            data: data !== undefined ? data : null,
+            error: error || null,
+            meta: meta || {}
+        };
+    }
 
     // ==================== 工具注册 ====================
     function registerTool(toolDef) {
@@ -61,12 +96,11 @@
         return langs;
     }
 
-    // ==================== 文档生成 ====================
+    // ==================== 文档生成（JSON 格式） ====================
     function generateToolDoc(name) {
         var tool = registry[name];
         if (!tool) return '未知工具: ' + name;
 
-        // 标记该工具的文档已被阅读
         readTools.add(name);
         if (Array.isArray(tool.name)) {
             for (var _ni = 0; _ni < tool.name.length; _ni++) {
@@ -75,11 +109,11 @@
         }
 
         var doc = '';
-        // 工具名（多别名显示）
         var names = Array.isArray(tool.name) ? tool.name : [tool.name];
-        doc += '### `' + names[0] + '`\n';
-        if (names.length > 1) {
-            doc += '> 别名: ' + names.slice(1).map(function(n) { return '`' + n + '`'; }).join(', ') + '\n\n';
+        var displayNames = names.map(function(n) { return n.replace(/^local-/, ''); });
+        doc += '### `' + displayNames[0] + '`\n';
+        if (displayNames.length > 1) {
+            doc += '> 别名: ' + displayNames.slice(1).map(function(n) { return '`' + n + '`'; }).join(', ') + '\n\n';
         }
         doc += '\n**使用范围**: ' + (tool.scope || '通用') + '\n\n';
         doc += '**功能说明**: ' + (tool.description || '') + '\n\n';
@@ -96,7 +130,7 @@
         }
 
         if (tool.usage) {
-            doc += '**使用示例**:\n\n```' + names[0] + '\n' + tool.usage + '\n```\n\n';
+            doc += '**JSON 使用示例**:\n\n```functioncall\n' + tool.usage + '\n```\n\n';
         }
 
         if (tool.notes) {
@@ -107,7 +141,6 @@
     }
 
     function generateAllDocs() {
-        // 阅读全部文档 = 标记所有工具已读
         for (var oi = 0; oi < toolOrder.length; oi++) {
             readTools.add(toolOrder[oi]);
             var tool = registry[toolOrder[oi]];
@@ -118,8 +151,9 @@
             }
         }
 
-        var doc = '# 本地工具系统 — 完整指令文档\n\n';
-        doc += '> 本系统包含 ' + toolOrder.length + ' 个可用工具，支持文件操作、命令执行、AI 视觉分析、子代理读取等功能。\n\n';
+        var doc = '# 本地工具系统 — 完整指令文档（JSON 格式）\n\n';
+        doc += '> 本系统包含 ' + toolOrder.length + ' 个可用工具。所有工具统一使用 `functioncall` 代码块，通过 `tool` 字段指定工具名。\n';
+        doc += '> 代码块内容为 JSON 对象，包含 `tool`（工具名，无需 `local-` 前缀）、`params`（参数）和 `body`（内容体）。\n\n';
         doc += '---\n\n';
 
         for (var oi = 0; oi < toolOrder.length; oi++) {
@@ -127,39 +161,23 @@
             doc += '---\n\n';
         }
 
-        // 附录：处理逻辑说明
+        doc += '## JSON 调用格式\n\n';
+        doc += '所有工具统一使用 `functioncall` 代码块：\n\n';
+        doc += '```\n```functioncall\n{\n  "tool": "read",\n  "params": { "key": "value" },\n  "body": "多行内容\\n放在 body 字段中"\n}\n```\n\n';
+        doc += '- `tool`: 工具名称（必填），如 `exec`、`read`、`save` 等，无需 `local-` 前缀\n';
+        doc += '- `params`: 工具参数，key-value 对象\n';
+        doc += '- `body`: 多行内容体（命令、文件内容等），可选\n\n';
+        doc += '## JSON 返回格式\n\n';
+        doc += '所有工具返回统一 JSON 结构：\n\n';
+        doc += '```json\n{\n  "success": true,\n  "data": "结果数据",\n  "error": null,\n  "meta": { "tool": "xxx" }\n}\n```\n\n';
+        doc += '- `success`: 执行是否成功\n';
+        doc += '- `data`: 成功时的返回数据\n';
+        doc += '- `error`: 失败时的错误信息\n';
+        doc += '- `meta`: 元数据（工具名、耗时等）\n\n';
         doc += '## 处理逻辑\n\n';
-        doc += '### 使用前注意事项\n\n';
-        doc += '如果不确定某个工具的具体用法或参数，请先调用 `local-help` 查看完整文档，避免错误使用。\n\n';
-        doc += '### 自动执行\n\n';
-        doc += '所有 `local-*` 代码块在 DeepSeek 回复后自动检测并执行。系统通过监听发送按钮状态检测生成完成，然后点击复制按钮获取完整回复内容，解析其中的代码块并依次执行。\n\n';
-        doc += '### 确认机制\n\n';
-        doc += '- 危险命令（如 `del`、`rm` 等）默认需要用户确认\n';
-        doc += '- 安全操作（文件读写、列表等）自动执行无需确认\n';
-        doc += '- 三种确认模式: `strict`（全部确认）、`smart`（仅危险命令）、`loose`（全部自动）\n\n';
-        doc += '### 输出控制\n\n';
-        doc += '- 输出超过 10KB 时自动警告（除非添加 `force=true`）\n';
-        doc += '- 输出超过 159KB 时强制拒绝\n';
-        doc += '- 可通过 `force=true` 参数强制返回大结果\n\n';
-        doc += '### 中断机制\n\n';
-        doc += '- 点击停止按钮可中断 AI 生成和后续命令执行\n';
-        doc += '- `stopRequested` 标记阻止后续命令继续执行\n';
-        doc += '- `local-break` 可停止 `local-interval` 循环\n\n';
-        doc += '### 内容截断处理\n\n';
-        doc += '- 检测到"继续生成"按钮时弹出确认框\n';
-        doc += '- 用户选择"继续生成"则跳过本次解析，等待完整内容\n';
-        doc += '- 用户选择"取消"则正常处理当前已有内容\n\n';
-        doc += '### 文件上传核验\n\n';
-        doc += '- 上传后检查页面通知中的"该格式暂不支持"字眼\n';
-        doc += '- 生成结束后检查"未识别到文字"错误\n';
-        doc += '- 检测到错误自动清理临时对话并返回错误说明\n\n';
-        doc += '### 剪贴板管理\n\n';
-        doc += '- 操作剪贴板前自动保存当前剪贴板内容\n';
-        doc += '- 操作完成后自动还原\n\n';
-        doc += '### 错误处理\n\n';
-        doc += '- 各工具执行失败时返回具体错误信息\n';
-        doc += '- 超时、权限不足、文件不存在等均有对应处理\n';
-        doc += '- 全局异常捕获防止单工具崩溃影响后续工具\n';
+        doc += '### 自动执行\n所有 `functioncall` 代码块在 DeepSeek 回复后自动检测并执行。\n\n';
+        doc += '### 确认机制\n危险命令默认需要用户确认，安全操作自动执行。\n\n';
+        doc += '### 输出控制\n输出超过 10KB 时自动警告，超过 159KB 时强制拒绝。\n\n';
 
         return doc;
     }
@@ -169,21 +187,60 @@
         var tool = registry[name];
         if (!tool) throw new Error('未知工具: ' + name);
 
-        // 文档阅读检查 — 未阅读时自动帮读，不再阻塞执行
+        // 解析 JSON 输入
+        var parsed = parseJsonContent(content);
+        var params = parsed.params;
+        var body = parsed.body;
+
+        // 必填参数检查
+        if (tool.params && tool.params.length > 0) {
+            var missing = [];
+            for (var pi = 0; pi < tool.params.length; pi++) {
+                var p = tool.params[pi];
+                if (p.required && (params[p.name] === undefined || params[p.name] === null || params[p.name] === '')) {
+                    missing.push(p.name);
+                }
+            }
+            if (missing.length > 0) {
+                var doc = generateToolDoc(name);
+                return makeResult(false, null, '缺少必填参数: ' + missing.join(', ') + '\n\n' + doc);
+            }
+        }
+
+        // 文档阅读检查 — 未阅读时自动帮读
         if (READ_WHITELIST.indexOf(name) === -1 && !readTools.has(name)) {
             readTools.add(name);
             var doc = generateToolDoc(name);
-            // 简化提醒 + 完整文档 + 执行结果一起返回
-            var brief = '📖 **自动帮助** — 你调用了 `' + name + '`，以下是该工具的文档：\n\n';
-            brief += doc + '\n\n';
-            brief += '---\n**执行结果:**\n';
             if (!tool.handler) throw new Error('工具 ' + name + ' 未实现处理函数');
-            var result = await tool.handler(content, toolContext);
-            return brief + (result || '(No output)');
+
+            // 执行工具并包装结果
+            var result;
+            try {
+                var rawResult = await tool.handler(params, body, toolContext);
+                // 如果 handler 已经返回标准 JSON 格式，直接使用
+                if (rawResult && typeof rawResult === 'object' && 'success' in rawResult) {
+                    result = rawResult;
+                } else {
+                    result = makeResult(true, rawResult, null, { tool: name });
+                }
+            } catch (e) {
+                result = makeResult(false, null, e.message || '执行失败', { tool: name });
+            }
+            result._autoDoc = doc;
+            return result;
         }
 
         if (!tool.handler) throw new Error('工具 ' + name + ' 未实现处理函数');
-        return await tool.handler(content, toolContext);
+
+        try {
+            var rawResult = await tool.handler(params, body, toolContext);
+            if (rawResult && typeof rawResult === 'object' && 'success' in rawResult) {
+                return rawResult;
+            }
+            return makeResult(true, rawResult, null, { tool: name });
+        } catch (e) {
+            return makeResult(false, null, e.message || '执行失败', { tool: name });
+        }
     }
 
     // ==================== 初始化 ====================
@@ -202,6 +259,8 @@
         allDocs: generateAllDocs,
         execute: executeTool,
         init: init,
+        parseJsonContent: parseJsonContent,
+        makeResult: makeResult,
         clearReadHistory: function() { readTools = new Set(); },
         getReadHistory: function() { return Array.from(readTools); },
         setReadHistory: function(arr) { readTools = new Set(arr || []); }
