@@ -9,7 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     renameFile: (path, newName) => ipcRenderer.invoke('rename-file', path, newName),
     getInitialDir: () => ipcRenderer.invoke('get-initial-dir'),
     getDownloadsPath: () => ipcRenderer.invoke('get-downloads-path'),
-    getInitPrompt: () => ipcRenderer.invoke('get-init-prompt'),
+    getInitPrompt: (mode) => ipcRenderer.invoke('get-init-prompt', mode || 'quick'),
+    getSubreaderStrategy: () => ipcRenderer.invoke('get-subreader-strategy'),
 
     // Agent 操作
     agentExec: (cmd, timeout) => ipcRenderer.invoke('agent-exec', cmd, timeout),

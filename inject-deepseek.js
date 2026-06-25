@@ -6,6 +6,13 @@
     if (window.__dsagent_injected) return;
     window.__dsagent_injected = true;
 
+    // Agent 模式：quick / professional / image（影响策略 prompt 加载）
+    window._dsAgentMode = window._dsAgentMode || 'quick';
+    window.__dsagent_setMode = function(mode) {
+        window._dsAgentMode = mode;
+        console.log('[DS Agent] Mode set to:', mode);
+    };
+
     const CONFIG = {
         SEND_DELAY: 300,
         TOAST_DURATION: 5000,
@@ -150,19 +157,38 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
     }
 
     function getSendStopBtn() {
+        // 优先：ds-button 类名
         var btns = document.querySelectorAll('div.ds-button--primary.ds-button--filled.ds-button--circle');
         for (var i = 0; i < btns.length; i++) {
             var b = btns[i];
             if (b.getAttribute('aria-label')) continue;
             return b;
         }
-        // fallback: 新版本使用 capsule 形状
+
+        // 降级 1: capsule 形状按钮
         var capsule = document.querySelectorAll('div.ds-button--primary.ds-button--filled.ds-button--capsule');
         for (var ci = 0; ci < capsule.length; ci++) {
             var cb = capsule[ci];
             if (cb.getAttribute('aria-label')) continue;
             return cb;
         }
+
+        // 降级 2: 通过 aria-label 查找（发送/停止）
+        var labeled = document.querySelectorAll('[aria-label*="发送"], [aria-label*="Send"], [aria-label*="停止"], [aria-label*="Stop"]');
+        if (labeled.length > 0) return labeled[0];
+
+        // 降级 3: 通过按钮位置（输入框附近的主色按钮）
+        var allBtns = document.querySelectorAll('button, div[role="button"]');
+        for (var ab = 0; ab < allBtns.length; ab++) {
+            var btn = allBtns[ab];
+            var style = window.getComputedStyle(btn);
+            // 查找主色按钮（蓝色/紫色）
+            if (style.backgroundColor && (style.backgroundColor.includes('56, 139, 253') || style.backgroundColor.includes('137, 87, 229'))) {
+                return btn;
+            }
+        }
+
+        console.warn('[DeepSeek] Send/Stop button not found - DeepSeek UI may have changed');
         return null;
     }
 
@@ -438,7 +464,7 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
             // 专家模式：超过 10KB 需要 force=true 才能读取
             if (mode !== 'quick' && infoRes.size > 10 * 1024) {
                 if (!force) {
-                    return '⚠️ 文件大小警告：该文件 ' + sizeKB + 'KB（超过 10KB），可能会占用大量上下文。\n如果你确认需要读取完整内容，请在 read 中添加 force=true 参数，如：\n\n```functioncall\n{"tool": "read", "params": {"path": "' + filePath + '", "force": true}}\n```\n\n> 建议使用 subreader 并添加分析指令来获取摘要，避免占用过多上下文。';
+                    return '⚠️ 文件大小警告：该文件 ' + sizeKB + 'KB（超过 10KB），可能会占用大量上下文。\n如果你确认需要读取完整内容，请在 read 中添加 force=true 参数，如：\n\n<functioncall>{"tool": "read", "params": {"path": "' + filePath + '", "force": true}}</functioncall>\n\n> 建议使用 subreader 并添加分析指令来获取摘要，避免占用过多上下文。';
                 }
                 showToast('⚠️ 已强制读取大文件 (' + sizeKB + 'KB)', 3000);
             }
@@ -531,7 +557,9 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
                 interval: task.interval,
                 mode: task.mode
             });
-        } catch(e) {}
+        } catch(e) {
+            console.warn('[Interval] Failed to forward interval-created:', e.message);
+        }
 
         _intervalTasks[taskName] = task;
 
@@ -541,7 +569,9 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
                 type: 'interval-debug',
                 msg: 'CREATED: ' + taskName + ' interval=' + task.interval + 'ms mode=' + task.mode
             });
-        } catch(e) {}
+        } catch(e) {
+            console.warn('[Interval] Failed to forward interval-debug:', e.message);
+        }
 
         var modeLabel = task.mode === 'command' ? '执行命令' : '定时提醒';
         var detail = task.mode === 'command' ? task.command : task.message;
@@ -561,7 +591,9 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
                 type: 'interval-debug',
                 msg: 'STOP: ' + taskName + (reason ? ' (' + reason + ')' : '')
             });
-        } catch(e) {}
+        } catch(e) {
+            console.warn('[Interval] Failed to forward stop debug:', e.message);
+        }
 
         task.status = 'stopped';
         delete _intervalTasks[taskName];
@@ -576,7 +608,9 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
                 taskName: taskName,
                 command: task.mode === 'command' ? task.command : task.message
             });
-        } catch(e) {}
+        } catch(e) {
+            console.warn('[Interval] Failed to forward interval-stop:', e.message);
+        }
 
         return '⏹️ 已停止定时任务 "' + taskName + '"' + (reason ? '（' + reason + '）' : '');
     }
@@ -609,7 +643,9 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
             console.log(msg);
             try {
                 window.electronAPI.agentForwardResult({ type: 'interval-debug', msg: '[Consumer] ' + msg });
-            } catch(e) {}
+            } catch(e) {
+                console.warn('[Consumer] Failed to forward debug:', e.message);
+            }
         }
         setInterval(async function() {
             if (_intervalSending) return;
@@ -705,15 +741,39 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
     }
 
     function getInputBox() {
+        // 优先：使用配置的选择器
         var el = document.querySelector(SELECTORS.input);
-        return el;
+        if (el) return el;
+
+        // 降级 1: 查找所有 textarea
+        var textareas = document.querySelectorAll('textarea');
+        if (textareas.length === 1) return textareas[0];
+
+        // 降级 2: 查找可见且可编辑的 textarea（输入框通常可见）
+        for (var i = 0; i < textareas.length; i++) {
+            var ta = textareas[i];
+            if (!ta.disabled && !ta.readOnly && ta.offsetParent !== null) {
+                return ta;
+            }
+        }
+
+        // 降级 3: contenteditable 元素
+        var editables = document.querySelectorAll('[contenteditable="true"]');
+        for (var ei = 0; ei < editables.length; ei++) {
+            if (editables[ei].offsetParent !== null) return editables[ei];
+        }
+
+        console.warn('[DeepSeek] Input box not found - DeepSeek UI may have changed');
+        return null;
     }
 
     function showToast(msg, duration) {
         // 发送到控制栏状态栏显示，不在 DeepSeek 页面上创建 DOM
         try {
             window.electronAPI.agentNotifyStatus(msg);
-        } catch(e) {}
+        } catch(e) {
+            console.warn('[Toast] Failed to notify status:', e.message);
+        }
     }
 
     async function fillAndSend(text) {
@@ -727,7 +787,13 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
             input.value = text;
         }
         const tracker = input._valueTracker;
-        if (tracker) { try { tracker.setValue(''); } catch(e) {} }
+        if (tracker) {
+            try {
+                tracker.setValue('');
+            } catch(e) {
+                console.warn('[FillAndSend] Failed to reset value tracker:', e.message);
+            }
+        }
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
         await new Promise(function(r) { setTimeout(r, CONFIG.SEND_DELAY); });
@@ -807,6 +873,35 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
         }
         return pairs;
     }
+
+    // ==================== Subreader 策略 Prompt（从 common.md 加载） ====================
+    var _subreaderStrategy = null;
+
+    async function loadSubreaderStrategy() {
+        if (_subreaderStrategy) return _subreaderStrategy;
+        try {
+            var res = await window.electronAPI.getSubreaderStrategy();
+            if (res && res.success && res.text) {
+                _subreaderStrategy = res.text;
+                return res.text;
+            }
+        } catch(e) {
+            console.warn('Failed to load subreader strategy:', e);
+        }
+        _subreaderStrategy = '你是一个子代理(sub-agent)，负责分析文件。请直接返回结果，使用中文。';
+        return _subreaderStrategy;
+    }
+
+    async function buildSubreaderPrompt(fileListStr, extraPrompt) {
+        var strategy = await loadSubreaderStrategy();
+        var parts = [strategy];
+        if (extraPrompt) {
+            parts.push('【用户额外要求】\n' + extraPrompt);
+        }
+        parts.push('请阅读以下文件：' + fileListStr);
+        return parts.join('\n\n');
+    }
+    // ==================== End Subreader 策略 ====================
 
     async function handleSingleRead(params) {
     var pathsList = params.paths || [];
@@ -1288,7 +1383,7 @@ async function handleSingleReadSingle(pathsList, fileResults, mode, extraPrompt,
             return '⚠️ 上传失败：DeepSeek 不支持该文件格式，请尝试将文件转换为支持的格式（如 txt、pdf、docx 等文本格式）后重试。';
         }
 
-        readMsg = '你是子代理(sub-agent)，请阅读我上传的文件：' + fileListStr + '。' + (extraPrompt ? '提取其完整内容并按照以下要求：' + extraPrompt + '。' : '提取其完整内容并作必要分析，将结果完整返回。') + '返回后对话将被删除，请确保返回完整信息。';
+        readMsg = await buildSubreaderPrompt(fileListStr, extraPrompt);
     } else {
         // 专家模式：以文本形式发送，注意编码
         showToast('Reading file content for Expert mode...');
@@ -1307,10 +1402,10 @@ async function handleSingleReadSingle(pathsList, fileResults, mode, extraPrompt,
         }
         
         if (allTextContent) {
-            readMsg = '你是子代理(sub-agent)，请分析以下文件内容。' + (extraPrompt ? '按照以下要求：' + extraPrompt + '。\n\n' : '') + allTextContent + '\n\n请基于以上内容进行分析，返回完整结果。返回后对话将被删除。';
+            readMsg = await buildSubreaderPrompt(fileListStr, extraPrompt) + '\n\n' + allTextContent + '\n\n请基于以上内容进行分析，返回完整结果。';
         } else {
             // 降级方案：通过路径读取
-            readMsg = '你是子代理(sub-agent)，请读取并分析以下文件：' + fileListStr + '\n路径：' + pathsList.join(', ') + '。' + (extraPrompt ? '按照以下要求：' + extraPrompt + '。' : '请返回完整的分析结果。') + '返回后对话将被删除。';
+            readMsg = await buildSubreaderPrompt(fileListStr, extraPrompt) + '\n路径：' + pathsList.join(', ');
         }
     }
 
@@ -1707,7 +1802,7 @@ async function createAndSendBatch(batchFiles, batchPaths, extraPrompt, enableSea
     await waitForReady();
 
     var fileNames = batchFiles.map(function(f) { return f.name; }).join(', ');
-    var readMsg = '你是子代理(sub-agent)，请阅读我上传的文件：' + fileNames + '。' + (extraPrompt ? '提取其完整内容并按照以下要求：' + extraPrompt + '。' : '提取其完整内容并作必要分析，将结果完整返回。') + '返回后对话将被删除，请确保返回完整信息。';
+    var readMsg = await buildSubreaderPrompt(fileNames, extraPrompt);
     showToast(label + ': Sending...');
     await fillAndSend(readMsg);
 
@@ -1791,25 +1886,25 @@ async function deleteCurrentConversation() {
 
     function parseSingleReadParams(content) {
         var trimmed = content.trim();
-        // 提取所有 path= 的行（支持多行 path=）
-        var pathRegex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
-        var lastMatchEnd = 0;
-        var match;
+        // 逐行解析 path=/paths= 参数（支持路径中的空格）
+        var lines = trimmed.split('\n');
         var allPaths = [];
-        while ((match = pathRegex.exec(trimmed)) !== null) {
-            lastMatchEnd = match.index + match[0].length;
-            var key = match[1].toLowerCase();
-            var val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : match[4]);
-            if (key === 'path' && val) {
-                allPaths.push(val);
+        var textLines = [];
+        for (var li = 0; li < lines.length; li++) {
+            var line = lines[li].trim();
+            var m = line.match(/^(path|paths)\s*=\s*(.+)$/);
+            if (m) {
+                allPaths.push(m[2].trim());
+            } else if (line) {
+                textLines.push(line);
             }
         }
-        var extraPrompt = trimmed.substring(lastMatchEnd).trim();
+        var extraPrompt = textLines.join('\n').trim();
 
         var kv = parseKeyValuePairs(trimmed);
         // 如果没匹配到多行 path=，回退到单 path 解析
-        if (allPaths.length === 0 && kv.path) {
-            allPaths = [kv.path];
+        if (allPaths.length === 0 && (kv.path || kv.paths)) {
+            allPaths = [kv.path || kv.paths];
         }
         if (allPaths.length > 0) {
             return {
@@ -1864,7 +1959,9 @@ async function deleteCurrentConversation() {
         // 通知主进程停止所有后台定时任务
         try {
             window.electronAPI.intervalStopAll();
-        } catch(e) {}
+        } catch(e) {
+            console.warn('[ResetContext] Failed to stop interval tasks:', e.message);
+        }
     }
 
     async function findDeleteButton(convEl) {
@@ -2103,7 +2200,7 @@ async function deleteCurrentConversation() {
         var lines = content.trim().split('\n');
         var kv = {};
         var promptLines = [];
-        var paramRegex = /^(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))\s*$/;
+        var paramRegex = /^(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(.+?))\s*$/;
         for (var li = 0; li < lines.length; li++) {
             var line = lines[li].trim();
             if (!line) continue;
@@ -2302,20 +2399,20 @@ async function deleteCurrentConversation() {
     }
 
     async function qwenGeneral(content) {
-        // 解析 path 参数（使用全局正则，与 subreader 保持一致，支持多行 path= 不受中间参数行干扰）
-        var pathRegex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
-        var match;
+        // 逐行解析 path= 参数（支持路径中的空格）
+        var lines = content.split('\n');
         var filePaths = [];
-        var lastMatchEnd = 0;
-        while ((match = pathRegex.exec(content)) !== null) {
-            lastMatchEnd = match.index + match[0].length;
-            var key = match[1].toLowerCase();
-            var val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : match[4]);
-            if (key === 'path' && val) {
-                filePaths.push(val);
+        var textLines = [];
+        for (var li = 0; li < lines.length; li++) {
+            var line = lines[li].trim();
+            var m = line.match(/^path\s*=\s*(.+)$/);
+            if (m) {
+                filePaths.push(m[1].trim());
+            } else if (line) {
+                textLines.push(line);
             }
         }
-        var text = content.substring(lastMatchEnd).trim();
+        var text = textLines.join('\n').trim();
 
         window.electronAPI.qwenProgress('[Qwen] 使用 Qwen...');
         window.electronAPI.qwenProgress('[Qwen] 新建对话...');
@@ -2895,6 +2992,24 @@ async function deleteCurrentConversation() {
                 }
             }
 
+            // 4.5. 检测并过滤系统反馈 JSON（工具执行结果返回给 AI 的 JSON）
+            // 格式: {"summary": {"total": N, "success": N, "failed": N}, "results": [...]}
+            // 防止被误识别为 AI 回复发送到 agentview
+            if (/^\s*\{\s*"summary"\s*:/.test(markdown) && /"results"\s*:\s*\[/.test(markdown)) {
+                var depth = 0, jsonEnd = -1;
+                for (var fi = 0; fi < markdown.length; fi++) {
+                    if (markdown[fi] === '{') depth++;
+                    else if (markdown[fi] === '}') { depth--; if (depth === 0) { jsonEnd = fi + 1; break; } }
+                }
+                if (jsonEnd > 0) {
+                    markdown = markdown.substring(jsonEnd).trim();
+                    if (!markdown) {
+                        console.log('[Process] Content is feedback JSON only, skipping');
+                        return;
+                    }
+                }
+            }
+
             // 4a. 频率限制检测：页面包含"发送过于频繁，请稍后重试"
             {
                 var bodyText = document.body ? document.body.innerText || '' : '';
@@ -3040,7 +3155,7 @@ async function deleteCurrentConversation() {
                 // 已经是标准 JSON 格式
                 if (r && typeof r === 'object' && 'success' in r) {
                     if (!r.meta) r.meta = {};
-                    if (!r.meta.tool) r.meta.tool = lang;
+                    if (!r.meta.tool) r.meta.tool = lang.replace(/^local-/, '');
                     return r;
                 }
                 // 旧格式字符串 → 包装为 JSON
@@ -3048,7 +3163,7 @@ async function deleteCurrentConversation() {
                     success: true,
                     data: typeof r === 'string' ? r : (r ? JSON.stringify(r) : null),
                     error: null,
-                    meta: { tool: lang }
+                    meta: { tool: lang.replace(/^local-/, '') }
                 };
             }
 
@@ -3217,7 +3332,7 @@ async function deleteCurrentConversation() {
                     summary: { total: results.length, success: successCount, failed: results.length - successCount },
                     results: results.map(function(r) {
                         return {
-                            tool: (r.meta && r.meta.tool) || 'unknown',
+                            tool: ((r.meta && r.meta.tool) || 'unknown').replace(/^local-/, ''),
                             success: r.success,
                             data: r.data,
                             error: r.error
@@ -3337,6 +3452,48 @@ async function deleteCurrentConversation() {
         return null;
     }
 
+    // 流式预览：记录上次转发的文本，避免重复发送
+    var _lastStreamingText = '';
+
+    // 提取 DeepSeek 页面中最新 AI 回复的文本（即使未完成生成）
+    function extractStreamingText() {
+        var messages = document.querySelectorAll(SELECTORS.messageContainer);
+        var lastAiMsg = null;
+        for (var mi = messages.length - 1; mi >= 0; mi--) {
+            var msg = messages[mi];
+            var textEls = msg.querySelectorAll('.ds-message-content, [class*="markdown"], p, [class*="ds-markdown"]');
+            if (textEls.length > 0) { lastAiMsg = msg; break; }
+        }
+        if (lastAiMsg) {
+            var textEls = lastAiMsg.querySelectorAll('.ds-message-content, [class*="markdown"], p, [class*="ds-markdown"]');
+            var text = '';
+            for (var ti = 0; ti < textEls.length; ti++) {
+                text += textEls[ti].textContent;
+            }
+            return text.trim();
+        }
+        return '';
+    }
+
+    // 查找并点击 DeepSeek 页面的"滚动到底部"悬浮按钮
+    // 特征：ds-button--floating + role="button" + 向下箭头 SVG
+    function clickScrollDownFloatingButton() {
+        try {
+            var buttons = document.querySelectorAll('div[role="button"].ds-button--floating');
+            for (var bi = 0; bi < buttons.length; bi++) {
+                var btn = buttons[bi];
+                // 确认包含向下箭头 SVG（path 特征：M11.8486 5.5L11.4238...）
+                var svgPath = btn.querySelector('svg path');
+                if (svgPath && svgPath.getAttribute('d') && svgPath.getAttribute('d').indexOf('M11.8486') >= 0) {
+                    btn.click();
+                    break;
+                }
+            }
+        } catch(e) {
+            // 静默忽略
+        }
+    }
+
     function startCompletionWatcher() {
         var wasGenerating = false;
         var _continueHandled = false;  // 防止重复弹出"继续生成"
@@ -3381,6 +3538,26 @@ async function deleteCurrentConversation() {
             // 新的生成开始时，重置标记
             if (isStopSquare) {
                 _continueHandled = false;
+
+                // 流式预览：提取当前 AI 回复文本，转发到 agentview
+                var currentText = extractStreamingText();
+                if (currentText && currentText !== _lastStreamingText) {
+                    _lastStreamingText = currentText;
+                    // 只转发末 ~80 字符
+                    var preview = currentText.length > 80 ? '…' + currentText.slice(-80) : currentText;
+                    try {
+                        window.electronAPI.agentForwardResult({
+                            type: 'streaming-preview',
+                            text: preview
+                        });
+                    } catch(e) {}
+                }
+
+                // AI 输出中，查找并点击 DeepSeek 页面的"滚动到底部"悬浮按钮
+                clickScrollDownFloatingButton();
+            } else if (!isStopSquare) {
+                // 非生成状态，重置流式文本缓存
+                _lastStreamingText = '';
             }
 
             // 检测生成完成转换
@@ -3623,7 +3800,7 @@ async function deleteCurrentConversation() {
             var apiDoc = (await window.__dsagent_getInitPromptText())
                 + '\n\n## 初次使用\n\n'
                 + '请先发送测试指令确认连接：\n\n'
-                + '```functioncall\n{"tool": "exec", "params": {}, "body": "echo \\"本地服务连接测试成功\\""}\n```';
+                + '<functioncall>{"tool": "exec", "params": {}, "body": "echo \\"本地服务连接测试成功\\""}</functioncall>';
 
             var input = getInputBox();
             if (input) {
@@ -3753,10 +3930,10 @@ async function deleteCurrentConversation() {
             await sleep(1500);
             return { success: true };
         };
-        window.__dsagent_getInitPromptText = async function() {
+        window.__dsagent_getInitPromptText = async function(mode) {
             var baseText = '';
             try {
-                var res = await window.electronAPI.getInitPrompt();
+                var res = await window.electronAPI.getInitPrompt(mode || window._dsAgentMode || 'quick');
                 if (res.success && res.text) baseText = res.text;
             } catch (e) {
                 console.warn('Failed to load prompt file:', e);

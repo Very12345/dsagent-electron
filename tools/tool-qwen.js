@@ -15,12 +15,12 @@
             { name: 'callback', type: '字符串', default: '—', required: false, description: 'picture=绘图模式, ppt=PPT生成模式（默认普通问答）' },
             { name: 'async', type: '布尔', default: 'false', required: false, description: 'true=异步执行不等待（绘图/PPT时推荐）' },
             { name: 'message', type: '字符串', default: '—', required: false, description: '要发送给 Qwen 的消息（也可放在 body 中）' },
-            { name: 'paths', type: '字符串', default: '—', required: false, description: '要上传的文件路径（普通模式），多个用逗号分隔' },
+            { name: 'paths', type: '字符串 / 数组', default: '—', required: false, description: '要上传的文件路径，支持数组格式 ["path1", "path2"]' },
             { name: 'savepath', type: '字符串', default: '系统下载目录', required: false, description: '图片/PPT保存目录（绘图/PPT模式）' },
             { name: 'desc', type: '字符串', default: '—', required: false, description: '附加说明文字（绘图/PPT模式）' },
             { name: 'ref', type: '字符串', default: '—', required: false, description: '参考图片/文件路径（绘图/PPT模式）' }
         ],
-        usage: '# 普通问答\n{"tool": "qwen", "params": {"message": "帮我写一个 Python 脚本"}}\n\n# 图片分析\n{"tool": "qwen", "params": {"paths": "D:\\\\screenshot.png"}, "body": "这张截图里有什么问题？"}\n\n# 同步绘图\n{"tool": "qwen", "params": {"callback": "picture", "savepath": "D:\\\\images"}, "body": "一只熊猫在竹林里吃竹子"}\n\n# 异步绘图（推荐）\n{"tool": "qwen", "params": {"callback": "picture", "async": true, "savepath": "D:\\\\images"}, "body": "一只熊猫在竹林里吃竹子"}\n\n# PPT 生成\n{"tool": "qwen", "params": {"callback": "ppt", "savepath": "D:\\\\ppt"}, "body": "请生成一份关于固体物理学的 PPT"}',
+        usage: '# 普通问答\n{"tool": "qwen", "params": {"message": "帮我写一个 Python 脚本"}}\n\n# 图片分析（数组路径）\n{"tool": "qwen", "params": {"paths": ["D:\\\\screenshot.png"]}, "body": "这张截图里有什么问题？"}\n\n# 同步绘图\n{"tool": "qwen", "params": {"callback": "picture", "savepath": "D:\\\\images"}, "body": "一只熊猫在竹林里吃竹子"}\n\n# 异步绘图（推荐）\n{"tool": "qwen", "params": {"callback": "picture", "async": true, "savepath": "D:\\\\images"}, "body": "一只熊猫在竹林里吃竹子"}\n\n# PPT 生成\n{"tool": "qwen", "params": {"callback": "ppt", "savepath": "D:\\\\ppt"}, "body": "请生成一份关于固体物理学的 PPT"}',
         notes: 'callback=picture 启用绘图模式；callback=ppt 启用 PPT 生成模式；async=true 不阻塞等待，后续轮次自动获取结果。对话内容会在完成后自动清理。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
@@ -34,8 +34,8 @@
                 if (params.callback) parts.push('callback=' + params.callback);
                 if (params.async) parts.push('async=' + params.async);
                 if (params.paths) {
-                    // Handle multiple paths: split by comma, join as multiple path= lines
-                    var pathList = params.paths.split(',').map(function(p) { return p.trim(); }).filter(Boolean);
+                    // 支持字符串（逗号分隔）和数组格式
+                    var pathList = Array.isArray(params.paths) ? params.paths : params.paths.split(',').map(function(p) { return p.trim(); }).filter(Boolean);
                     pathList.forEach(function(p) { parts.push('path=' + p); });
                 }
                 if (params.savepath) parts.push('savepath=' + params.savepath);
@@ -71,7 +71,7 @@
                         }
                         window.__dsagent_pendingAsyncTasks.push({
                             id: taskId,
-                            lang: 'local-qwen',
+                            lang: 'qwen',
                             promise: promise,
                             startedAt: Date.now(),
                             desc: 'Qwen 绘图'
@@ -96,7 +96,7 @@
                         }
                         window.__dsagent_pendingAsyncTasks.push({
                             id: taskId3,
-                            lang: 'local-qwen',
+                            lang: 'qwen',
                             promise: promise3,
                             startedAt: Date.now(),
                             desc: 'Qwen PPT 生成'
@@ -121,7 +121,7 @@
                         }
                         window.__dsagent_pendingAsyncTasks.push({
                             id: taskId2,
-                            lang: 'local-qwen',
+                            lang: 'qwen',
                             promise: promise2,
                             startedAt: Date.now(),
                             desc: 'Qwen 问答'

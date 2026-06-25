@@ -16,7 +16,7 @@
     var readTools = new Set();
 
     // 免检白名单 — 这些工具不需要先阅读文档即可使用
-    var READ_WHITELIST = ['local-help', 'local-break', 'local-mcp-list', 'local-mcp-init'];
+    var READ_WHITELIST = ['local-help', 'local-break', 'mcp-list', 'mcp-init'];
 
     // ==================== JSON 解析 ====================
 
@@ -130,7 +130,7 @@
         }
 
         if (tool.usage) {
-            doc += '**JSON 使用示例**:\n\n```functioncall\n' + tool.usage + '\n```\n\n';
+            doc += '**JSON 使用示例**:\n\n<functioncall>' + tool.usage + '</functioncall>\n\n';
         }
 
         if (tool.notes) {
@@ -152,8 +152,8 @@
         }
 
         var doc = '# 本地工具系统 — 完整指令文档（JSON 格式）\n\n';
-        doc += '> 本系统包含 ' + toolOrder.length + ' 个可用工具。所有工具统一使用 `functioncall` 代码块，通过 `tool` 字段指定工具名。\n';
-        doc += '> 代码块内容为 JSON 对象，包含 `tool`（工具名，无需 `local-` 前缀）、`params`（参数）和 `body`（内容体）。\n\n';
+        doc += '> 本系统包含 ' + toolOrder.length + ' 个可用工具。所有工具统一使用 `<functioncall>` 标签，通过 `tool` 字段指定工具名。\n';
+        doc += '> 内容为 JSON 对象，包含 `tool`（工具名，无需 `local-` 前缀）、`params`（参数）和 `body`（内容体）。\n\n';
         doc += '---\n\n';
 
         for (var oi = 0; oi < toolOrder.length; oi++) {
@@ -162,8 +162,8 @@
         }
 
         doc += '## JSON 调用格式\n\n';
-        doc += '所有工具统一使用 `functioncall` 代码块：\n\n';
-        doc += '```\n```functioncall\n{\n  "tool": "read",\n  "params": { "key": "value" },\n  "body": "多行内容\\n放在 body 字段中"\n}\n```\n\n';
+        doc += '所有工具统一使用 `<functioncall>` 标签：\n\n';
+        doc += '```\n<functioncall>{"tool": "read", "params": {"key": "value"}, "body": "多行内容放在 body 字段中"}</functioncall>\n```\n\n';
         doc += '- `tool`: 工具名称（必填），如 `exec`、`read`、`save` 等，无需 `local-` 前缀\n';
         doc += '- `params`: 工具参数，key-value 对象\n';
         doc += '- `body`: 多行内容体（命令、文件内容等），可选\n\n';
@@ -175,7 +175,7 @@
         doc += '- `error`: 失败时的错误信息\n';
         doc += '- `meta`: 元数据（工具名、耗时等）\n\n';
         doc += '## 处理逻辑\n\n';
-        doc += '### 自动执行\n所有 `functioncall` 代码块在 DeepSeek 回复后自动检测并执行。\n\n';
+        doc += '### 自动执行\n所有 `<functioncall>` 标签在 DeepSeek 回复后自动检测并执行。\n\n';
         doc += '### 确认机制\n危险命令默认需要用户确认，安全操作自动执行。\n\n';
         doc += '### 输出控制\n输出超过 10KB 时自动警告，超过 159KB 时强制拒绝。\n\n';
 

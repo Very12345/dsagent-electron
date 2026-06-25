@@ -151,7 +151,19 @@ class McpSseClient extends EventEmitter {
                     this._rejectAll('SSE closed');
                     if (this._onClose) this._onClose(0);
                 });
-                res.on('error', (e) => { this._setState('error'); this._rejectAll(e.message); });
+                res.on('error', (e) => {
+                    // 已初始化后 SSE 连接断开是正常现象（服务器超时），降级为 disconnected
+                    if (this._state === 'ready') {
+                        this._setState('disconnected');
+                        console.log('[MCP:' + this.name + '] SSE connection lost (server may have timed out), tools remain cached');
+                    } else {
+                        this._setState('error');
+                    }
+                    this._rejectAll(e.message);
+                });
+                res.on('close', () => {
+                    if (this._state === 'ready') this._setState('disconnected');
+                });
             });
             req.on('error', (e) => reject(e));
             req.on('timeout', () => { req.destroy(); reject(new Error('SSE timeout')); });

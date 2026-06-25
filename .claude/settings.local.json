@@ -13,7 +13,8 @@
       "Bash(findstr \"127.0.0.1:9876\")",
       "Bash(bash -c \"grep -n 'origDeepThinkActive\\\\|origWebSearchActive\\\\|Restore original toggle' 'D:/系统/Desktop/tools/dsagent-electron/inject.js'\")",
       "WebSearch",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(wc -l *.js *.html)"
     ]
   }
 }

@@ -1,9 +1,9 @@
-// local-mcp - 调用 MCP 服务器工具
+// mcp - 调用 MCP 服务器工具
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._mcp_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-mcp',
+        name: 'mcp',
         scope: '调用 MCP (Model Context Protocol) 服务器提供的工具',
         description: '调用通过 MCP 协议连接的外部工具。\n\n参数说明：\n- `server`: MCP 服务器名称（必填）\n- `tool`: 工具名称（必填）\n- 其他参数：工具所需的参数\n\n可用 `mcp-list` 查看所有已连接的 MCP 服务器和工具。',
         params: [
@@ -74,9 +74,9 @@
         }
     });
 
-    // local-mcp-list — 列出 MCP 服务器和工具（支持多级获取）
+    // mcp-list — 列出 MCP 服务器和工具（支持多级获取）
     window.__dsagent_tools.register({
-        name: 'local-mcp-list',
+        name: 'mcp-list',
         scope: '列出 MCP 服务器和工具，支持按服务器获取',
         description: '查看当前通过 MCP 协议连接的所有服务器及其工具列表。\n\n'
             + '### 多级获取\n\n'
@@ -177,9 +177,9 @@
         }
     });
 
-    // local-mcp-init — 显式初始化 MCP 连接
+    // mcp-init — 显式初始化 MCP 连接
     window.__dsagent_tools.register({
-        name: 'local-mcp-init',
+        name: 'mcp-init',
         scope: '初始化/重新连接所有 MCP 服务器',
         description: '强制重新加载所有配置的 MCP 服务器并获取工具列表。',
         params: [],

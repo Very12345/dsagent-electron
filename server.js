@@ -49,17 +49,37 @@ function log(type, msg) {
 }
 
 function safeResolve(filePath) {
+    // 清理路径中的非法字符
     let p = filePath.replace(/\\/g, '/');
-    if (/\.\./.test(p) || /[<>]/.test(p)) {
-        throw new Error('Invalid path characters');
+    if (/[<>|]/.test(p)) {
+        throw new Error('Invalid path characters: < > |');
     }
+
+    // 解析路径
     let resolved;
     if (BASE_DIR && (p === '.' || p === './' || !path.isAbsolute(p.replace(/\//g, '\\')))) {
         resolved = path.resolve(BASE_DIR, p.replace(/\//g, '\\'));
     } else {
         resolved = path.resolve(p.replace(/\//g, '\\'));
     }
-    return resolved;
+
+    // 标准化路径并检查边界
+    const normalized = path.normalize(resolved);
+
+    // 如果设置了 BASE_DIR，确保解析后的路径在 BASE_DIR 内
+    if (BASE_DIR) {
+        const normalizedBase = path.normalize(BASE_DIR);
+        // Windows 下路径比较需要统一大小写
+        const resolvedLower = normalized.toLowerCase();
+        const baseLower = normalizedBase.toLowerCase();
+
+        if (!resolvedLower.startsWith(baseLower)) {
+            log('SECURITY', `Path traversal detected: ${filePath} -> ${normalized} (base: ${normalizedBase})`);
+            throw new Error('Path traversal detected: access denied');
+        }
+    }
+
+    return normalized;
 }
 
 function decodeBuffer(buffer) {
@@ -213,6 +233,13 @@ function readFileBase64(filePath) {
 
 function saveFile(filePath, content) {
     if (!filePath) return { success: false, error: 'Missing filePath' };
+
+    // 文件大小限制：100MB
+    const MAX_FILE_SIZE = 100 * 1024 * 1024;
+    if (content && content.length > MAX_FILE_SIZE) {
+        return { success: false, error: 'File content too large (max 100MB, got ' + (content.length / 1024 / 1024).toFixed(2) + 'MB)' };
+    }
+
     const abs = safeResolve(filePath);
     const dir = path.dirname(abs);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -671,7 +698,7 @@ function getSkillsPrompt() {
     prompt += '**技能文件位置：** 每个技能的附加文件存放在 `.dsa/skills/{技能名}/` 目录下。\n';
     prompt += '使用 `read` 读取技能文件时，路径格式为 `.dsa/skills/{技能名}/{文件名}`。\n';
     prompt += '使用 `skill` 获取完整 SKILL.md 指令，例如：\n';
-    prompt += '```functioncall\n{"tool": "skill", "params": {"name": "技能名称"}}\n```\n\n';
+    prompt += '<functioncall>{"tool": "skill", "params": {"name": "技能名称"}}</functioncall>\n\n';
     enabledSkills.forEach(function(s) {
         var fm = parseSkillFrontmatter(s.instructions);
         var displayName = fm.name || s.name;

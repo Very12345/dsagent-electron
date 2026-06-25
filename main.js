@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿// DeepSeek Local Agent - Electron 主进程（双栏布局版）
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿// DeepSeek Local Agent - Electron 主进程（双栏布局版）
 const { app, BrowserWindow, BrowserView, Menu, dialog, session, ipcMain, shell, clipboard, nativeImage, desktopCapturer } = require('electron');
 const path = require('path');
 const agent = require('./server.js');
@@ -248,14 +248,11 @@ function setupSession() {
 }
 
 // ==================== Agent IPC 处理器 ====================
-// 技能计数同步到视图栏 + agent 视图
+// 技能计数同步到视图栏
 function syncSkillsCount() {
     var skills = (agent.loadSkills().skills || []);
     if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
         viewBarView.webContents.send('ctrl-skills-count', skills.length);
-    }
-    if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
-        agentView.webContents.send('agent-show-skills', skills);
     }
 }
 
@@ -535,17 +532,24 @@ function setupAgentIPC() {
 
     function flushIntervalQueue(reason) {
         if (_intervalQueue.length === 0) return;
-        var combined = _intervalQueue.join('\n\n---\n\n');
+
+        // 原子交换：避免竞态条件导致消息丢失
+        var toFlush = _intervalQueue;
         _intervalQueue = [];
+
+        var combined = toFlush.join('\n\n---\n\n');
         console.log('[Interval] Flushing queue (' + reason + '): ' + combined.substring(0, 80) + '...');
+
         if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
             deepseekView.webContents.executeJavaScript(
                 'window.__dsagent_fillAndSend && window.__dsagent_fillAndSend(' + JSON.stringify(combined) + ');'
             ).catch(function(e) {
                 console.warn('[Interval] flush fillAndSend failed:', e.message);
-                // 失败时放回队列
-                _intervalQueue.push(combined);
+                // 失败时放回队列头部（避免丢失）
+                _intervalQueue.unshift(combined);
             });
+        } else {
+            console.warn('[Interval] deepseekView not available, messages lost');
         }
     }
 
@@ -588,7 +592,9 @@ function setupAgentIPC() {
                     deepseekView.webContents.executeJavaScript(
                         'var b = document.querySelector("div.ds-button--primary.ds-button--filled"); if(b) { b.style.pointerEvents="none"; setTimeout(function(){ b.style.pointerEvents=""; }, 200); }'
                     );
-                } catch(e) {}
+                } catch(e) {
+                    console.warn('[Interval] Failed to disable send button:', e.message);
+                }
             }
 
             // 通知 agentview 更新 UI
@@ -1234,6 +1240,7 @@ function setupControlBarIPC() {
             }
         }
         var result = agent.loadSkills();
+        syncSkillsCount();
         if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
             agentView.webContents.send('agent-show-skills', result.skills || []);
             agentView.webContents.send('agent-open-skills-modal');
@@ -2545,6 +2552,34 @@ function setupControlBarIPC() {
 
     // 从 inject.js 转发解析结果到 Agent 视图
     ipcMain.on('agent-forward-result', (event, data) => {
+        // 系统控制台输出 AI 返回结果（所有段原始输出）
+        if (data.type === 'response' || data.type === 'tool-results') {
+            var segs = data.segments || [];
+            console.log('\n═══════════════════ AI 响应 ═══════════════════');
+            console.log('类型: ' + data.type + ' | 分段数: ' + segs.length);
+            segs.forEach(function(s, i) {
+                console.log('--- 段 #' + (i+1) + ' [类型=' + s.type + '] ---');
+                if (s.type === 'text') {
+                    console.log(s.content || '(空)');
+                } else if (s.type === 'tool-call') {
+                    console.log('工具调用: ' + (s.content || JSON.stringify(s.data || '')));
+                } else if (s.type === 'tool-result') {
+                    console.log('工具结果: ' + ((s.content || '') + ' ' + JSON.stringify(s.data || {})).substring(0, 300));
+                } else {
+                    console.log(JSON.stringify(s).substring(0, 500));
+                }
+            });
+            console.log('══════════════════════════════════════════════\n');
+        } else if (data.type === 'error') {
+            console.log('[AI 错误] ' + (data.error || data.content || ''));
+        } else if (data.type === 'tasks-start') {
+            console.log('[AI] 开始执行任务链');
+        } else if (data.type === 'tasks-end') {
+            console.log('[AI] 任务链执行结束');
+        } else if (data.type === 'interval-start' || data.type === 'interval-stop' || data.type === 'interval-trigger') {
+            console.log('[AI] ' + data.type);
+        }
+
         if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
             if (data.type === 'form-show') {
                 // 表单事件 → 专用通道
@@ -2978,16 +3013,31 @@ function setupIpcHandlers() {
     });
 
     // 获取初始化提示词
-    ipcMain.handle('get-init-prompt', async () => {
+    ipcMain.handle('get-init-prompt', async (event, mode) => {
         try {
             var text = '';
             const promptDir = path.join(__dirname, 'prompt');
             if (fs.existsSync(promptDir)) {
                 const files = fs.readdirSync(promptDir)
                     .filter(f => f.endsWith('.md'))
-                    .sort();  // 按文件名排序，保证 01- 02- 03- 顺序
+                    .sort();  // 按文件名排序，保证 01- 03- 顺序
                 for (const f of files) {
                     text += fs.readFileSync(path.join(promptDir, f), 'utf-8') + '\n\n';
+                }
+            }
+            // 加载模式专用策略（common.md + {mode}.md）
+            var strategyMode = mode || 'quick';
+            const strategyDir = path.join(__dirname, 'prompt', 'strategy');
+            if (fs.existsSync(strategyDir)) {
+                // 先加载公用策略
+                var commonFile = path.join(strategyDir, 'common.md');
+                if (fs.existsSync(commonFile)) {
+                    text += fs.readFileSync(commonFile, 'utf-8') + '\n\n';
+                }
+                // 再加载模式专用策略
+                var strategyFile = path.join(strategyDir, strategyMode + '.md');
+                if (fs.existsSync(strategyFile)) {
+                    text += fs.readFileSync(strategyFile, 'utf-8') + '\n\n';
                 }
             }
             // 追加已加载技能
@@ -2996,6 +3046,20 @@ function setupIpcHandlers() {
             // 追加 MCP 工具提示词
             var mcpPrompt = agent.getMcpPrompt();
             if (mcpPrompt) text += mcpPrompt;
+            return { success: true, text: text };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    // 加载 subreader 通用策略
+    ipcMain.handle('get-subreader-strategy', async () => {
+        try {
+            var text = '';
+            const commonFile = path.join(__dirname, 'prompt', 'subreader', 'common.md');
+            if (fs.existsSync(commonFile)) {
+                text = fs.readFileSync(commonFile, 'utf-8');
+            }
             return { success: true, text: text };
         } catch (e) {
             return { success: false, error: e.message };
@@ -3201,11 +3265,13 @@ function setPageTheme(view, theme) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     var code;
     if (theme === 'dark') {
-        code = '(function(){var o=document.getElementById("__ds_theme_overlay");if(o)o.remove();var g=document.getElementById("__ds_theme_gradient");if(g)g.remove();var c=document.createElement("div");c.id="__ds_theme_overlay";c.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483646;backdrop-filter:invert(1) hue-rotate(180deg)";document.documentElement.appendChild(c);var g=document.createElement("div");g.id="__ds_theme_gradient";g.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;background:linear-gradient(180deg,rgba(56,139,253,0.15) 0%,rgba(137,87,229,0.08) 30%,rgba(13,17,23,0.03) 60%,transparent 80%)";document.documentElement.appendChild(g)})();';
+        code = '(function(){var o=document.getElementById("__ds_theme_overlay");if(o)o.remove();var g=document.getElementById("__ds_theme_gradient");if(g)g.remove();var c=document.createElement("div");c.id="__ds_theme_overlay";c.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483646;backdrop-filter:invert(1) hue-rotate(180deg);opacity:0;transition:opacity 0.3s ease";document.documentElement.appendChild(c);setTimeout(function(){c.style.opacity="1"},10);var g=document.createElement("div");g.id="__ds_theme_gradient";g.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;background:linear-gradient(180deg,rgba(56,139,253,0.15) 0%,rgba(137,87,229,0.08) 30%,rgba(13,17,23,0.03) 60%,transparent 80%);opacity:0;transition:opacity 0.3s ease";document.documentElement.appendChild(g);setTimeout(function(){g.style.opacity="1"},10)})();';
     } else {
-        code = '(function(){var o=document.getElementById("__ds_theme_overlay");if(o)o.remove();var g=document.getElementById("__ds_theme_gradient");if(g)g.remove();var g=document.createElement("div");g.id="__ds_theme_gradient";g.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;background:linear-gradient(180deg,rgba(9,105,218,0.12) 0%,rgba(130,80,223,0.06) 30%,transparent 70%)";document.documentElement.appendChild(g)})();';
+        code = '(function(){var o=document.getElementById("__ds_theme_overlay");if(o){o.style.opacity="0";setTimeout(function(){o.remove()},300)}var g=document.getElementById("__ds_theme_gradient");if(g){g.style.opacity="0";setTimeout(function(){g.remove()},300)}setTimeout(function(){var g=document.createElement("div");g.id="__ds_theme_gradient";g.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;background:linear-gradient(180deg,rgba(9,105,218,0.12) 0%,rgba(130,80,223,0.06) 30%,transparent 70%);opacity:0;transition:opacity 0.3s ease";document.documentElement.appendChild(g);setTimeout(function(){g.style.opacity="1"},10)},300)})();';
     }
-    view.webContents.executeJavaScript(code).catch(function(){});
+    view.webContents.executeJavaScript(code).catch(function(e){
+        console.warn('[Theme] Failed to apply theme:', e.message);
+    });
 }
 
 // ==================== 创建菜单栏 ====================

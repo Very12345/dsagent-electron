@@ -313,6 +313,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    scroll-behavior: smooth;
 }
 #chat-area .empty-msg {
     text-align: center;
@@ -1223,7 +1224,7 @@ body {
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="font-size:12px;color:#888;" id="mode-label">专家模式</span>
             <!-- 状态栏 -->
-            <div id="status-bar" style="display:none;overflow-x:auto;white-space:nowrap;flex-shrink:0;max-width:100%;scrollbar-width:thin;"></div>
+            <div id="status-bar" style="display:none;"></div>
             <button id="bottom-collapse-btn" onclick="toggleBottomExtras()" title="折叠/展开下方面板" style="padding:2px 8px;background:transparent;border:1px solid #3a3a6a;border-radius:6px;color:#8a8aaa;cursor:pointer;font-size:11px;line-height:1;">▼</button>
         </div>
         <div id="prompt-row">
@@ -1538,6 +1539,18 @@ body {
 
 <script>
 
+// ==================== 工具函数 ====================
+// 简单滚动到聊天区底部（用于确认弹窗等场景）
+function scrollChatToBottom() {
+    var area = document.getElementById('chat-area');
+    if (!area) return;
+    // 使用平滑滚动
+    area.scrollTo({
+        top: area.scrollHeight,
+        behavior: 'smooth'
+    });
+}
+
 // ==================== 危险命令确认（嵌入工具卡片） ====================
 var pendingConfirmMessageId = null;
 
@@ -1569,7 +1582,7 @@ window.electronAPI.onAgentShowConfirm(function(data) {
         btnRow.appendChild(createConfirmBtn(data, function() { fallback.remove(); btnRow.remove(); }));
         btnRow.appendChild(createCancelBtn(data, function() { fallback.remove(); btnRow.remove(); }));
         area.appendChild(btnRow);
-        setTimeout(function() { area.scrollTop = area.scrollHeight; }, 50);
+        scrollChatToBottom();
         return;
     }
 
@@ -1616,7 +1629,7 @@ window.electronAPI.onAgentShowConfirm(function(data) {
     if (body && body.style.display === 'none') {
         body.style.display = '';
     }
-    setTimeout(function() { area.scrollTop = area.scrollHeight; }, 50);
+    scrollChatToBottom();
 });
 
 // ==================== 频率限制/服务器繁忙弹窗 ====================
@@ -1900,6 +1913,8 @@ window.electronAPI.onRestoreHistory(function(historyId) {
 });
 
 // ==================== 历史对话管理 ====================
+var _historyLoadingGuard = false; // 加载历史时阻止意外 save
+
 function loadHistoryList() {
     var listEl = document.getElementById('history-list');
     listEl.innerHTML = '<div class="history-empty">加载中...</div>';
@@ -1908,8 +1923,14 @@ function loadHistoryList() {
             listEl.innerHTML = '<div class="history-empty">没有历史对话</div>';
             return;
         }
+        // 过滤掉 0 条消息的空对话（避免各种原因产生的虚假条目）
+        var validHistories = res.histories.filter(function(h) { return h.messageCount > 0 || h.subSessionCount > 0; });
+        if (validHistories.length === 0) {
+            listEl.innerHTML = '<div class="history-empty">没有历史对话</div>';
+            return;
+        }
         listEl.innerHTML = '';
-        res.histories.forEach(function(h) {
+        validHistories.forEach(function(h) {
             var item = document.createElement('div');
             item.className = 'history-item' + (h.id === currentHistoryId ? ' active' : '');
             item.innerHTML = '<div class="hi-title">' + escapeHtml(h.title || '(无标题)') + '</div>'
@@ -1986,6 +2007,7 @@ function getConversationTitle() {
 
 function saveCurrentHistory() {
     if (!currentHistoryId) return;
+    if (_historyLoadingGuard) return; // 加载历史中，阻止意外保存
     // 没有消息时不保存（避免产生"(无标题)"的空对话）
     if (!currentHistoryMessages || currentHistoryMessages.length === 0) return;
     var title = getConversationTitle();
@@ -2025,8 +2047,9 @@ function loadHistoryConversation(id) {
     btn.disabled = true;
     currentHistoryExpired = false;
 
+    _historyLoadingGuard = true;
     window.electronAPI.historyLoad(id).then(function(res) {
-        if (!res.success || !res.history) return;
+        if (!res.success || !res.history) { _historyLoadingGuard = false; return; }
         var h = res.history;
 
         // 清除当前状态
@@ -2156,6 +2179,10 @@ function loadHistoryConversation(id) {
         // 高亮选中的历史
         loadHistoryList();
         scrollToBottom();
+        _historyLoadingGuard = false;
+    }).catch(function(e) {
+        _historyLoadingGuard = false;
+        console.warn('[History] load failed:', e);
     });
 }
 
@@ -2559,7 +2586,20 @@ async function sendPrompt() {
     // 允许纯附件发送（无文本但有文件时也能发）
     if (!text && attachedFiles.length === 0) return;
 
-    // 检测文本中的 path="..." 模式，自动提取为文件附件，并解析相对路径
+    // 检测文本中的 <file>...</file> 标签，自动提取为文件附件
+    var fileRegex = /<file>([\s\S]*?)<\/file>/g;
+    var fileMatch;
+    while ((fileMatch = fileRegex.exec(text)) !== null) {
+        var p = fileMatch[1].trim();
+        if (p) {
+            p = resolveRelativePathsInContent('path="' + p + '"').replace(/^path="|"$/g, '');
+            addFileToPanel(p, getFileName(p), 'file');
+        }
+    }
+    // 清理 <file> 标签
+    text = text.replace(/<file>[\s\S]*?<\/file>\s*\n?/g, '').trim();
+
+    // 兼容旧格式：path="..." 模式
     var pathRegex = /path="([^"]+)"/g;
     var pathMatch;
     while ((pathMatch = pathRegex.exec(text)) !== null) {
@@ -2685,7 +2725,11 @@ function renderMarkdown(text) {
         }
         return '%%PATH_CHIP_' + (pathChips.length - 1) + '%%';
     }
-    // 新格式：```file 路径```
+    // 新格式：<file>路径</file>
+    text = text.replace(/<file>\s*([^\n<]+?)\s*<\/file>/g, function(m, p) {
+        return pushFileChip(p.trim());
+    });
+    // 兼容旧格式：```file 路径```
     text = text.replace(/```\s*file\s+([^\n`]+?)\s*```/g, function(m, p) {
         return pushFileChip(p.trim());
     });
@@ -3054,12 +3098,12 @@ function showLoading() {
     el.style.cssText = 'flex-shrink:0;';
     el.innerHTML = '<div class="msg-group">'
         + '<div class="msg-label">助手</div>'
-        + '<div class="msg-assistant" style="display:flex;align-items:center;gap:12px;padding:14px 18px;">'
+        + '<div class="msg-assistant" style="display:flex;align-items:center;gap:12px;padding:14px 18px;overflow:hidden;">'
         + '<div style="position:relative;width:18px;height:18px;">'
         + '<div class="spinner" style="margin:0;"></div>'
         + '</div>'
-        + '<span id="loading-text" style="color:#aaa;letter-spacing:1px;">输出中</span>'
-        + '<span id="loading-dots" style="color:#8888cc;font-weight:bold;min-width:20px;">...</span>'
+        + '<span id="loading-text" style="color:#aaa;letter-spacing:1px;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">输出中</span>'
+        + '<span id="loading-dots" style="color:#8888cc;font-weight:bold;flex-shrink:0;">...</span>'
         + '</div>'
         + '</div>';
     area.appendChild(el);
@@ -3136,6 +3180,15 @@ function scrollToBottom(force) {
         // 用户在翻看上方内容，不自动滚动，仅标记未读并闪烁提示按钮
         markUnreadBelow();
         updateScrollToBottomBtn();
+    }
+}
+
+// 强制滚动到底部（跳过 isGenerating/userScrolledAway 检查，只判断用户是否在底部附近）
+function forceScrollIfAtBottom() {
+    var area = document.getElementById('chat-area');
+    if (!area) return;
+    if (isChatScrolledToBottom()) {
+        scrollToBottomRAF(area, 0);
     }
 }
 
@@ -3511,6 +3564,15 @@ window.electronAPI.onAgentMessage(function(data) {
         scrollToBottom(true);
         return;
     }
+    // 流式预览：更新"输出中..."的文字，并确保滚动跟随
+    if (data.type === 'streaming-preview') {
+        var loadingText = document.getElementById('loading-text');
+        if (loadingText) {
+            loadingText.textContent = data.text ? '输出中 ' + data.text : '输出中';
+        }
+        scrollToBottom();
+        return;
+    }
     hideLoading();
     if (data.type === 'response') {
         var hasCommands = data.segments && data.segments.some(function(s) { return s.type === 'tool-call'; });
@@ -3525,6 +3587,7 @@ window.electronAPI.onAgentMessage(function(data) {
             }
         }
         addAssistantSegments(data.segments);
+        scrollToBottom();
         isExecutingTasks = hasCommands;
         syncIntervalState();
         // isTaskChainActive 保持 true，直到 tasks-end 或无命令的最终响应
@@ -3538,11 +3601,14 @@ window.electronAPI.onAgentMessage(function(data) {
         updateSendBtn();
     } else if (data.type === 'tool-results') {
         addAssistantSegments(data.segments);
+        scrollToBottom();
     } else if (data.type === 'tool-result') {
         addAssistantSegments([{ type: 'tool-result', content: data.result }]);
+        scrollToBottom();
     } else if (data.type === 'error') {
         hideLoading();
         addAssistantSegments([{ type: 'text', content: '⚠️ **错误**: ' + (data.message || '') }]);
+        scrollToBottom();
     }
 });
 
@@ -3551,42 +3617,10 @@ window.electronAPI.onQwenProgress(function(msg) {
     addStatus('qwen', msg, 'qwen');
 });
 
-// 状态栏管理：支持多条状态，自动过期 → 同时发送到 controlbar 统一任务栏
+// 状态栏管理：所有状态只显示在 controlbar（统一任务栏），不显示在聊天输入框上方
 var statusMap = {};
 function addStatus(id, text, type, noExpire) {
-    var bar = document.getElementById('status-bar');
-    if (bar) {
-        var el = statusMap[id];
-        if (!el) {
-            el = document.createElement('span');
-            el.style.cssText = 'padding:0 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;transition:opacity .5s;flex-shrink:0;';
-            bar.appendChild(el);
-            statusMap[id] = el;
-        }
-        bar.style.display = ''; // 确保 visible
-        var colors = { qwen: '#6a8acc', tool: '#8a8a6a', confirm: '#cc8a6a', success: '#5a9a5a', error: '#cc5a5a' };
-        el.style.color = colors[type] || '#6a6a8a';
-        el.style.background = (colors[type] || '#6a6a8a') + '18';
-        el.textContent = text;
-        if (!noExpire) {
-            var expires = Date.now() + 15000;
-            el._expires = expires;
-            setTimeout(function() {
-                if (el._expires <= Date.now()) {
-                    el.style.opacity = '0';
-                    setTimeout(function() {
-                        if (el._expires <= Date.now()) {
-                            el.remove(); delete statusMap[id];
-                            // 没有状态时隐藏 bar
-                            var bar = document.getElementById('status-bar');
-                            if (bar && Object.keys(statusMap).length === 0) bar.style.display = 'none';
-                        }
-                    }, 500);
-                }
-            }, 15000);
-        }
-    }
-    // 同步发送到 controlbar 统一任务栏
+    // 只发送到 controlbar，不再渲染到 #status-bar
     if (window.electronAPI && window.electronAPI.agentStatusToControlbar) {
         window.electronAPI.agentStatusToControlbar(text, type || '');
     }
@@ -5040,7 +5074,7 @@ function parseSkillFrontmatter(instructions) {
 
 window.electronAPI.onAgentShowSkills(function(skills) {
     skillsModalData = skills || [];
-    loadDisabledSkills();
+    // 只存数据，不渲染 — 等 onAgentOpenSkillsModal 触发时再渲染
 });
 
 async function loadDisabledSkills() {
@@ -5048,7 +5082,6 @@ async function loadDisabledSkills() {
         var res = await window.electronAPI.agentSkillGetDisabled();
         disabledSkills = (res && res.disabledSkills) ? res.disabledSkills : [];
     } catch(e) { disabledSkills = []; }
-    // 加载已同步的技能名称列表
     await loadSyncedSkillNames();
     renderSkillsModal();
 }
@@ -5479,6 +5512,74 @@ document.addEventListener('click', function(e) {
 // 主题监听更新
 window.electronAPI.onAgentTheme(function(theme) {
     currentMenuTheme = theme;
+});
+
+// ==================== 全局键盘快捷键 ====================
+document.addEventListener('keydown', function(e) {
+    // ESC 键关闭所有模态框
+    if (e.key === 'Escape') {
+        // 关闭确认弹窗
+        var confirmModal = document.getElementById('confirm-modal');
+        if (confirmModal && confirmModal.style.display !== 'none') {
+            confirmModal.style.display = 'none';
+            return;
+        }
+
+        // 关闭频率限制弹窗
+        var ratelimitModal = document.getElementById('ratelimit-modal');
+        if (ratelimitModal && ratelimitModal.style.display !== 'none') {
+            document.getElementById('ratelimit-cancel').click();
+            return;
+        }
+
+        // 关闭继续生成确认弹窗
+        var continueModal = document.getElementById('continue-modal');
+        if (continueModal && continueModal.style.display !== 'none') {
+            continueModal.style.display = 'none';
+            return;
+        }
+
+        // 关闭 QQ Bot 编辑弹窗
+        var qqbotModal = document.getElementById('qqbot-edit-modal');
+        if (qqbotModal && qqbotModal.style.display !== 'none') {
+            qqbotModal.style.display = 'none';
+            return;
+        }
+
+        // 关闭 MCP 编辑弹窗
+        var mcpModal = document.getElementById('mcp-edit-modal');
+        if (mcpModal && mcpModal.style.display !== 'none') {
+            mcpModal.style.display = 'none';
+            return;
+        }
+
+        // 关闭定时任务添加弹窗
+        var intervalModal = document.getElementById('interval-add-modal');
+        if (intervalModal && intervalModal.style.display !== 'none') {
+            intervalModal.style.display = 'none';
+            return;
+        }
+
+        // 关闭表单弹窗
+        var formModal = document.getElementById('form-modal');
+        if (formModal && formModal.style.display !== 'none') {
+            formModal.style.display = 'none';
+            return;
+        }
+
+        // 关闭菜单
+        if (openMenuId) {
+            closeMenuOverlay();
+            return;
+        }
+    }
+
+    // Ctrl/Cmd + K 快速聚焦到输入框
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        var input = document.getElementById('prompt-input');
+        if (input) input.focus();
+    }
 });
 
 // 页面加载后加载菜单配置
