@@ -1,10 +1,10 @@
-// local-plan - 计划管理（制定/执行/查看/完成）
+// plan - 计划管理（制定/执行/查看/完成）
 // AI 通过此工具管理项目计划，用户可掌握项目进度
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._plan_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-plan',
+        name: 'plan',
         scope: '制定、查看、执行、完成项目计划',
         description: '管理项目计划，支持制定计划、标记步骤完成、查看进度、执行计划。\n'
             + '计划会同步到 Agent 面板和外部客户端（如果启用），帮助用户掌握项目进度。\n'
@@ -16,7 +16,7 @@
             { name: 'id', type: '数字', default: '—', required: false, description: '步骤 ID（complete 时使用）' },
             { name: 'result', type: '字符串', default: '—', required: false, description: '完成结果说明（complete 时使用）' }
         ],
-        usage: '{"tool": "plan", "params": {"action": "create", "title": "开发一个网站"}}\n\n{"tool": "plan", "params": {"action": "add", "step": "编写单元测试"}}\n\n{"tool": "plan", "params": {"action": "complete", "id": 1, "result": "已完成"}}\n\n{"tool": "plan", "params": {"action": "view"}}\n\n{"tool": "plan", "params": {"action": "execute"}}',
+        usage: '<tool:plan>{"action": "create", "title": "开发一个网站"}</tool:plan>\n\n<tool:plan>{"action": "add", "step": "编写单元测试"}</tool:plan>\n\n<tool:plan>{"action": "complete", "id": 1, "result": "已完成"}</tool:plan>\n\n<tool:plan>{"action": "view"}</tool:plan>\n\n<tool:plan>{"action": "execute"}</tool:plan>',
         notes: '计划保存在 .dsa/plan.json。创建时可在参数行后直接列出步骤，一行一步，无需多次调用 add。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

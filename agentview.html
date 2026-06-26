@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -91,19 +91,9 @@ body {
     transition: background var(--transition-normal), color var(--transition-normal);
 }
 
-/* ============ Header ============ */
+/* ============ Header（已由 shell.html 标题栏接管，隐藏） ============ */
 #header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 38px; padding: 0 16px;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent) 0%, color-mix(in srgb, var(--accent-2) 4%, transparent) 100%);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-    box-shadow: var(--shadow-sm);
-    z-index: 10;
+    display: none;
 }
 #header h2 {
     font-size: 18px;
@@ -1757,106 +1747,106 @@ function updateSendBtn() {
 // 工具图标映射
 function getToolIcon(toolName) {
     var iconMap = {
-        'read': '📖', 'local-read': '📖',
-        'write': '✏️', 'local-write': '✏️',
-        'exec': '⚙️', 'local-exec': '⚙️',
-        'cmd': '🖥️', 'local-cmd': '🖥️',
-        'edit': '🔧', 'local-edit': '🔧',
-        'delete': '🗑️', 'local-delete': '🗑️',
-        'exists': '🔍', 'local-exists': '🔍',
-        'list': '📂', 'local-list': '📂',
-        'break': '⏹️', 'local-break': '⏹️',
-        'skill': '🧩', 'local-skill': '🧩',
+        'read': '📖',
+        'write': '✏️',
+        'exec': '⚙️',
+        'cmd': '🖥️',
+        'edit': '🔧',
+        'delete': '🗑️',
+        'exists': '🔍',
+        'list': '📂',
+        'break': '⏹️',
+        'skill': '🧩',
         'mcp-list': '🔌',
         'mcp-init': '🔄',
-        'browser': '🌐', 'local-browser': '🌐',
-        'save': '💾', 'local-save': '💾',
-        'interval': '⏰', 'local-interval': '⏰',
-        'file': '📄', 'local-file': '📄',
-        'open': '📂', 'local-open': '📂',
-        'rename': '📝', 'local-rename': '📝',
-        'mkdir': '📁', 'local-mkdir': '📁',
-        'copy': '📋', 'local-copy': '📋',
-        'move': '📤', 'local-move': '📤',
-        'url': '🔗', 'local-url': '🔗',
-        'grep': '🔎', 'local-grep': '🔎',
-        'help': '❓', 'local-help': '❓',
-        'config': '⚙️', 'local-config': '⚙️',
-        'env': '🌍', 'local-env': '🌍',
-        'shell': '🐚', 'local-shell': '🐚',
-        'python': '🐍', 'local-python': '🐍',
-        'node': '🟢', 'local-node': '🟢',
-        'npm': '📦', 'local-npm': '📦',
-        'git': '📤', 'local-git': '📤',
-        'ssh': '🔒', 'local-ssh': '🔒',
-        'http': '🌐', 'local-http': '🌐',
-        'api': '🔌', 'local-api': '🔌',
-        'json': '📋', 'local-json': '📋',
-        'yaml': '📄', 'local-yaml': '📄',
-        'xml': '📄', 'local-xml': '📄',
-        'csv': '📊', 'local-csv': '📊',
-        'pdf': '📕', 'local-pdf': '📕',
-        'image': '🖼️', 'local-image': '🖼️',
-        'audio': '🎵', 'local-audio': '🎵',
-        'video': '🎬', 'local-video': '🎬',
-        'zip': '📦', 'local-zip': '📦',
-        'tar': '📦', 'local-tar': '📦',
-        '7z': '📦', 'local-7z': '📦',
-        'unzip': '📂', 'local-unzip': '📂',
-        'extract': '📂', 'local-extract': '📂',
-        'convert': '🔄', 'local-convert': '🔄',
-        'resize': '🔲', 'local-resize': '🔲',
-        'crop': '✂️', 'local-crop': '✂️',
-        'ocr': '📝', 'local-ocr': '📝',
-        'translate': '🌍', 'local-translate': '🌍',
-        'summary': '📋', 'local-summary': '📋',
-        'analyze': '🧠', 'local-analyze': '🧠',
-        'search': '🔍', 'local-search': '🔍',
-        'websearch': '🔍', 'local-websearch': '🔍',
-        'weather': '🌤️', 'local-weather': '🌤️',
-        'time': '⏰', 'local-time': '⏰',
-        'date': '📅', 'local-date': '📅',
-        'calc': '🧮', 'local-calc': '🧮',
-        'math': '∑', 'local-math': '∑',
-        'crypto': '🔐', 'local-crypto': '🔐',
-        'hash': '🔑', 'local-hash': '🔑',
-        'base64': '🔢', 'local-base64': '🔢',
-        'encode': '🔢', 'local-encode': '🔢',
-        'decode': '🔓', 'local-decode': '🔓',
-        'uuid': '🔢', 'local-uuid': '🔢',
-        'random': '🎲', 'local-random': '🎲',
-        'sleep': '😴', 'local-sleep': '😴',
-        'ping': '📡', 'local-ping': '📡',
-        'dns': '🌐', 'local-dns': '🌐',
-        'port': '🔌', 'local-port': '🔌',
-        'network': '🌐', 'local-network': '🌐',
-        'system': '💻', 'local-system': '💻',
-        'memory': '💾', 'local-memory': '💾',
-        'cpu': '⚙️', 'local-cpu': '⚙️',
-        'disk': '💿', 'local-disk': '💿',
-        'process': '⚙️', 'local-process': '⚙️',
-        'kill': '💀', 'local-kill': '💀',
-        'ps': '📋', 'local-ps': '📋',
-        'top': '📊', 'local-top': '📊',
-        'log': '📝', 'local-log': '📝',
-        'debug': '🐛', 'local-debug': '🐛',
-        'trace': '🔍', 'local-trace': '🔍',
-        'test': '🧪', 'local-test': '🧪',
-        'build': '🔨', 'local-build': '🔨',
-        'deploy': '🚀', 'local-deploy': '🚀',
-        'run': '▶️', 'local-run': '▶️',
-        'start': '▶️', 'local-start': '▶️',
-        'stop': '⏹️', 'local-stop': '⏹️',
-        'restart': '🔄', 'local-restart': '🔄',
-        'status': '📊', 'local-status': '📊',
-        'info': 'ℹ️', 'local-info': 'ℹ️',
-        'version': '📌', 'local-version': '📌',
-        'about': 'ℹ️', 'local-about': 'ℹ️',
-        'exit': '🚪', 'local-exit': '🚪',
-        'quit': '🚪', 'local-quit': '🚪',
-        'help': '❓', 'local-help': '❓'
+        'browser': '🌐',
+        'save': '💾',
+        'interval': '⏰',
+        'file': '📄',
+        'open': '📂',
+        'rename': '📝',
+        'mkdir': '📁',
+        'copy': '📋',
+        'move': '📤',
+        'url': '🔗',
+        'grep': '🔎',
+        'help': '❓',
+        'config': '⚙️',
+        'env': '🌍',
+        'shell': '🐚',
+        'python': '🐍',
+        'node': '🟢',
+        'npm': '📦',
+        'git': '📤',
+        'ssh': '🔒',
+        'http': '🌐',
+        'api': '🔌',
+        'json': '📋',
+        'yaml': '📄',
+        'xml': '📄',
+        'csv': '📊',
+        'pdf': '📕',
+        'image': '🖼️',
+        'audio': '🎵',
+        'video': '🎬',
+        'zip': '📦',
+        'tar': '📦',
+        '7z': '📦',
+        'unzip': '📂',
+        'extract': '📂',
+        'convert': '🔄',
+        'resize': '🔲',
+        'crop': '✂️',
+        'ocr': '📝',
+        'translate': '🌍',
+        'summary': '📋',
+        'analyze': '🧠',
+        'search': '🔍',
+        'websearch': '🔍',
+        'weather': '🌤️',
+        'time': '⏰',
+        'date': '📅',
+        'calc': '🧮',
+        'math': '∑',
+        'crypto': '🔐',
+        'hash': '🔑',
+        'base64': '🔢',
+        'encode': '🔢',
+        'decode': '🔓',
+        'uuid': '🔢',
+        'random': '🎲',
+        'sleep': '😴',
+        'ping': '📡',
+        'dns': '🌐',
+        'port': '🔌',
+        'network': '🌐',
+        'system': '💻',
+        'memory': '💾',
+        'cpu': '⚙️',
+        'disk': '💿',
+        'process': '⚙️',
+        'kill': '💀',
+        'ps': '📋',
+        'top': '📊',
+        'log': '📝',
+        'debug': '🐛',
+        'trace': '🔍',
+        'test': '🧪',
+        'build': '🔨',
+        'deploy': '🚀',
+        'run': '▶️',
+        'start': '▶️',
+        'stop': '⏹️',
+        'restart': '🔄',
+        'status': '📊',
+        'info': 'ℹ️',
+        'version': '📌',
+        'about': 'ℹ️',
+        'exit': '🚪',
+        'quit': '🚪',
+        'help': '❓'
     };
-    return iconMap[toolName] || iconMap[toolName.replace(/^local-/, '')] || '📦';
+    return iconMap[toolName] || '📦';
 }
 
 // 生成状态（用于停止按钮）
@@ -1888,6 +1878,7 @@ window.electronAPI.getRootDir().then(function(dir) { currentRootDir = dir || '';
 // ==================== 主题同步 ====================
 window.electronAPI.onAgentTheme(function(theme) {
     currentTheme = theme;
+    // CSS 变量由主进程 injectThemeVars 注入，这里仅同步 workflow wrapper 主题
     if (theme === 'light') {
         document.body.classList.add('light-theme');
     } else {
@@ -2250,7 +2241,7 @@ function renderWorkflowSegments(container, segments) {
             toolCard.style.marginLeft = '20px';
             var toolHeader = document.createElement('div');
             toolHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;font-size:13px;user-select:none;transition:background .2s;';
-            var toolName = (seg.lang || 'unknown').replace(/^local-/, '');
+            var toolName = (seg.lang || 'unknown');
             var toolIcon = getToolIcon(seg.lang || '');
             toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span style="font-size:14px;margin-right:6px;">' + toolIcon + '</span><span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;">● 已返回</span>';
             var toolBody = document.createElement('div');
@@ -2892,7 +2883,7 @@ function addAssistantSegments(segments, skipSave) {
             toolCard.style.marginLeft = '20px';
             var toolHeader = document.createElement('div');
             toolHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;font-size:13px;user-select:none;transition:background .2s;';
-            var toolName2 = (seg.lang || 'unknown').replace(/^local-/, '');
+            var toolName2 = (seg.lang || 'unknown');
             var toolIcon2 = getToolIcon(seg.lang || '');
             toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span style="font-size:14px;margin-right:6px;">' + toolIcon2 + '</span><span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName2) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;display:flex;align-items:center;gap:4px;"><span class="tool-pulse" style="width:6px;height:6px;border-radius:50%;background:var(--warning);display:inline-block;"></span>执行中...</span>';
             var toolBody = document.createElement('div');
@@ -3049,7 +3040,7 @@ function addAssistantSegments(segments, skipSave) {
                 var autoHeader = document.createElement('div');
                 autoHeader.className = 'tool-header';
                 autoHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;font-size:13px;user-select:none;';
-                var toolName3 = (seg.lang || 'tool').replace(/^local-/, '');
+                var toolName3 = (seg.lang || 'tool');
                 autoHeader.innerHTML = '<span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName3) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;">● 已返回</span>';
                 autoCard.appendChild(autoHeader);
                 var autoResult = document.createElement('div');
@@ -5417,10 +5408,12 @@ function showMenuOverlay(menuId, btn) {
     var menu = (menuConfig.menu || []).find(function(m) { return m.id === menuId; });
     if (!menu || !menu.items) return;
 
-    // 更新按钮状态
-    document.querySelectorAll('.mb-btn').forEach(function(b) {
-        b.classList.toggle('open', b.dataset.menuId === menuId);
-    });
+    // 更新按钮状态（仅在 btn 存在时）
+    if (btn) {
+        document.querySelectorAll('.mb-btn').forEach(function(b) {
+            b.classList.toggle('open', b.dataset.menuId === menuId);
+        });
+    }
     openMenuId = menuId;
 
     // 渲染菜单项
@@ -5436,23 +5429,22 @@ function showMenuOverlay(menuId, btn) {
         }
         anyItem = true;
         var el = document.createElement('div');
-        el.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 16px;font-size:13px;color:' +
+        el.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 16px;font-size:13px;color:var(--text-primary, ' +
             (currentMenuTheme === 'light' ? '#1f2328' : '#e6edf3') +
-            ';cursor:pointer;transition:background 0.1s;';
+            ');cursor:pointer;transition:background 0.1s;';
 
         var leftWrap = document.createElement('span');
         leftWrap.style.cssText = 'display:flex;align-items:center;gap:6px;';
 
         if (item.type === 'radio') {
             var radio = document.createElement('span');
-            radio.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;border:1.5px solid ' +
-                (currentMenuTheme === 'light' ? '#656d76' : '#8b949e') + ';flex-shrink:0;';
+            radio.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;border:1.5px solid var(--text-secondary, ' +
+                (currentMenuTheme === 'light' ? '#656d76' : '#8b949e') + ');flex-shrink:0;';
             var isChecked = false;
-            if (item.id === 'theme-dark' && currentMenuTheme === 'dark') isChecked = true;
-            if (item.id === 'theme-light' && currentMenuTheme === 'light') isChecked = true;
+            if (item.id === 'theme-' + currentMenuTheme) isChecked = true;
             if (isChecked) {
-                radio.style.borderColor = (currentMenuTheme === 'light' ? '#0969da' : '#388bfd');
-                radio.style.background = (currentMenuTheme === 'light' ? '#0969da' : '#388bfd');
+                radio.style.borderColor = (currentMenuTheme === 'light' ? '#0969da' : 'var(--accent, #388bfd)');
+                radio.style.background = (currentMenuTheme === 'light' ? '#0969da' : 'var(--accent, #388bfd)');
             }
             leftWrap.appendChild(radio);
         }
@@ -5464,13 +5456,13 @@ function showMenuOverlay(menuId, btn) {
 
         if (item.accelerator) {
             var accelSpan = document.createElement('span');
-            accelSpan.style.cssText = 'font-size:11px;color:' + (currentMenuTheme === 'light' ? '#656d76' : '#8b949e') + ';margin-left:24px;';
+            accelSpan.style.cssText = 'font-size:11px;color:var(--text-secondary, ' + (currentMenuTheme === 'light' ? '#656d76' : '#8b949e') + ');margin-left:24px;';
             accelSpan.textContent = item.accelerator;
             el.appendChild(accelSpan);
         }
 
         el.addEventListener('mouseenter', function() {
-            el.style.background = (currentMenuTheme === 'light' ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.06)');
+            el.style.background = (currentMenuTheme === 'light' ? 'rgba(0,0,0,0.05)' : 'var(--surface-muted, rgba(255,255,255,0.06))');
         });
         el.addEventListener('mouseleave', function() {
             el.style.background = 'transparent';
@@ -5487,10 +5479,19 @@ function showMenuOverlay(menuId, btn) {
 
     if (!anyItem) return;
 
-    // 定位：在按钮下方弹出
-    var btnRect = btn.getBoundingClientRect();
-    overlay.style.left = Math.max(4, btnRect.left) + 'px';
-    overlay.style.top = (btnRect.bottom + 2) + 'px';
+    // 定位：优先使用传入的坐标，否则查找按钮位置
+    if (btn && btn.left !== undefined) {
+        // 从外部传入的坐标（来自 shell.html 的按钮位置）
+        overlay.style.left = Math.max(4, btn.left) + 'px';
+        overlay.style.top = (btn.bottom - 4) + 'px';
+    } else if (btn && btn.getBoundingClientRect) {
+        var btnRect = btn.getBoundingClientRect();
+        overlay.style.left = Math.max(4, btnRect.left) + 'px';
+        overlay.style.top = (btnRect.bottom - 4) + 'px';
+    } else {
+        overlay.style.left = '10px';
+        overlay.style.top = '40px';
+    }
     overlay.style.minWidth = '240px';
     overlay.style.display = 'block';
 }
@@ -5584,6 +5585,16 @@ document.addEventListener('keydown', function(e) {
 
 // 页面加载后加载菜单配置
 setTimeout(loadMenubarConfig, 200);
+
+// 监听来自主进程的菜单触发（shell.html 标题栏菜单被 agentView 遮挡时，通过主进程转发到 agentView 内渲染）
+if (window.electronAPI && window.electronAPI.onMenuOverlay) {
+    window.electronAPI.onMenuOverlay(function(data) {
+        if (data && data.menuId) {
+            // 传入 data 对象作为 btn（包含 left/bottom 坐标）
+            showMenuOverlay(data.menuId, data);
+        }
+    });
+}
 </script>
 
 <!-- 更新进度条覆盖层 -->
@@ -5599,3 +5610,4 @@ setTimeout(loadMenubarConfig, 200);
 </div>
 
 </body>
+

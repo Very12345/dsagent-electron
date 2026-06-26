@@ -1,10 +1,10 @@
-// local-qwen - Qwen 通用问答 + 绘图 + PPT 生成（合并 local-qwen-draw）
+// qwen - Qwen 通用问答 + 绘图 + PPT 生成（合并 qwen-draw）
 // callback=picture 启用绘图模式，callback=ppt 启用 PPT 生成模式，async=true 启动异步任务不等待
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._qwen_merged_registered) return;
 
     window.__dsagent_tools.register({
-        name: ['local-qwen', 'local-qwen-draw'],
+        name: ['qwen', 'qwen-draw'],
         scope: '调用 Qwen 进行通用问答/文件分析/图片识别/AI 绘图/PPT 生成',
         description: '向 Qwen 发送问题或指令，支持上传文件、图片分析、AI 绘图、PPT 生成。\n'
             + '使用 callback=picture 进入绘图模式，生成图片保存到本地。\n'
@@ -20,7 +20,7 @@
             { name: 'desc', type: '字符串', default: '—', required: false, description: '附加说明文字（绘图/PPT模式）' },
             { name: 'ref', type: '字符串', default: '—', required: false, description: '参考图片/文件路径（绘图/PPT模式）' }
         ],
-        usage: '# 普通问答\n{"tool": "qwen", "params": {"message": "帮我写一个 Python 脚本"}}\n\n# 图片分析（数组路径）\n{"tool": "qwen", "params": {"paths": ["D:\\\\screenshot.png"]}, "body": "这张截图里有什么问题？"}\n\n# 同步绘图\n{"tool": "qwen", "params": {"callback": "picture", "savepath": "D:\\\\images"}, "body": "一只熊猫在竹林里吃竹子"}\n\n# 异步绘图（推荐）\n{"tool": "qwen", "params": {"callback": "picture", "async": true, "savepath": "D:\\\\images"}, "body": "一只熊猫在竹林里吃竹子"}\n\n# PPT 生成\n{"tool": "qwen", "params": {"callback": "ppt", "savepath": "D:\\\\ppt"}, "body": "请生成一份关于固体物理学的 PPT"}',
+        usage: '<tool:qwen>{"message": "帮我写一个 Python 脚本"}</tool:qwen>\n\n// 图片分析\n<tool:qwen>{"paths": ["D:\\\\screenshot.png"], "body": "这张截图里有什么问题？"}</tool:qwen>\n\n// 绘图\n<tool:qwen>{"callback": "picture", "savepath": "D:\\\\images", "body": "一只熊猫在竹林里吃竹子"}</tool:qwen>\n\n// PPT\n<tool:qwen>{"callback": "ppt", "savepath": "D:\\\\ppt", "body": "请生成一份关于固体物理学的 PPT"}</tool:qwen>',
         notes: 'callback=picture 启用绘图模式；callback=ppt 启用 PPT 生成模式；async=true 不阻塞等待，后续轮次自动获取结果。对话内容会在完成后自动清理。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

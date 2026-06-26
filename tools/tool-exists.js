@@ -1,16 +1,16 @@
-// local-exists - 检查文件或目录是否存在
+// exists - 检查文件或目录是否存在
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._exists_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-exists',
+        name: 'exists',
         scope: '检查文件或目录是否存在',
         description: '检查指定路径的文件或目录是否存在，返回 true 或 false。',
         params: [
             { name: 'path', type: '字符串', default: '—', required: true, description: '要检查的文件或目录路径' }
         ],
-        usage: '{"tool": "exists", "params": {"path": "D:\\\\project\\\\config.json"}}',
-        notes: '只检查存在性，不区分文件还是目录。如需详细信息请使用 local-info。',
+        usage: '<tool:exists>{"path": "D:\\\\project\\\\config.json"}</tool:exists>',
+        notes: '只检查存在性，不区分文件还是目录。如需详细信息请使用 info。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
             var targetPath = (params.path || body || '').trim();

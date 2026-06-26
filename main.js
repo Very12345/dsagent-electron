@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿// DeepSeek Local Agent - Electron 主进程（双栏布局版）
+﻿﻿﻿﻿﻿﻿﻿﻿// DeepSeek Local Agent - Electron 主进程（双栏布局版）
 const { app, BrowserWindow, BrowserView, Menu, dialog, session, ipcMain, shell, clipboard, nativeImage, desktopCapturer } = require('electron');
 const path = require('path');
 const agent = require('./server.js');
@@ -42,9 +42,7 @@ let qqBotAwaitingConfirm = false;  // 是否正在等待用户确认
 let deepseekView = null;
 let qwenView = null;
 let qwenVisible = false;    // Qwen 视图是否可见
-let viewBarView = null;
-let fileBrowserView = null;
-let controlBarView = null;
+let shellView = null;  // 合并 viewbar/controlbar/filebrowser 的外壳视图
 let agentView = null;
 let agentViewVisible = true;
 let prevAgentViewVisible = false; // 用于 updateBounds 检测 Agent 从隐藏变为可见
@@ -150,9 +148,7 @@ function openFolder(folderPath, opts) {
     opts = opts || {};
     currentRootDir = folderPath;
     agent.setBaseDir(folderPath);
-    if (fileBrowserView) {
-        fileBrowserView.webContents.send('root-changed', folderPath);
-    }
+    shellSend('root-changed', folderPath);
     saveRecentProject(folderPath);
     saveAppState({ lastRootDir: folderPath });
     rebuildMenu();
@@ -169,15 +165,34 @@ function openFolder(folderPath, opts) {
             agentView.webContents.send('agent-close-conversation');
         }
         // 导航 DeepSeek 回首页，结束当前会话
+        // 先移出窗口防止 loadURL 触发 Chromium HWND 重绘闪现
         if (deepseekView) {
             try {
+                try { mainWindow.removeBrowserView(deepseekView); } catch(e) {}
                 deepseekView.webContents.loadURL('about:blank');
                 setTimeout(function() {
                     deepseekView.webContents.loadURL(DEEPSEEK_URL);
+                    // 导航完成后重新加入窗口并移回屏幕外
+                    setTimeout(function() {
+                        try {
+                            mainWindow.addBrowserView(deepseekView);
+                            var ob = deepseekView.getBounds();
+                            if (ob.x > -1000) {
+                                deepseekView.setBounds({ x: -10000, y: ob.y, width: ob.width, height: ob.height });
+                            }
+                            if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
+                                mainWindow.setTopBrowserView(agentView);
+                            }
+                        } catch(e) {}
+                    }, 500);
                 }, 100);
             } catch(e) {
                 console.warn('[OpenFolder] Navigate home failed:', e);
             }
+        }
+        // 切换目录后刷新历史对话列表
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('refresh-history');
         }
     });
 
@@ -203,7 +218,12 @@ function getDeepseekInjectScript() {
             combined += fs.readFileSync(path.join(toolsDir, f), 'utf-8') + '\n';
         }
     }
-    // 3. 加载主注入脚本
+    // 3. 加载 Agent 引擎（业务逻辑层，无 DOM 依赖）
+    const enginePath = path.join(__dirname, 'agent-engine.js');
+    if (fs.existsSync(enginePath)) {
+        combined += fs.readFileSync(enginePath, 'utf-8') + '\n';
+    }
+    // 4. 加载主注入脚本（DOM 操作层）
     combined += fs.readFileSync(injectPath, 'utf-8');
     return combined;
 }
@@ -251,15 +271,49 @@ function setupSession() {
 // 技能计数同步到视图栏
 function syncSkillsCount() {
     var skills = (agent.loadSkills().skills || []);
-    if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
-        viewBarView.webContents.send('ctrl-skills-count', skills.length);
-    }
+    shellSend('ctrl-skills-count', skills.length);
 }
 
 function setupAgentIPC() {
     ipcMain.handle('agent-exec', async (event, cmd, timeoutMs) => {
         // 默认 30 秒超时，防止 start 等阻塞型命令卡死
         return await agent.execCmd(cmd, timeoutMs || 30000);
+    });
+
+    // 通用工具调用分发（供调试面板 ⚡ 使用，直接输入工具 JSON）
+    ipcMain.handle('agent-tool', async (event, payload) => {
+        try {
+            var toolName, toolParams, toolBody;
+            if (typeof payload === 'string') {
+                try { payload = JSON.parse(payload); } catch(e) { return { success: false, error: 'JSON 解析失败: ' + e.message }; }
+            }
+            toolName = (payload.tool || '').toLowerCase();
+            toolParams = payload.params || {};
+            toolBody = payload.body || '';
+
+            // 映射 tool 名称到 agent 方法
+            var toolMap = {
+                'exec':      function() { return agent.execCmd(toolBody, toolParams.timeout || 30000); },
+                'cmd':       function() { return agent.execCmd(toolBody, toolParams.timeout || 30000); },
+                'exec-admin': function() { return agent.execCmdAdmin(toolBody); },
+                'read':      function() { return agent.readFile(toolParams.path || toolBody); },
+                'readfile':  function() { return agent.readFileBase64(toolParams.path || toolBody); },
+                'save':      function() { return agent.saveFile(toolParams.path || toolBody, toolParams.content || ''); },
+                'edit':      function() { return agent.editFile(toolParams.path || toolBody, toolParams.find, toolParams.regex, toolParams.replace); },
+                'list':      function() { return agent.listDir(toolParams.path || toolBody || '.'); },
+                'delete':    function() { return agent.deleteFile(toolParams.path || toolBody); },
+                'mkdir':     function() { return agent.makeDir(toolParams.path || toolBody); },
+                'exists':    function() { return agent.checkExists(toolParams.path || toolBody); },
+                'info':      function() { return agent.getInfo(toolParams.path || toolBody); },
+            };
+
+            if (toolName && toolMap[toolName]) {
+                return await toolMap[toolName]();
+            }
+            return { success: false, error: '未识别的工具: ' + (toolName || '(空)') + '\n\n支持的工具: ' + Object.keys(toolMap).join(', ') + '\n\n格式: {"tool": "exec", "params": {"timeout": 60000}, "body": "echo hello"}' };
+        } catch(e) {
+            return { success: false, error: 'agent-tool 执行失败: ' + e.message };
+        }
     });
 
     ipcMain.handle('agent-exec-admin', async (event, cmd) => {
@@ -411,7 +465,7 @@ function setupAgentIPC() {
         return { success: true };
     });
 
-    // 获取技能完整内容（local-skill 命令）
+    // 获取技能完整内容（skill 命令）
     ipcMain.handle('agent-skill-get-content', async (event, skillName) => {
         return agent.getSkillContent(skillName);
     });
@@ -443,9 +497,7 @@ function setupAgentIPC() {
             var result = agent.unsyncSkill(skillName);
             if (result.success) {
                 syncSkillsCount();
-                if (controlBarView) {
-                    controlBarView.webContents.send('ctrl-notify', '已取消同步: ' + skillName);
-                }
+                shellSend('ctrl-notify', '已取消同步: ' + skillName);
             }
         } catch (e) {
             console.warn('[SKILLS] Unsync failed:', e.message);
@@ -1161,9 +1213,7 @@ function setupAgentIPC() {
 
     // Agent 状态消息转发到 controlbar（统一任务状态栏）
     ipcMain.on('agent-status-to-controlbar', (event, data) => {
-        if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-            controlBarView.webContents.send('ctrl-agent-status', data);
-        }
+        shellSend('ctrl-agent-status', data);
     });
 
     }
@@ -1199,15 +1249,13 @@ function setupControlBarIPC() {
             ).catch(() => {});
         }
         // 立即同步到视图选择栏
-        if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
-            viewBarView.webContents.send('ctrl-viewbar-status', {
+        shellSend('ctrl-viewbar-status', {
                 currentView: currentView,
                 dsState: 'idle',
                 qwenState: 'idle',
                 confirmMode: mode,
                 theme: currentAppTheme
             });
-        }
     });
 
     // 显示说明
@@ -1235,9 +1283,7 @@ function setupControlBarIPC() {
             agentViewVisible = true;
             qwenVisible = false;
             updateBounds();
-            if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-                controlBarView.webContents.send('ctrl-agent-state', agentViewVisible);
-            }
+            shellSend('ctrl-agent-state', agentViewVisible);
         }
         var result = agent.loadSkills();
         syncSkillsCount();
@@ -1263,9 +1309,7 @@ function setupControlBarIPC() {
     ipcMain.on('ctrl-delete-skill', (event, skillName) => {
         var result = agent.deleteSkill(skillName);
         syncSkillsCount();
-        if (controlBarView) {
-            controlBarView.webContents.send('ctrl-notify', result.success ? '已删除技能: ' + skillName : result.error);
-        }
+        shellSend('ctrl-notify', result.success ? '已删除技能: ' + skillName : result.error);
     });
 
     // 从文件夹导入技能（标准 SKILL.md 格式）
@@ -1278,25 +1322,19 @@ function setupControlBarIPC() {
         try {
             var importResult = agent.importSkill(result.filePaths[0]);
             if (importResult.success) {
-                if (controlBarView) {
-                    controlBarView.webContents.send('ctrl-notify', '已导入技能: ' + importResult.name);
-                }
+                shellSend('ctrl-notify', '已导入技能: ' + importResult.name);
             } else {
-                if (controlBarView) {
-                    controlBarView.webContents.send('ctrl-notify', '导入失败: ' + importResult.error);
-                }
+                shellSend('ctrl-notify', '导入失败: ' + importResult.error);
             }
             syncSkillsCount();
         } catch (err) {
-            if (controlBarView) {
-                controlBarView.webContents.send('ctrl-notify', '导入失败: ' + err.message);
-            }
+            shellSend('ctrl-notify', '导入失败: ' + err.message);
         }
     });
 
     // 主题切换（从左侧栏触发，广播到所有视图）
     ipcMain.on('ctrl-set-theme', (event, theme) => {
-        broadcastTheme(theme === 'light' ? 'light' : 'dark');
+        broadcastTheme(THEME_PRESETS.hasOwnProperty(theme) ? theme : 'dark');
     });
 
     // 调试日志输出到主进程控制台
@@ -1316,7 +1354,7 @@ function setupControlBarIPC() {
                 else if (deepseekView) deepseekView.webContents.focus();
             }, 200);
         }
-        if (controlBarView) controlBarView.webContents.send('ctrl-qwen-state', qwenVisible);
+        shellSend('ctrl-qwen-state', qwenVisible);
     });
 
     // 视图选择器（替换旧的 Qwen/Agent 按钮）
@@ -1363,9 +1401,7 @@ function setupControlBarIPC() {
     // 停止按钮（通用停止：停止输出 + 停止命令 + 停止切换）
     ipcMain.on('ctrl-stop', async () => {
         await stopAll();
-        if (controlBarView && controlBarView.webContents) {
-            controlBarView.webContents.send('ctrl-notify', '已停止');
-        }
+        shellSend('ctrl-notify', '已停止');
     });
 
     // Agent 视图焦点恢复（删除对话后确保输入框可用）
@@ -1378,16 +1414,12 @@ function setupControlBarIPC() {
 
     // 将 DeepSeek 页面/Agent 的状态通知显示到控制栏
     ipcMain.on('agent-notify-status', (event, msg) => {
-        if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-            controlBarView.webContents.send('ctrl-notify', msg);
-        }
+        shellSend('ctrl-notify', msg);
     });
 
     // Qwen 页面状态消息转发到 controlbar
     ipcMain.on('qwen-notify-status', (event, msg) => {
-        if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-            controlBarView.webContents.send('ctrl-agent-status', { msg: msg, type: 'qwen' });
-        }
+        shellSend('ctrl-agent-status', { msg: msg, type: 'qwen' });
     });
 
     // Agent 视图切换
@@ -1396,9 +1428,7 @@ function setupControlBarIPC() {
         saveAppState({ lastMode: agentViewVisible ? 'agent' : 'deepseek' });
         updateBounds();
         // 通知控制栏状态
-        if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-            controlBarView.webContents.send('ctrl-agent-state', agentViewVisible);
-        }
+        shellSend('ctrl-agent-state', agentViewVisible);
     });
 
     // Agent 发送消息：控制 DeepSeek 页面完成模式选择、深度思考、关闭联网、发送消息
@@ -1495,6 +1525,9 @@ function setupControlBarIPC() {
             var origMatch = deepseekUrl.match(/\/chat\/([^?#]+)/);
             var origConvId = origMatch ? origMatch[1] : '';
 
+            // 导航前移出窗口，防止 loadURL 触发 Chromium HWND 重绘导致的闪现
+            try { mainWindow.removeBrowserView(deepseekView); } catch(e) {}
+
             // 导航到对话页面
             deepseekView.webContents.loadURL(deepseekUrl);
 
@@ -1542,8 +1575,34 @@ function setupControlBarIPC() {
                 }
             }
 
+            // 导航完毕，将 deepseekView 重新加入窗口并移回屏幕外（x: -10000）
+            // 同时确保 agentView 保持在 z-order 最顶层
+            try {
+                mainWindow.addBrowserView(deepseekView);
+                var ob = deepseekView.getBounds();
+                if (ob.x > -1000) {
+                    deepseekView.setBounds({ x: -10000, y: ob.y, width: ob.width, height: ob.height });
+                }
+                // 恢复 agentView 在 z-order 顶层
+                if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
+                    mainWindow.setTopBrowserView(agentView);
+                }
+            } catch(e) {}
+
             return { success: true, valid: isValid };
         } catch (e) {
+            // 如果异常发生，确保仍然把 view 加回来
+            try {
+                if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
+                    var added = false;
+                    var views = mainWindow.getBrowserViews();
+                    for (var _vi = 0; _vi < views.length; _vi++) { if (views[_vi] === deepseekView) { added = true; break; } }
+                    if (!added) {
+                        mainWindow.addBrowserView(deepseekView);
+                        deepseekView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
+                    }
+                }
+            } catch(_ee) {}
             return { success: false, error: e.message, valid: false };
         }
     });
@@ -1825,15 +1884,13 @@ function setupControlBarIPC() {
                     agentView.webContents.send('qqbot-command', { action: 'setConfirmMode', value: newMode });
                 }
                 // 同步到 viewbar
-                if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
-                    viewBarView.webContents.send('ctrl-viewbar-status', {
+                shellSend('ctrl-viewbar-status', {
                         currentView: currentView,
                         dsState: 'idle',
                         qwenState: 'idle',
                         confirmMode: newMode,
                         theme: currentAppTheme
                     });
-                }
                 await qqBotInstance.sendText(msg.openid, '🔒 信任模式已设为: ' + labels[newMode], msg.msgId);
             } else {
                 var curMode = state2.qqBotConfirmMode || 'smart';
@@ -1853,9 +1910,7 @@ function setupControlBarIPC() {
                             agentView.webContents.send('qqbot-command', { action: 'changeDir', value: newDir });
                         }
                         // 也同步到文件浏览器的根目录
-                        if (fileBrowserView && fileBrowserView.webContents) {
-                            fileBrowserView.webContents.send('root-changed', newDir);
-                        }
+                        shellSend('root-changed', newDir);
                         await qqBotInstance.sendText(msg.openid, '📂 工作目录已切换至: ' + newDir, msg.msgId);
                     } else {
                         await qqBotInstance.sendText(msg.openid, '❌ 目录不存在: ' + newDir, msg.msgId);
@@ -2467,7 +2522,7 @@ function setupControlBarIPC() {
             // 根据操作类型定制提示文案
             var actionLabel = '执行';
             var confirmLabel = '✅ 确认执行';
-            if (lang === 'local-delete') {
+            if (lang === 'delete') {
                 actionLabel = '删除';
                 confirmLabel = '✅ 确认删除';
             }
@@ -2882,9 +2937,7 @@ function setupIpcHandlers() {
             case 'close-folder':
                 currentRootDir = null;
                 agent.setBaseDir(null);
-                if (fileBrowserView) {
-                    fileBrowserView.webContents.send('root-changed', null);
-                }
+                shellSend('root-changed', null);
                 saveAppState({ lastRootDir: null, lastHistoryId: null });
                 break;
             case 'open-recent':
@@ -2907,11 +2960,26 @@ function setupIpcHandlers() {
             case 'reload-deepseek':
                 if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                     const currentUrl = deepseekView.webContents.getURL();
+                    // 先移出窗口防止 loadURL 触发闪现
+                    try { mainWindow.removeBrowserView(deepseekView); } catch(e) {}
                     if (currentUrl && currentUrl !== 'about:blank') {
                         deepseekView.webContents.loadURL(currentUrl);
                     } else {
                         deepseekView.webContents.loadURL(DEEPSEEK_URL);
                     }
+                    // did-finish-load 会重新注入脚本，延迟后重新加入
+                    setTimeout(() => {
+                        try {
+                            mainWindow.addBrowserView(deepseekView);
+                            var ob = deepseekView.getBounds();
+                            if (ob.x > -1000) {
+                                deepseekView.setBounds({ x: -10000, y: ob.y, width: ob.width, height: ob.height });
+                            }
+                            if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
+                                mainWindow.setTopBrowserView(agentView);
+                            }
+                        } catch(e) {}
+                    }, 800);
                 }
                 break;
             case 'theme':
@@ -2985,6 +3053,75 @@ function setupIpcHandlers() {
     ipcMain.on('agent-menu-item-click', (event, item) => {
         if (!item || !item.action) return;
         handleMenuAction(item);
+    });
+
+    // shell 菜单按钮点击 → 弹出原生菜单（BrowserView 永远在 DOM 之上，只能用原生菜单）
+    ipcMain.on('show-native-menu', (event, menuId) => {
+        try {
+            const configPath = path.join(__dirname, 'menubar-config.json');
+            if (!fs.existsSync(configPath)) return;
+            const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+            // 动态注入最近项目
+            const recent = loadRecentProjects();
+            const fileMenu = (config.menu || []).find(function(m) { return m.id === menuId; });
+            if (!fileMenu || !fileMenu.items) return;
+            // 为 file 菜单注入最近项目
+            if (menuId === 'file' && recent.length > 0) {
+                var insertIdx = -1;
+                for (var fi = 0; fi < fileMenu.items.length; fi++) {
+                    if (fileMenu.items[fi].id === 'exit' || (fileMenu.items[fi].type === 'separator' && fi > 0)) {
+                        insertIdx = fi; break;
+                    }
+                }
+                if (insertIdx > 0) {
+                    var recentItems = recent.map(function(p) {
+                        return { id: 'recent-' + p.replace(/[^a-zA-Z0-9_-]/g, '_'), label: p, action: 'open-recent', path: p };
+                    });
+                    fileMenu.items.splice.apply(fileMenu.items, [insertIdx, 0, { type: 'separator' }].concat(recentItems));
+                }
+            }
+            // 构建原生菜单
+            var menuItems = fileMenu.items.map(function(item) {
+                if (item.type === 'separator') return { type: 'separator' };
+                var mi = {
+                    label: item.label,
+                    click: function() { handleMenuAction(item); }
+                };
+                if (item.accelerator) mi.accelerator = item.accelerator;
+                if (item.type === 'radio') {
+                    mi.type = 'radio';
+                    if (item.id === 'theme-' + currentAppTheme) mi.checked = true;
+                }
+                return mi;
+            });
+            var menu = Menu.buildFromTemplate(menuItems);
+            // 在鼠标位置弹出
+            menu.popup(mainWindow);
+        } catch (e) {
+            console.error('[Menu] Popup error:', e);
+        }
+    });
+
+    // 兼容旧版 shell.html 中 showCustomMenu 发送的事件（只处理 agentView，DeepSeek/Qwen 不需要注入菜单）
+    ipcMain.on('inject-menu-overlay', (event, data) => {
+        // data 可能是旧格式（纯 menuId 字符串）或新格式（{menuId, left, bottom}）
+        var payload = typeof data === 'string' ? { menuId: data } : data;
+        // 仅在 Agent 视图可见时转发到 agentView 内部渲染（避免被 agentView 遮挡）
+        if (agentViewVisible && agentView && !agentView.webContents.isDestroyed()) {
+            // 坐标转换：shell.html 按钮坐标 → agentView 内部坐标
+            // agentView 的 x 偏移 = viewbar 宽度（vbW），y 偏移 = titlebar 高度已被 agentView bounds 处理
+            var vbW = (mainWindow && mainWindow.getContentBounds().width < 500) ? 0 :
+                      (mainWindow && mainWindow.getContentBounds().width < 700) ? 48 : VIEWBAR_WIDTH;
+            if (payload.left !== undefined) {
+                payload.left = payload.left - vbW;
+            }
+            agentView.webContents.send('render-menu-overlay', payload);
+        }
+    });
+
+    // 注入菜单项点击回调
+    ipcMain.on('menu-item-clicked', (event, data) => {
+        handleMenuAction(data);
     });
 
     // 标题栏窗口控制
@@ -3083,9 +3220,7 @@ function setupIpcHandlers() {
     ipcMain.handle('close-folder', async () => {
         currentRootDir = null;
         agent.setBaseDir(null);
-        if (fileBrowserView) {
-            fileBrowserView.webContents.send('root-changed', null);
-        }
+        shellSend('root-changed', null);
         saveAppState({ lastRootDir: null, lastHistoryId: null });
         return { success: true };
     });
@@ -3231,19 +3366,182 @@ function setupIpcHandlers() {
     });
 }
 
+// ==================== 主题预设 ====================
+const THEME_PRESETS = {
+    dark: null,   // 使用 :root 默认值，不注入
+    light: null,  // 使用 body.light 默认值，不注入
+    ocean: {
+        '--bg-base': '#0a1929',
+        '--bg-panel': '#0f2942',
+        '--bg-elevated': '#13395e',
+        '--bg-chat': '#0a1929',
+        '--bg-hover': 'rgba(0,180,216,0.08)',
+        '--bg-active': 'rgba(0,180,216,0.12)',
+        '--border': 'rgba(0,119,182,0.4)',
+        '--border-light': 'rgba(0,119,182,0.2)',
+        '--border-active': '#00b4d8',
+        '--text-primary': '#cae9ff',
+        '--text-secondary': '#7fb3d5',
+        '--text-muted': '#5a8fa8',
+        '--accent': '#00b4d8',
+        '--accent-2': '#0077b6',
+        '--accent-gradient': 'linear-gradient(135deg, #00b4d8, #0077b6)',
+        '--success': '#06d6a0',
+        '--danger': '#ef476f',
+        '--warning': '#ffd166',
+        '--cyan': '#00b4d8',
+        '--shadow-sm': '0 1px 3px rgba(0,0,0,0.4)',
+        '--shadow-md': '0 4px 12px rgba(0,0,0,0.45)',
+        '--shadow-lg': '0 8px 24px rgba(0,0,0,0.5)',
+        '--shadow-glow': '0 0 20px rgba(0,180,216,0.2)',
+        '--hover-overlay': 'rgba(0,180,216,0.06)',
+        '--accent-soft': 'rgba(0,180,216,0.08)',
+        '--accent-soft-strong': 'rgba(0,180,216,0.18)',
+        '--surface-muted': 'rgba(255,255,255,0.06)',
+        '--surface-muted-strong': 'rgba(255,255,255,0.1)',
+        '--bg-gradient': 'linear-gradient(180deg, rgba(0,180,216,0.04) 0%, transparent 100%)',
+        '--gradient-overlay': 'linear-gradient(180deg, rgba(0,180,216,0.15) 0%, rgba(0,119,182,0.08) 30%, rgba(10,25,41,0.03) 60%, transparent 80%)'
+    },
+    desert: {
+        '--bg-base': '#1a1410',
+        '--bg-panel': '#2a1f17',
+        '--bg-elevated': '#3a2a1f',
+        '--bg-chat': '#1a1410',
+        '--bg-hover': 'rgba(212,165,116,0.08)',
+        '--bg-active': 'rgba(212,165,116,0.12)',
+        '--border': 'rgba(201,123,60,0.4)',
+        '--border-light': 'rgba(201,123,60,0.2)',
+        '--border-active': '#d4a574',
+        '--text-primary': '#f5e6d3',
+        '--text-secondary': '#c4a882',
+        '--text-muted': '#9a7e5e',
+        '--accent': '#d4a574',
+        '--accent-2': '#c97b3c',
+        '--accent-gradient': 'linear-gradient(135deg, #d4a574, #c97b3c)',
+        '--success': '#94d2bd',
+        '--danger': '#e76f51',
+        '--warning': '#e9c46a',
+        '--cyan': '#d4a574',
+        '--shadow-sm': '0 1px 3px rgba(0,0,0,0.4)',
+        '--shadow-md': '0 4px 12px rgba(0,0,0,0.45)',
+        '--shadow-lg': '0 8px 24px rgba(0,0,0,0.5)',
+        '--shadow-glow': '0 0 20px rgba(212,165,116,0.2)',
+        '--hover-overlay': 'rgba(212,165,116,0.06)',
+        '--accent-soft': 'rgba(212,165,116,0.08)',
+        '--accent-soft-strong': 'rgba(212,165,116,0.18)',
+        '--surface-muted': 'rgba(255,255,255,0.06)',
+        '--surface-muted-strong': 'rgba(255,255,255,0.1)',
+        '--bg-gradient': 'linear-gradient(180deg, rgba(212,165,116,0.04) 0%, transparent 100%)',
+        '--gradient-overlay': 'linear-gradient(180deg, rgba(212,165,116,0.15) 0%, rgba(201,123,60,0.08) 30%, rgba(26,20,16,0.03) 60%, transparent 80%)'
+    },
+    forest: {
+        '--bg-base': '#0d1b14',
+        '--bg-panel': '#142920',
+        '--bg-elevated': '#1c3a2a',
+        '--bg-chat': '#0d1b14',
+        '--bg-hover': 'rgba(74,222,128,0.08)',
+        '--bg-active': 'rgba(74,222,128,0.12)',
+        '--border': 'rgba(22,163,74,0.4)',
+        '--border-light': 'rgba(22,163,74,0.2)',
+        '--border-active': '#4ade80',
+        '--text-primary': '#d1fadf',
+        '--text-secondary': '#87b893',
+        '--text-muted': '#5e8a6b',
+        '--accent': '#4ade80',
+        '--accent-2': '#16a34a',
+        '--accent-gradient': 'linear-gradient(135deg, #4ade80, #16a34a)',
+        '--success': '#4ade80',
+        '--danger': '#ef4444',
+        '--warning': '#facc15',
+        '--cyan': '#4ade80',
+        '--shadow-sm': '0 1px 3px rgba(0,0,0,0.4)',
+        '--shadow-md': '0 4px 12px rgba(0,0,0,0.45)',
+        '--shadow-lg': '0 8px 24px rgba(0,0,0,0.5)',
+        '--shadow-glow': '0 0 20px rgba(74,222,128,0.2)',
+        '--hover-overlay': 'rgba(74,222,128,0.06)',
+        '--accent-soft': 'rgba(74,222,128,0.08)',
+        '--accent-soft-strong': 'rgba(74,222,128,0.18)',
+        '--surface-muted': 'rgba(255,255,255,0.06)',
+        '--surface-muted-strong': 'rgba(255,255,255,0.1)',
+        '--bg-gradient': 'linear-gradient(180deg, rgba(74,222,128,0.04) 0%, transparent 100%)',
+        '--gradient-overlay': 'linear-gradient(180deg, rgba(74,222,128,0.15) 0%, rgba(22,163,74,0.08) 30%, rgba(13,27,20,0.03) 60%, transparent 80%)'
+    },
+    sunset: {
+        '--bg-base': '#1a0d1f',
+        '--bg-panel': '#2a1530',
+        '--bg-elevated': '#3a2040',
+        '--bg-chat': '#1a0d1f',
+        '--bg-hover': 'rgba(244,114,182,0.08)',
+        '--bg-active': 'rgba(244,114,182,0.12)',
+        '--border': 'rgba(192,132,252,0.4)',
+        '--border-light': 'rgba(192,132,252,0.2)',
+        '--border-active': '#f472b6',
+        '--text-primary': '#fce7f3',
+        '--text-secondary': '#c4a0b8',
+        '--text-muted': '#8e6a80',
+        '--accent': '#f472b6',
+        '--accent-2': '#c084fc',
+        '--accent-gradient': 'linear-gradient(135deg, #f472b6, #c084fc)',
+        '--success': '#34d399',
+        '--danger': '#fb7185',
+        '--warning': '#fbbf24',
+        '--cyan': '#c084fc',
+        '--shadow-sm': '0 1px 3px rgba(0,0,0,0.4)',
+        '--shadow-md': '0 4px 12px rgba(0,0,0,0.45)',
+        '--shadow-lg': '0 8px 24px rgba(0,0,0,0.5)',
+        '--shadow-glow': '0 0 20px rgba(244,114,182,0.2)',
+        '--hover-overlay': 'rgba(244,114,182,0.06)',
+        '--accent-soft': 'rgba(244,114,182,0.08)',
+        '--accent-soft-strong': 'rgba(244,114,182,0.18)',
+        '--surface-muted': 'rgba(255,255,255,0.06)',
+        '--surface-muted-strong': 'rgba(255,255,255,0.1)',
+        '--bg-gradient': 'linear-gradient(180deg, rgba(244,114,182,0.04) 0%, transparent 100%)',
+        '--gradient-overlay': 'linear-gradient(180deg, rgba(244,114,182,0.15) 0%, rgba(192,132,252,0.08) 30%, rgba(26,13,31,0.03) 60%, transparent 80%)'
+    }
+};
+
+const THEME_LIST = ['dark', 'light', 'ocean', 'desert', 'forest', 'sunset'];
+const THEME_ICONS = { dark: '🌙', light: '☀️', ocean: '🌊', desert: '🏜️', forest: '🌲', sunset: '🌅' };
+const THEME_LABELS = { dark: '深色', light: '浅色', ocean: '海洋', desert: '沙漠', forest: '森林', sunset: '日落' };
+
+// 向 shellView 广播 IPC 消息（单页面，无 iframe）
+function shellSend(channel, ...args) {
+    if (!shellView || !shellView.webContents || shellView.webContents.isDestroyed()) return;
+    try {
+        shellView.webContents.send(channel, ...args);
+    } catch (e) {
+        // 页面可能尚未就绪，静默忽略
+    }
+}
+
+// 向视图注入主题 CSS 变量（通过 <style> 标签覆盖）
+function injectThemeVars(view, theme) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    var preset = THEME_PRESETS[theme];
+    var code;
+    if (preset) {
+        var cssBody = Object.keys(preset).map(function(k) {
+            return k + ': ' + preset[k] + ' !important;';
+        }).join(' ');
+        var css = ':root { ' + cssBody + ' } body { ' + cssBody + ' } body.light { ' + cssBody + ' } body.light-theme { ' + cssBody + ' }';
+        code = '(function(){var s=document.getElementById("__theme_preset");if(!s){s=document.createElement("style");s.id="__theme_preset";document.head.appendChild(s)}s.textContent=' + JSON.stringify(css) + ';document.body.classList.remove("light")})()';
+    } else {
+        code = '(function(){var s=document.getElementById("__theme_preset");if(s)s.remove();document.body.classList.toggle("light",' + (theme === 'light') + ')})()';
+    }
+    view.webContents.executeJavaScript(code).catch(function(e) {
+        console.warn('[Theme] Failed to inject vars:', e.message);
+    });
+}
+
 // ==================== 广播主题切换 ====================
 function broadcastTheme(theme) {
     currentAppTheme = theme;
     saveAppState({ theme: theme });
-    if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-        controlBarView.webContents.send('ctrl-theme', theme);
-    }
-    if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
-        viewBarView.webContents.send('ctrl-theme', theme);
-    }
-    if (fileBrowserView && fileBrowserView.webContents && !fileBrowserView.webContents.isDestroyed()) {
-        fileBrowserView.webContents.send('fb-theme', theme);
-    }
+    // 向所有视图注入主题变量
+    injectThemeVars(shellView, theme);
+    injectThemeVars(agentView, theme);
+    shellSend('ctrl-theme', theme);
+    shellSend('fb-theme', theme);
     if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
         agentView.webContents.send('agent-theme', theme);
     }
@@ -3263,11 +3561,18 @@ function broadcastTheme(theme) {
 // - 浅色模式也叠加渐变色（只是不反色）
 function setPageTheme(view, theme) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    var preset = THEME_PRESETS[theme];
+    var gradient = preset ? preset['--gradient-overlay'] : null;
     var code;
     if (theme === 'dark') {
         code = '(function(){var o=document.getElementById("__ds_theme_overlay");if(o)o.remove();var g=document.getElementById("__ds_theme_gradient");if(g)g.remove();var c=document.createElement("div");c.id="__ds_theme_overlay";c.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483646;backdrop-filter:invert(1) hue-rotate(180deg);opacity:0;transition:opacity 0.3s ease";document.documentElement.appendChild(c);setTimeout(function(){c.style.opacity="1"},10);var g=document.createElement("div");g.id="__ds_theme_gradient";g.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;background:linear-gradient(180deg,rgba(56,139,253,0.15) 0%,rgba(137,87,229,0.08) 30%,rgba(13,17,23,0.03) 60%,transparent 80%);opacity:0;transition:opacity 0.3s ease";document.documentElement.appendChild(g);setTimeout(function(){g.style.opacity="1"},10)})();';
-    } else {
+    } else if (theme === 'light') {
         code = '(function(){var o=document.getElementById("__ds_theme_overlay");if(o){o.style.opacity="0";setTimeout(function(){o.remove()},300)}var g=document.getElementById("__ds_theme_gradient");if(g){g.style.opacity="0";setTimeout(function(){g.remove()},300)}setTimeout(function(){var g=document.createElement("div");g.id="__ds_theme_gradient";g.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;background:linear-gradient(180deg,rgba(9,105,218,0.12) 0%,rgba(130,80,223,0.06) 30%,transparent 70%);opacity:0;transition:opacity 0.3s ease";document.documentElement.appendChild(g);setTimeout(function(){g.style.opacity="1"},10)},300)})();';
+    } else if (gradient) {
+        // 新主题：反色 + 主题渐变
+        code = '(function(){var o=document.getElementById("__ds_theme_overlay");if(o)o.remove();var g=document.getElementById("__ds_theme_gradient");if(g)g.remove();var c=document.createElement("div");c.id="__ds_theme_overlay";c.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483646;backdrop-filter:invert(1) hue-rotate(180deg);opacity:0;transition:opacity 0.3s ease";document.documentElement.appendChild(c);setTimeout(function(){c.style.opacity="1"},10);var g=document.createElement("div");g.id="__ds_theme_gradient";g.style.cssText="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;background:' + gradient + ';opacity:0;transition:opacity 0.3s ease";document.documentElement.appendChild(g);setTimeout(function(){g.style.opacity="1"},10)})();';
+    } else {
+        code = '(function(){var o=document.getElementById("__ds_theme_overlay");if(o){o.style.opacity="0";setTimeout(function(){o.remove()},300)}var g=document.getElementById("__ds_theme_gradient");if(g){g.style.opacity="0";setTimeout(function(){g.remove()},300)}})();';
     }
     view.webContents.executeJavaScript(code).catch(function(e){
         console.warn('[Theme] Failed to apply theme:', e.message);
@@ -3283,11 +3588,26 @@ function buildMenuTemplate() {
         click: () => {
             if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
                 const currentUrl = deepseekView.webContents.getURL();
+                // 先移出窗口防止 loadURL 触发闪现
+                try { mainWindow.removeBrowserView(deepseekView); } catch(e) {}
                 if (currentUrl && currentUrl !== 'about:blank') {
                     deepseekView.webContents.loadURL(currentUrl);
                 } else {
                     deepseekView.webContents.loadURL(DEEPSEEK_URL);
                 }
+                // did-finish-load 会重新注入脚本，延迟后重新加入
+                setTimeout(() => {
+                    try {
+                        mainWindow.addBrowserView(deepseekView);
+                        var ob = deepseekView.getBounds();
+                        if (ob.x > -1000) {
+                            deepseekView.setBounds({ x: -10000, y: ob.y, width: ob.width, height: ob.height });
+                        }
+                        if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
+                            mainWindow.setTopBrowserView(agentView);
+                        }
+                    } catch(e) {}
+                }, 800);
             }
         }
     };
@@ -3321,9 +3641,7 @@ function buildMenuTemplate() {
                     click: async () => {
                         currentRootDir = null;
                         agent.setBaseDir(null);
-                        if (fileBrowserView) {
-                            fileBrowserView.webContents.send('root-changed', null);
-                        }
+                        shellSend('root-changed', null);
                     }
                 },
                 { type: 'separator' },
@@ -3358,18 +3676,14 @@ function buildMenuTemplate() {
                 { type: 'separator' },
                 reloadDeepseekItem,
                 { type: 'separator' },
-                {
-                    label: '深色主题',
-                    type: 'radio',
-                    checked: currentAppTheme === 'dark',
-                    click: () => broadcastTheme('dark')
-                },
-                {
-                    label: '浅色主题',
-                    type: 'radio',
-                    checked: currentAppTheme === 'light',
-                    click: () => broadcastTheme('light')
-                },
+                ...THEME_LIST.map(function(t) {
+                    return {
+                        label: THEME_LABELS[t] + '主题',
+                        type: 'radio',
+                        checked: currentAppTheme === t,
+                        click: (function(theme) { return function() { broadcastTheme(theme); }; })(t)
+                    };
+                }),
                 { type: 'separator' },
                 {
                     label: '开发者工具',
@@ -3419,59 +3733,61 @@ function createMenu() {
 function updateBounds() {
     if (!mainWindow) return;
     const { width, height } = mainWindow.getContentBounds();
-    const mainHeight = height - CTRL_BAR_HEIGHT;
-    const contentX = VIEWBAR_WIDTH;
-    const contentWidth = width - VIEWBAR_WIDTH - SIDEBAR_WIDTH;
+    const titlebarH = 38;
+    const mainHeight = height - CTRL_BAR_HEIGHT - titlebarH;
+    // 响应式：根据窗口宽度决定 viewbar/filebrowser 是否显示
+    const vbW = width < 500 ? 0 : (width < 700 ? 48 : VIEWBAR_WIDTH);
+    const fbW = width < 1000 ? 0 : SIDEBAR_WIDTH;
+    const contentX = vbW;
+    const contentWidth = width - vbW - fbW;
     const contentBounds = {
-        x: contentX, y: 0,
+        x: contentX, y: titlebarH,
         width: contentWidth,
         height: mainHeight
     };
-    // 左侧视图选择栏
-    if (viewBarView) {
-        viewBarView.setBounds({
-            x: 0, y: 0,
-            width: VIEWBAR_WIDTH, height: height
-        });
+    // shellView 覆盖整个窗口（底层，内联 viewbar/controlbar/filebrowser）
+    if (shellView) {
+        shellView.setBounds({ x: 0, y: 0, width: width, height: height });
     }
-    // 左侧内容区视图（DeepSeek / Qwen / Agent）
-    // 所有视图始终在主窗口中，通过屏幕外定位控制可见性。
-    // 隐藏时仍保持正常尺寸，避免 Chromium 因缩放到 1x1 丢弃帧缓冲导致白屏。
+    // 内容区视图（DeepSeek / Qwen / Agent）覆盖在 shellView 的 content-spacer 区域上方
+    // 关键：先隐藏不需要的视图（移到屏幕外），再显示需要的视图，避免闪烁
+    var offBounds = { x: -10000, y: titlebarH, width: contentBounds.width, height: contentBounds.height };
+    // 1. 先隐藏非活跃视图
+    if (agentViewVisible || qwenVisible) {
+        deepseekView.setBounds(offBounds);
+    }
+    if (qwenView && (agentViewVisible || !qwenVisible)) {
+        qwenView.setBounds(offBounds);
+    }
+    if (agentView && !agentViewVisible) {
+        agentView.setBounds(offBounds);
+    }
+    // 2. 再显示活跃视图
     if (!agentViewVisible && !qwenVisible) {
         deepseekView.setBounds(contentBounds);
-    } else {
-        deepseekView.setBounds({ x: -10000, y: 0, width: contentBounds.width, height: contentBounds.height });
+    } else if (qwenView && !agentViewVisible && qwenVisible) {
+        qwenView.setBounds(contentBounds);
+    } else if (agentView && agentViewVisible) {
+        agentView.setBounds(contentBounds);
     }
-    if (qwenView) {
-        if (!agentViewVisible && qwenVisible) {
-            qwenView.setBounds(contentBounds);
-        } else {
-            qwenView.setBounds({ x: -10000, y: 0, width: contentBounds.width, height: contentBounds.height });
-        }
-    }
-    if (agentView) {
-        if (agentViewVisible) {
-            agentView.setBounds(contentBounds);
-        } else {
-            agentView.setBounds({ x: -10000, y: 0, width: contentBounds.width, height: contentBounds.height });
-        }
-    }
-    // 右侧文件浏览器视图
-    fileBrowserView.setBounds({
-        x: width - SIDEBAR_WIDTH, y: 0,
-        width: SIDEBAR_WIDTH, height: height
-    });
-    // 底部控制栏
-    controlBarView.setBounds({
-        x: contentX, y: mainHeight,
-        width: contentWidth,
-        height: CTRL_BAR_HEIGHT
-    });
     // 当 Qwen / Agent 从隐藏变为可见时，强制触发一次重绘，修复 Chromium 帧缓冲丢失导致的白屏
     if (!prevAgentViewVisible && agentViewVisible) forceRepaint(agentView);
     if (!prevQwenVisible && qwenVisible) forceRepaint(qwenView);
     prevAgentViewVisible = agentViewVisible;
     prevQwenVisible = qwenVisible;
+
+    // z-order：确保可见的内容视图在 shellView 之上
+    // BrowserView 后添加的在最上层，所以 shellView 必须先添加，内容视图后添加
+    // 这里用 setTopBrowserView 把当前可见的内容视图提到最顶层
+    try {
+        if (agentViewVisible && agentView) {
+            mainWindow.setTopBrowserView(agentView);
+        } else if (qwenVisible && qwenView) {
+            mainWindow.setTopBrowserView(qwenView);
+        } else if (deepseekView) {
+            mainWindow.setTopBrowserView(deepseekView);
+        }
+    } catch (e) {}
 }
 
 // 强制 BrowserView 重绘：通过微调尺寸触发 Chromium 重新合成帧
@@ -3524,6 +3840,8 @@ function createWindow() {
     mainWindow = new BrowserWindow({
         width: CONFIG.WINDOW_WIDTH,
         height: CONFIG.WINDOW_HEIGHT,
+        minWidth: 320,   // 允许缩小到只剩标题栏+内容
+        minHeight: 200,
         title: 'DeepSeek Local Agent',
         frame: false,
         webPreferences: {
@@ -3534,6 +3852,36 @@ function createWindow() {
     });
 
     // 创建浏览器窗口
+
+    // 先创建 shell 视图（底层，内联 viewbar/controlbar/filebrowser 的单页面）
+    // 必须在 deepseekView/qwenView/agentView 之前添加，确保在 z-order 最底层
+    shellView = new BrowserView({
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false,
+            preload: null
+        }
+    });
+    const shellPath = path.join(__dirname, 'shell.html');
+    shellView.webContents.loadFile(shellPath);
+    mainWindow.addBrowserView(shellView);
+    // shell 加载完成后发送初始状态
+    shellView.webContents.on('did-finish-load', function() {
+        shellSend('ctrl-viewbar-status', {
+            currentView: currentView,
+            dsState: 'idle',
+            qwenState: 'idle',
+            confirmMode: getConfirmMode(),
+            theme: currentAppTheme
+        });
+        shellSend('ctrl-status', { currentView: currentView });
+        injectThemeVars(shellView, currentAppTheme);
+        // 如果已有打开的文件夹，重新发送给 shell
+        if (currentRootDir) {
+            shellSend('root-changed', currentRootDir);
+        }
+        setTimeout(syncSkillsCount, 300);
+    });
 
     // 创建 DeepSeek 网页视图（左侧）
     deepseekView = new BrowserView({
@@ -3571,8 +3919,8 @@ function createWindow() {
         qwenView = new BrowserView({
             webPreferences: {
                 nodeIntegration: false,
-                contextIsolation: false,
-                preload: null,
+                contextIsolation: true,
+                preload: path.join(__dirname, 'preload.js'),
                 webSecurity: false,
                 sandbox: false
             }
@@ -3623,51 +3971,6 @@ function createWindow() {
     // 初始尺寸保持正常窗口大小，避免 1x1 导致 Chromium 丢弃帧缓冲；updateBounds 会立即修正精确坐标
     qwenView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
 
-    // 创建文件浏览器视图（右侧）
-    fileBrowserView = new BrowserView({
-        webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false,
-            preload: null
-        }
-    });
-    mainWindow.addBrowserView(fileBrowserView);
-
-    // 创建控制栏视图（底部）
-    controlBarView = new BrowserView({
-        webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false,
-            preload: null
-        }
-    });
-    mainWindow.addBrowserView(controlBarView);
-
-    // 创建左侧视图选择栏
-    viewBarView = new BrowserView({
-        webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false,
-            preload: null
-        }
-    });
-    const viewBarPath = path.join(__dirname, 'viewbar.html');
-    viewBarView.webContents.loadFile(viewBarPath);
-    mainWindow.addBrowserView(viewBarView);
-    // 视图栏加载完成后发送初始状态同步
-    viewBarView.webContents.on('did-finish-load', function() {
-        if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
-            viewBarView.webContents.send('ctrl-viewbar-status', {
-                currentView: currentView,
-                dsState: 'idle',
-                qwenState: 'idle',
-                confirmMode: getConfirmMode(),
-                theme: currentAppTheme
-            });
-            syncSkillsCount();
-        }
-    });
-
     // 创建 Agent 视图（默认隐藏）
     agentView = new BrowserView({
         webPreferences: {
@@ -3679,7 +3982,8 @@ function createWindow() {
     const agentViewPath = path.join(__dirname, 'agentview.html');
     agentView.webContents.loadFile(agentViewPath);
     agentView.webContents.on('did-finish-load', function() {
-        syncSkillsCount();
+        // 延迟同步，让 viewBar 先完成其初始化
+        setTimeout(syncSkillsCount, 800);
     });
     agentView.webContents.on('render-process-gone', (event, details) => {
         console.error('[Agent] Renderer gone:', details.reason);
@@ -3704,20 +4008,6 @@ function createWindow() {
     setupSession();
     deepseekView.webContents.loadURL(DEEPSEEK_URL);
 
-    // 加载文件浏览器页面
-    const fileBrowserPath = path.join(__dirname, 'filebrowser.html');
-    fileBrowserView.webContents.loadFile(fileBrowserPath);
-
-    // 加载控制栏页面
-    const controlBarPath = path.join(__dirname, 'controlbar.html');
-    controlBarView.webContents.loadFile(controlBarPath);
-    // 控制栏加载完成后立即发送初始状态（确保视图选择器同步）
-    controlBarView.webContents.on('did-finish-load', function() {
-        if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-            controlBarView.webContents.send('ctrl-status', { currentView: currentView });
-        }
-    });
-
     // 等待页面加载完成后注入脚本
     deepseekView.webContents.on('did-finish-load', () => {
         // 每次加载完成后重新禁用后台节流
@@ -3737,32 +4027,31 @@ function createWindow() {
                     `window.__dsagent_setConfirmMode && window.__dsagent_setConfirmMode(${JSON.stringify(mode)}, true);`
                 ).catch(() => {});
             }
-            if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
-                viewBarView.webContents.send('ctrl-viewbar-status', {
+            shellSend('ctrl-viewbar-status', {
                     currentView: currentView,
                     dsState: 'idle',
                     qwenState: 'idle',
                     confirmMode: mode,
                     theme: currentAppTheme
                 });
-            }
         }, 800);
-        // 强制渲染 DeepSeek 页面一次，确保 SVG 图标即使屏幕外也已渲染完成
+        // 强制渲染 DeepSeek 页面的 SVG 图标（屏幕外时 Chromium 会跳过 SVG 渲染）
+        // 旧方案把 view 移到 (0,0) 200ms 会导致闪现；改用 JS 强制 SVG 重绘，无需移动 view
         setTimeout(() => {
             if (!deepseekView || deepseekView.webContents.isDestroyed()) return;
             try {
-                // DeepSeek 初始在屏幕外（x: -10000），Chromium 因此跳过 SVG 渲染。
-                // 短暂置于屏幕内强制完整渲染后移回，此后即使屏幕外 SVG 也可用。
-                var b = deepseekView.getBounds();
-                deepseekView.setBounds({ x: 0, y: 0, width: b.width, height: b.height });
-                setTimeout(() => {
-                    if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
-                        // 移回屏幕外（updateBounds 会在 resize 或视图切换时修正精确位置）
-                        deepseekView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
-                    }
-                }, 200);
+                deepseekView.webContents.executeJavaScript(
+                    '(function(){'
+                    + 'var svgs=document.querySelectorAll("svg");'
+                    + 'for(var i=0;i<svgs.length;i++){'
+                    + 'var s=svgs[i];var d=s.style.display;s.style.display="none";'
+                    + 's.getBoundingClientRect();'
+                    + 's.style.display=d?s.style.display="":null;'
+                    + '}'
+                    + '})()'
+                ).catch(function(){});
             } catch(e) {
-                console.warn('[DeepSeek] Warmup render failed:', e);
+                console.warn('[DeepSeek] SVG warmup failed:', e);
             }
         }, 100);
     });
@@ -3775,7 +4064,22 @@ function createWindow() {
             console.log('[DeepSeek] 检测到非对话页面，自动跳转回主页...');
             setTimeout(() => {
                 if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
+                    // 先移出窗口防止 loadURL 触发闪现
+                    try { mainWindow.removeBrowserView(deepseekView); } catch(e) {}
                     deepseekView.webContents.loadURL(DEEPSEEK_URL);
+                    // did-finish-load 会重新注入脚本，这里延迟后重新加入
+                    setTimeout(() => {
+                        try {
+                            mainWindow.addBrowserView(deepseekView);
+                            var ob = deepseekView.getBounds();
+                            if (ob.x > -1000) {
+                                deepseekView.setBounds({ x: -10000, y: ob.y, width: ob.width, height: ob.height });
+                            }
+                            if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
+                                mainWindow.setTopBrowserView(agentView);
+                            }
+                        } catch(e) {}
+                    }, 800);
                 }
             }, 2000);
         }
@@ -3789,11 +4093,11 @@ function createWindow() {
 
     // 定期从 DeepSeek 页面获取状态并同步到控制栏
     setInterval(() => {
-        if (deepseekView && controlBarView && !deepseekView.webContents.isDestroyed() && !deepseekView.webContents.isLoading()) {
+        if (deepseekView && deepseekView.webContents && shellView && !deepseekView.webContents.isDestroyed() && !deepseekView.webContents.isLoading()) {
             deepseekView.webContents.executeJavaScript(
                 'window.__dsagent_getStatus && window.__dsagent_getStatus()'
             ).then(status => {
-                if (status && controlBarView) {
+                if (status) {
                     status.qwenVisible = qwenVisible;
                     status.currentView = currentView;
                     
@@ -3810,58 +4114,48 @@ function createWindow() {
                                 var qwenGenerating = status.qwenState === 'generating';
                                 
                                 if (qwenGenerating) {
-                                    // Qwen 正在生成 → 确保 Qwen 视图可见（优先于 DeepSeek）
                                     if (!qwenVisible || agentViewVisible) {
                                         agentViewVisible = false;
                                         qwenVisible = true;
                                         updateBounds();
                                     }
                                 } else if (dsGenerating) {
-                                    // DeepSeek 生成中且当前是 Qwen/Agent → 切回 DeepSeek
                                     if (qwenVisible || agentViewVisible) {
                                         agentViewVisible = false;
                                         qwenVisible = false;
                                         updateBounds();
                                     }
                                 } else if (!agentViewVisible) {
-                                    // 都空闲 → 回到 Agent 视图
                                     agentViewVisible = true;
                                     qwenVisible = false;
                                     updateBounds();
                                 }
                             }
                             
-                            // 转发到控制栏
-                            controlBarView.webContents.send('ctrl-status', status);
-                            // 转发到视图选择栏
-                            if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
-                                viewBarView.webContents.send('ctrl-viewbar-status', {
-                                    currentView: currentView,
-                                    dsState: status.buttonState || 'idle',
-                                    qwenState: status.qwenState || 'idle',
-                                    confirmMode: status.confirmMode || 'smart',
-                                    theme: currentAppTheme,
-                                    dsConcurrent: status.concurrentMode || false
-                                });
-                            }
+                            // 转发到控制栏和视图选择栏
+                            shellSend('ctrl-status', status);
+                            shellSend('ctrl-viewbar-status', {
+                                currentView: currentView,
+                                dsState: status.buttonState || 'idle',
+                                qwenState: status.qwenState || 'idle',
+                                confirmMode: status.confirmMode || 'smart',
+                                theme: currentAppTheme,
+                                dsConcurrent: status.concurrentMode || false
+                            });
                         }).catch(() => {
                             status.qwenState = 'idle';
-                            controlBarView.webContents.send('ctrl-status', status);
+                            shellSend('ctrl-status', status);
                         });
                     } else {
                         status.qwenState = 'idle';
-                        controlBarView.webContents.send('ctrl-status', status);
+                        shellSend('ctrl-status', status);
                     }
                     
                     // 转发主题到文件浏览器、Agent 视图和视图选择栏
-                    if (fileBrowserView && fileBrowserView.webContents && !fileBrowserView.webContents.isDestroyed()) {
-                        fileBrowserView.webContents.send('fb-theme', currentAppTheme);
-                    }
+                    shellSend('fb-theme', currentAppTheme);
+                    shellSend('ctrl-theme', currentAppTheme);
                     if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
                         agentView.webContents.send('agent-theme', currentAppTheme);
-                    }
-                    if (viewBarView && viewBarView.webContents && !viewBarView.webContents.isDestroyed()) {
-                        viewBarView.webContents.send('ctrl-theme', currentAppTheme);
                     }
                 }
             }).catch(() => {});
@@ -3902,7 +4196,7 @@ function restoreAppState() {
     if (!state) return;
 
     // 恢复主题
-    if (state.theme === 'light' || state.theme === 'dark') {
+    if (state.theme && THEME_PRESETS.hasOwnProperty(state.theme)) {
         currentAppTheme = state.theme;
         // 延迟广播给所有视图，等待视图加载完成
         setTimeout(() => {
@@ -3910,8 +4204,15 @@ function restoreAppState() {
         }, 1000);
     }
 
-    // 恢复文件夹
+    // 恢复文件夹（同步设置 currentRootDir，确保 agentView 首次 loadHistoryList 时能读到正确目录）
     if (state.lastRootDir && fs.existsSync(state.lastRootDir)) {
+        // 同步设置目录，不延迟，确保后续历史加载使用正确路径
+        currentRootDir = state.lastRootDir;
+        agent.setBaseDir(state.lastRootDir);
+        shellSend('root-changed', state.lastRootDir);
+        saveRecentProject(state.lastRootDir);
+        rebuildMenu();
+        // 通知 filebrowser 加载该目录（异步，不影响历史加载）
         setTimeout(() => {
             // 启动恢复时保留当前对话，由后续历史恢复逻辑接管
             openFolder(state.lastRootDir, { skipCloseConversation: true });
@@ -3930,12 +4231,8 @@ function restoreAppState() {
                 mainWindow.removeBrowserView(qwenView);
             }
             mainWindow.addBrowserView(agentView);
-            mainWindow.addBrowserView(fileBrowserView);
-            mainWindow.addBrowserView(controlBarView);
             updateBounds();
-            if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-                controlBarView.webContents.send('ctrl-agent-state', true);
-            }
+            shellSend('ctrl-agent-state', true);
             // 恢复历史对话
             if (state.lastHistoryId) {
                 setTimeout(() => {
@@ -4001,14 +4298,12 @@ autoUpdater.on('update-available', (info) => {
 autoUpdater.on('download-progress', (progress) => {
     var pct = Math.round(progress.percent);
     // 发送进度到控制栏视图（右下角进度条）
-    if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-        controlBarView.webContents.send('ctrl-update-progress', {
+    shellSend('ctrl-update-progress', {
             percent: pct,
             bytesPerSecond: progress.bytesPerSecond,
             transferred: progress.transferred,
             total: progress.total
         });
-    }
     // 发送进度到 agent 视图前端
     if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
         agentView.webContents.send('update-progress', {
@@ -4024,9 +4319,7 @@ autoUpdater.on('download-progress', (progress) => {
 
 autoUpdater.on('update-downloaded', () => {
     // 通知控制栏进度完成
-    if (controlBarView && controlBarView.webContents && !controlBarView.webContents.isDestroyed()) {
-        controlBarView.webContents.send('ctrl-update-done');
-    }
+    shellSend('ctrl-update-done');
     if (mainWindow) {
         // 通知前端进度完成
         if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {

@@ -13,7 +13,7 @@
     "dist:portable": "electron-builder --win --x64 --config.portable=true",
     "pack": "electron-packager . dsagent-electron --all",
     "pack:win": "electron-packager . dsagent-electron --platform=win32 --arch=x64 --out=dist_pack",
-    "pack:update": "echo 打包更新文件（不含Electron）供已有安装的人覆盖更新 && powershell Compress-Archive -Path main.js,preload-*.js,agentview.html,controlbar.html,filebrowser.html,inject-deepseek.js,inject-qwen.js,tools,utils -DestinationPath update.zip -Force",
+    "pack:update": "echo 打包更新文件（不含Electron）供已有安装的人覆盖更新 && powershell Compress-Archive -Path main.js,preload-*.js,agentview.html,controlbar.html,filebrowser.html,agent-engine.js,inject-deepseek.js,inject-qwen.js,tools,utils -DestinationPath update.zip -Force",
     "prepublishOnly": "node -e \"var fs=require('fs'); ['build'].forEach(d=>{if(!fs.existsSync(d))fs.mkdirSync(d)});\""
   },
   "files": [
@@ -21,6 +21,7 @@
     "tools/",
     "main.js",
     "inject-deepseek.js",
+    "agent-engine.js",
     "inject-qwen.js",
     "preload-agent.js",
     "preload.js",

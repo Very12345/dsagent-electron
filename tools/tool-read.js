@@ -1,4 +1,4 @@
-// local-read - 读取文件内容到主 AI 对话中
+// read - 读取文件内容到主 AI 对话中
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._read_registered) return;
 
@@ -6,7 +6,7 @@
     var IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'pdf'];
 
     window.__dsagent_tools.register({
-        name: 'local-read',
+        name: 'read',
         scope: '读取文件内容到当前对话中',
         description: '读取本地文件的内容。\n'
             + '默认读取文本文件，使用 `mode: "image"` 可读取图片/PDF 并上传到对话中。\n'
@@ -16,7 +16,7 @@
             { name: 'mode', type: '字符串', default: 'text', required: false, description: 'image 模式可读取图片/PDF 上传到对话' },
             { name: 'force', type: '布尔', default: 'false', required: false, description: '强制读取大文件（超过 10KB）' }
         ],
-        usage: '{"tool": "read", "params": {"path": "D:\\\\project\\\\main.js"}}\n\n{"tool": "read", "params": {"path": "screenshot.png", "mode": "image"}}',
+        usage: '<tool:read>{"path": "D:\\\\project\\\\main.js"}</tool:read>\n\n<tool:read>{"path": "screenshot.png", "mode": "image"}</tool:read>',
         notes: '默认仅支持文本文件。mode=image 可读取图片/PDF 上传到对话。大文件请用 subreader。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

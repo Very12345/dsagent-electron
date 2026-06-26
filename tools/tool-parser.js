@@ -1,14 +1,15 @@
-// Tool Parser - 共享指令解析器
-// 从 AI 回复中提取 <message> 和 <functioncall> 标签，供 DeepSeek / Qwen / 未来 AI 服务共用
-// 格式：<message>文本内容</message>  <functioncall>{"tool":"...","params":{...}}</functioncall>
-// 兼容旧格式：message: 前缀 / ```message 代码块 / ```functioncall 代码块
+// Tool Parser - 支持 <tool:xxx> 和 <message> 标签格式
+// <tool:xxx> 标签开始必须位于行首（或整行），标签结束必须位于行首
+// 支持多行和单行格式
+// 标签外的内容被忽略
+// JSON 解析错误时会收集错误信息，由调用方反馈给 AI
 ;(function() {
     'use strict';
 
     if (window.__dsagent_toolParser) return;
     window.__dsagent_toolParser = true;
 
-    // 从 JSON 内容中提取 tool 字段名
+    // 从 JSON 内容中提取 tool 字段名（旧格式兼容）
     function extractToolFromJson(content) {
         if (!content) return null;
         try {
@@ -17,13 +18,8 @@
             if (!tool) return null;
             if (window.__dsagent_tools && window.__dsagent_tools.isSupported) {
                 if (window.__dsagent_tools.isSupported(tool)) return tool;
-                var withPrefix = 'local-' + tool;
-                if (window.__dsagent_tools.isSupported(withPrefix)) return withPrefix;
             }
-            if (tool.indexOf('local-') !== 0) {
-                tool = 'local-' + tool;
-            }
-            return tool;
+            return null;
         } catch(e) {
             return null;
         }
@@ -36,234 +32,266 @@
         return false;
     }
 
-    // ========== 新格式解析：<message> / <functioncall> 标签 ==========
+    // ========== 工具标签解析 ==========
 
-    function isNewFormat(markdown) {
-        return /<message>/.test(markdown) || /<functioncall>/.test(markdown);
+    // 检查是否 <tool:xxx> 行首标签
+    function matchToolTag(line) {
+        var trimmed = line.trim();
+        var m = trimmed.match(/^<tool:([a-zA-Z0-9_-]+)>$/);
+        if (m) return { matched: true, toolName: m[1] };
+        return { matched: false, toolName: '' };
     }
 
-    // 提取所有 <functioncall>...</functioncall> → commands
-    function parseCommandsNew(markdown) {
-        var commands = [];
-        var regex = /<functioncall>([\s\S]*?)<\/functioncall>/g;
-        var match;
-        while ((match = regex.exec(markdown)) !== null) {
-            var json = match[1].trim();
-            if (json) {
-                var toolName = extractToolFromJson(json);
-                if (toolName && isSupportedLang(toolName)) {
-                    commands.push({ lang: toolName, content: json });
-                }
-            }
+    // 检查是否 </tool:xxx> 行首标签
+    function matchToolEndTag(line) {
+        return line.trim().match(/^<\/tool:[a-zA-Z0-9_-]+>$/) !== null;
+    }
+
+    // 检查是否 <message> 行首标签
+    function isMessageStart(line) {
+        return line.trim() === '<message>';
+    }
+
+    function isMessageEnd(line) {
+        return line.trim() === '</message>';
+    }
+
+    // 单行 <tool:xxx>JSON</tool:xxx>
+    function tryExtractInlineTool(line) {
+        var trimmed = line.trim();
+        var m = trimmed.match(/^<tool:([a-zA-Z0-9_-]+)>(.*?)<\/tool:\1>$/);
+        if (m && m[2].trim()) {
+            return { matched: true, toolName: m[1], content: m[2].trim() };
         }
-        return commands;
+        return { matched: false, toolName: '', content: '' };
     }
 
-    // 提取所有 <message> + <functioncall> → segments
+    // 单行 <message>内容</message>
+    function tryExtractInlineMessage(line) {
+        var trimmed = line.trim();
+        var m = trimmed.match(/^<message>(.*?)<\/message>$/);
+        if (m && m[1].trim()) {
+            return { matched: true, content: m[1].trim() };
+        }
+        return { matched: false, content: '' };
+    }
+
+    // 解析工具内容（单层 JSON）
+    // 返回 { ok: true, toolName: 'xxx', content: '原始JSON' } 或 { ok: false, error: '...' }
+    function parseToolContent(toolName, content) {
+        if (!content) {
+            return { ok: false, error: '工具 "' + toolName + '" 的内容为空' };
+        }
+        try {
+            var parsed = JSON.parse(content);
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                return { ok: false, error: '工具 "' + toolName + '" 的内容必须是 JSON 对象，当前: ' + content.substring(0, 200) };
+            }
+            if (!isSupportedLang(toolName)) {
+                return { ok: false, error: '工具 "' + toolName + '" 未注册，可用工具: ' + (window.__dsagent_tools ? window.__dsagent_tools.getAllLangs().join(', ') : 'unknown') };
+            }
+            return { ok: true, toolName: toolName, content: content };
+        } catch (e) {
+            return { ok: false, error: '工具 "' + toolName + '" JSON 解析错误: ' + e.message + '，内容: ' + content.substring(0, 200) };
+        }
+    }
+
+    // 提取所有 <message> + <tool:xxx> → segments
+    // 返回 { segments: [...], errors: [...] }
     function parseSegmentsNew(markdown) {
         var segments = [];
-        // 使用全局匹配，按出现顺序提取所有 <message> 和 <functioncall> 标签
-        var regex = /<(message|functioncall)>([\s\S]*?)<\/\1>/g;
-        var match;
-        while ((match = regex.exec(markdown)) !== null) {
-            var tag = match[1];
-            var content = match[2].trim();
-            if (tag === 'message') {
+        var errors = [];
+        if (!markdown) return { segments: segments, errors: errors };
+
+        var lines = markdown.split('\n');
+        var i = 0;
+
+        while (i < lines.length) {
+            var line = lines[i];
+
+            // 1. 多行 <message>
+            if (isMessageStart(line)) {
+                i++;
+                var contentLines = [];
+                while (i < lines.length && !isMessageEnd(lines[i])) {
+                    contentLines.push(lines[i]);
+                    i++;
+                }
+                if (i < lines.length) i++; // skip </message>
+                var content = contentLines.join('\n').trim();
                 if (content) {
                     segments.push({ type: 'text', content: content });
                 }
-            } else if (tag === 'functioncall') {
-                if (content) {
-                    var toolName = extractToolFromJson(content);
-                    if (toolName && isSupportedLang(toolName)) {
-                        segments.push({ type: 'tool-call', lang: toolName, content: content });
-                    }
-                }
-            }
-        }
-        return segments;
-    }
-
-    // ========== 旧格式兼容（message: 前缀） ==========
-
-    function isPrefixFormat(markdown) {
-        return /^message:/m.test(markdown) || /^functioncall:/m.test(markdown);
-    }
-
-    function parseCommandsPrefix(markdown) {
-        var commands = [];
-        var lines = markdown.split('\n');
-        var i = 0;
-        while (i < lines.length) {
-            var trimmed = lines[i].trim();
-            if (/^functioncall:/.test(trimmed)) {
-                var lineStart = 0;
-                for (var j = 0; j < i; j++) lineStart += lines[j].length + 1;
-                var json = extractFunctionCallJson(markdown, lineStart + trimmed.indexOf('functioncall:') + 'functioncall:'.length);
-                if (json) {
-                    var toolName = extractToolFromJson(json);
-                    if (toolName && isSupportedLang(toolName)) {
-                        commands.push({ lang: toolName, content: json });
-                    }
-                }
-            }
-            i++;
-        }
-        return commands;
-    }
-
-    function extractFunctionCallJson(text, startIndex) {
-        var braceStart = text.indexOf('{', startIndex);
-        if (braceStart < 0) return null;
-        var depth = 0;
-        for (var i = braceStart; i < text.length; i++) {
-            if (text[i] === '{') depth++;
-            else if (text[i] === '}') { depth--; if (depth === 0) return text.substring(braceStart, i + 1); }
-        }
-        return null;
-    }
-
-    function parseSegmentsPrefix(markdown) {
-        var segments = [];
-        var lines = markdown.split('\n');
-        var i = 0;
-        while (i < lines.length) {
-            var trimmed = lines[i].trim();
-            if (/^message:/.test(trimmed)) {
-                var msgLines = [];
-                while (i < lines.length && /^message:/.test(lines[i].trim())) {
-                    msgLines.push(lines[i].trim().substring('message:'.length));
-                    i++;
-                }
-                segments.push({ type: 'text', content: msgLines.join('\n') });
                 continue;
             }
-            if (/^functioncall:/.test(trimmed)) {
-                var lineStart = 0;
-                for (var j = 0; j < i; j++) lineStart += lines[j].length + 1;
-                var json = extractFunctionCallJson(markdown, lineStart + trimmed.indexOf('functioncall:') + 'functioncall:'.length);
-                if (json) {
-                    var toolName = extractToolFromJson(json);
-                    if (toolName && isSupportedLang(toolName)) {
-                        segments.push({ type: 'tool-call', lang: toolName, content: json });
+
+            // 2. 多行 <tool:xxx>
+            var tagInfo = matchToolTag(line);
+            if (tagInfo.matched) {
+                i++;
+                var contentLines = [];
+                while (i < lines.length && !matchToolEndTag(lines[i])) {
+                    contentLines.push(lines[i]);
+                    i++;
+                }
+                if (i < lines.length) i++; // skip </tool:xxx>
+                var content = contentLines.join('\n').trim();
+                if (content) {
+                    var parseRes = parseToolContent(tagInfo.toolName, content);
+                    if (parseRes.ok) {
+                        segments.push({ type: 'tool-call', lang: tagInfo.toolName, content: content });
+                    } else {
+                        errors.push(parseRes.error);
+                        segments.push({ type: 'text', content: '<tool:' + tagInfo.toolName + '> ' + parseRes.error + ' </tool:' + tagInfo.toolName + '>' });
+                    }
+                }
+                continue;
+            }
+
+            // 3. 单行 <message>内容</message>
+            var inlineMsg = tryExtractInlineMessage(line);
+            if (inlineMsg.matched) {
+                if (inlineMsg.content) {
+                    segments.push({ type: 'text', content: inlineMsg.content });
+                }
+                i++;
+                continue;
+            }
+
+            // 4. 单行 <tool:xxx>内容</tool:xxx>
+            var inlineTool = tryExtractInlineTool(line);
+            if (inlineTool.matched) {
+                if (inlineTool.content) {
+                    var parseRes = parseToolContent(inlineTool.toolName, inlineTool.content);
+                    if (parseRes.ok) {
+                        segments.push({ type: 'tool-call', lang: inlineTool.toolName, content: inlineTool.content });
+                    } else {
+                        errors.push(parseRes.error);
+                        segments.push({ type: 'text', content: '<tool:' + inlineTool.toolName + '> ' + parseRes.error + ' </tool:' + inlineTool.toolName + '>' });
                     }
                 }
                 i++;
                 continue;
             }
+
+            // 5. 旧格式 <functioncall> 兼容（仍然检测，但标记为错误）
+            if (line.trim() === '<functioncall>') {
+                i++;
+                var fcLines = [];
+                while (i < lines.length && lines[i].trim() !== '</functioncall>') {
+                    fcLines.push(lines[i]);
+                    i++;
+                }
+                if (i < lines.length) i++;
+                var fcContent = fcLines.join('\n').trim();
+                if (fcContent) {
+                    // 尝试提取旧格式中的 tool 字段
+                    var oldTool = extractToolFromJson(fcContent);
+                    if (oldTool) {
+                        errors.push('检测到旧格式 <functioncall>，请改用 <tool:' + oldTool + '> 格式');
+                    } else {
+                        errors.push('检测到旧格式 <functioncall>，请改用 <tool:工具名> 格式');
+                    }
+                }
+                continue;
+            }
+
+            // 6. 其他行：忽略（标签外的内容被丢弃）
             i++;
         }
-        return segments;
+
+        return { segments: segments, errors: errors };
     }
 
-    // ========== 旧旧格式兼容（``` 代码块） ==========
-
-    function parseCommandsLegacy(markdown) {
+    // 提取所有 <tool:xxx> → commands
+    // 返回 { commands: [...], errors: [...] }
+    function parseCommandsNew(markdown) {
         var commands = [];
-        var regex = /```(\w[\w-]*)\s*\n([\s\S]*?)```|```(\w[\w-]*)\s*\n([\s\S]+)$/g;
-        var match;
-        while ((match = regex.exec(markdown)) !== null) {
-            var lang = (match[1] || match[3] || '').toLowerCase();
-            var content = (match[2] || match[4] || '').trim();
-            if (lang === 'message' || lang === 'functioncall-skip' || lang === 'local-skip') continue;
-            if (lang === 'functioncall' || lang === 'local') {
-                var toolName = extractToolFromJson(content);
-                if (toolName && isSupportedLang(toolName)) {
-                    commands.push({ lang: toolName, content: content });
+        var errors = [];
+        if (!markdown) return { commands: commands, errors: errors };
+
+        var lines = markdown.split('\n');
+        var i = 0;
+
+        while (i < lines.length) {
+            var line = lines[i];
+
+            // 1. 多行 <tool:xxx>
+            var tagInfo = matchToolTag(line);
+            if (tagInfo.matched) {
+                i++;
+                var contentLines = [];
+                while (i < lines.length && !matchToolEndTag(lines[i])) {
+                    contentLines.push(lines[i]);
+                    i++;
                 }
-            } else if (lang.indexOf('functioncall-') === 0) {
-                var mappedLang = 'local-' + lang.substring('functioncall-'.length);
-                if (isSupportedLang(mappedLang)) {
-                    commands.push({ lang: mappedLang, content: content });
-                }
-            } else if (isSupportedLang(lang)) {
-                commands.push({ lang: lang, content: content });
-            }
-        }
-        return commands;
-    }
-
-    function parseSegmentsLegacy(markdown) {
-        var segments = [];
-        var regex = /```(\w[\w-]*)\s*\n([\s\S]*?)```|```(\w[\w-]*)\s*\n([\s\S]+)$/g;
-        var match;
-        var hasMessageBlock = false;
-
-        while ((match = regex.exec(markdown)) !== null) {
-            var lang = (match[1] || match[3] || '').toLowerCase();
-            var content = (match[2] || match[4] || '').trim();
-
-            if (lang === 'message') {
+                if (i < lines.length) i++; // skip </tool:xxx>
+                var content = contentLines.join('\n').trim();
                 if (content) {
-                    segments.push({ type: 'text', content: content });
-                    hasMessageBlock = true;
+                    var parseRes = parseToolContent(tagInfo.toolName, content);
+                    if (parseRes.ok) {
+                        commands.push({ lang: tagInfo.toolName, content: content });
+                    } else {
+                        errors.push(parseRes.error);
+                    }
                 }
                 continue;
             }
 
-            if (lang === 'functioncall' || lang === 'local') {
-                var toolName = extractToolFromJson(content);
-                if (toolName && isSupportedLang(toolName)) {
-                    segments.push({ type: 'tool-call', lang: toolName, content: content });
+            // 2. 单行 <tool:xxx>内容</tool:xxx>
+            var inlineTool = tryExtractInlineTool(line);
+            if (inlineTool.matched) {
+                if (inlineTool.content) {
+                    var parseRes = parseToolContent(inlineTool.toolName, inlineTool.content);
+                    if (parseRes.ok) {
+                        commands.push({ lang: inlineTool.toolName, content: inlineTool.content });
+                    } else {
+                        errors.push(parseRes.error);
+                    }
+                }
+                i++;
+                continue;
+            }
+
+            // 3. 旧格式 <functioncall> 兼容
+            if (line.trim() === '<functioncall>') {
+                i++;
+                var fcLines = [];
+                while (i < lines.length && lines[i].trim() !== '</functioncall>') {
+                    fcLines.push(lines[i]);
+                    i++;
+                }
+                if (i < lines.length) i++;
+                var fcContent = fcLines.join('\n').trim();
+                if (fcContent) {
+                    var oldTool = extractToolFromJson(fcContent);
+                    if (oldTool) {
+                        errors.push('检测到旧格式 <functioncall>，请改用 <tool:' + oldTool + '> 格式');
+                    } else {
+                        errors.push('检测到旧格式 <functioncall>，请改用 <tool:工具名> 格式');
+                    }
                 }
                 continue;
             }
 
-            if (lang.indexOf('functioncall-') === 0) {
-                var mappedLang = 'local-' + lang.substring('functioncall-'.length);
-                if (isSupportedLang(mappedLang)) {
-                    segments.push({ type: 'tool-call', lang: mappedLang, content: content });
-                }
-                continue;
-            }
-
-            if (isSupportedLang(lang)) {
-                segments.push({ type: 'tool-call', lang: lang, content: content });
-                continue;
-            }
-
-            if (lang === 'message-skip' || lang === 'functioncall-skip' || lang === 'local-skip') continue;
+            // 4. 其他行：忽略
+            i++;
         }
 
-        if (!hasMessageBlock) {
-            var commandsInLegacy = parseCommandsLegacy(markdown);
-            if (commandsInLegacy.length > 0 || markdown.trim()) {
-                var plainText = markdown.replace(/```(\w[\w-]*)\s*\n[\s\S]*?```|```(\w[\w-]*)\s*\n[\s\S]+$/g, '').trim();
-                if (plainText) {
-                    segments.unshift({ type: 'text', content: plainText });
-                }
-            }
-        }
-
-        return segments;
+        return { commands: commands, errors: errors };
     }
 
-    // ========== 统一入口：新格式 → 前缀格式 → 代码块格式 ==========
+    // ========== 统一入口 ==========
 
     function parseCommandsFromMarkdown(markdown) {
-        if (isNewFormat(markdown)) {
-            var cmds = parseCommandsNew(markdown);
-            if (cmds.length > 0) return cmds;
-        }
-        if (isPrefixFormat(markdown)) {
-            var cmds2 = parseCommandsPrefix(markdown);
-            if (cmds2.length > 0) return cmds2;
-        }
-        return parseCommandsLegacy(markdown);
+        return parseCommandsNew(markdown);
     }
 
     function parseSegmentsFromMarkdown(markdown) {
-        if (isNewFormat(markdown)) {
-            var segs = parseSegmentsNew(markdown);
-            if (segs.length > 0) return segs;
-        }
-        if (isPrefixFormat(markdown)) {
-            var segs2 = parseSegmentsPrefix(markdown);
-            if (segs2.length > 0) return segs2;
-        }
-        return parseSegmentsLegacy(markdown);
+        return parseSegmentsNew(markdown);
     }
 
+    // 保持旧 API 兼容
     window.__dsagent_parseCommands = parseCommandsFromMarkdown;
     window.__dsagent_parseSegments = parseSegmentsFromMarkdown;
     window.__dsagent_extractTool = extractToolFromJson;

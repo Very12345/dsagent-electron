@@ -1,9 +1,9 @@
-// local-subreader - 子代理读取文件（三种模式）
+// subreader - 子代理读取文件（三种模式）
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._subreader_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-subreader',
+        name: 'subreader',
         scope: '使用子代理读取和分析文件内容',
         description: '在独立对话中读取文件并由子 AI 分析总结。支持三种分析模式：\n\n'
             + '### 三种模式\n\n'
@@ -21,7 +21,7 @@
             { name: 'think', type: '字符串', default: 'off', required: false, description: '是否启用深度思考 on/off（image 模式无效）' },
             { name: 'prompt', type: '字符串', default: '—', required: false, description: '额外分析提示，如"提取所有题目并给出答案"' }
         ],
-        usage: '{"tool": "subreader", "params": {"paths": ["D:\\\\screenshot.png"], "mode": "image", "prompt": "识别图中所有按钮"}}\n\n{"tool": "subreader", "params": {"paths": "D:\\\\main.js", "mode": "professional", "prompt": "分析代码架构和潜在问题"}}',
+        usage: '<tool:subreader>{"paths": ["D:\\\\screenshot.png"], "mode": "image", "prompt": "识别图中所有按钮"}</tool:subreader>\n\n<tool:subreader>{"paths": "D:\\\\main.js", "mode": "professional", "prompt": "分析代码架构和潜在问题"}</tool:subreader>',
         notes: 'quick 模式适合大文件和 PDF。professional 适合代码深度分析。image 适合截图、图表识别。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

@@ -1250,7 +1250,8 @@
         var text = Q.getLastResponseText();
         if (!text) return [];
         if (window.__dsagent_parseCommands) {
-            return window.__dsagent_parseCommands(text);
+            var result = window.__dsagent_parseCommands(text);
+            return result.commands || [];
         }
         return [];
     };
@@ -1260,8 +1261,10 @@
         var text = Q.getLastResponseText();
         if (!text) return [];
         if (window.__dsagent_parseSegments) {
-            return window.__dsagent_parseSegments(text);
+            var result = window.__dsagent_parseSegments(text);
+            return result.segments || [];
         }
         return [{ type: 'text', content: text }];
     };
+
 })();

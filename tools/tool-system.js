@@ -12,27 +12,44 @@
     var toolOrder = [];
     var utils = null;  // 由 inject-deepseek.js 注入工具函数
 
-    // 已通过 local-help 阅读过文档的工具集合
+    // 已通过 help 阅读过文档的工具集合
     var readTools = new Set();
 
     // 免检白名单 — 这些工具不需要先阅读文档即可使用
-    var READ_WHITELIST = ['local-help', 'local-break', 'mcp-list', 'mcp-init'];
+    var READ_WHITELIST = ['help', 'break', 'mcp-list', 'mcp-init'];
 
     // ==================== JSON 解析 ====================
 
     // 解析代码块内容为 { params, body }
-    // 如果内容以 { 开头，尝试 JSON 解析，提取 params 和 body
-    // 否则回退到旧格式：将整个 content 作为 body，params 为空
+    // 新格式支持：平铺 JSON，body 从 body/content/command 字段提取
+    // 旧格式兼容：如果 JSON 包含 tool 字段，尝试解析旧格式 {tool, params, body}
+    // 如果内容不以 { 开头，回退到旧格式：整个 content 作为 body
     function parseJsonContent(content) {
         if (!content) return { params: {}, body: '' };
         var trimmed = content.trim();
         if (trimmed[0] === '{') {
             try {
                 var parsed = JSON.parse(trimmed);
-                return {
-                    params: parsed.params || {},
-                    body: typeof parsed.body === 'string' ? parsed.body : (parsed.body ? JSON.stringify(parsed.body) : '')
-                };
+                // 旧格式兼容：如果包含 tool 字段，说明是旧格式 {tool: "xxx", params: {...}, body: "..."}
+                if (parsed.tool !== undefined && parsed.params !== undefined) {
+                    return {
+                        params: parsed.params || {},
+                        body: typeof parsed.body === 'string' ? parsed.body : (parsed.body ? JSON.stringify(parsed.body) : '')
+                    };
+                }
+                // 新格式：平铺 JSON，提取 body 字段（优先级：body > content > command）
+                var body = '';
+                if (parsed.body !== undefined && typeof parsed.body === 'string') {
+                    body = parsed.body;
+                    delete parsed.body;
+                } else if (parsed.content !== undefined && typeof parsed.content === 'string') {
+                    body = parsed.content;
+                    delete parsed.content;
+                } else if (parsed.command !== undefined && typeof parsed.command === 'string') {
+                    body = parsed.command;
+                    delete parsed.command;
+                }
+                return { params: parsed, body: body };
             } catch(e) {
                 // JSON 解析失败，回退到旧格式
                 return { params: {}, body: content };
@@ -110,7 +127,7 @@
 
         var doc = '';
         var names = Array.isArray(tool.name) ? tool.name : [tool.name];
-        var displayNames = names.map(function(n) { return n.replace(/^local-/, ''); });
+        var displayNames = names;
         doc += '### `' + displayNames[0] + '`\n';
         if (displayNames.length > 1) {
             doc += '> 别名: ' + displayNames.slice(1).map(function(n) { return '`' + n + '`'; }).join(', ') + '\n\n';
@@ -130,7 +147,10 @@
         }
 
         if (tool.usage) {
-            doc += '**JSON 使用示例**:\n\n<functioncall>' + tool.usage + '</functioncall>\n\n';
+            doc += '**JSON 使用示例**:\n\n';
+            doc += '<tool:' + displayNames[0] + '>\n';
+            doc += tool.usage + '\n';
+            doc += '</tool:' + displayNames[0] + '>\n\n';
         }
 
         if (tool.notes) {
@@ -153,7 +173,7 @@
 
         var doc = '# 本地工具系统 — 完整指令文档（JSON 格式）\n\n';
         doc += '> 本系统包含 ' + toolOrder.length + ' 个可用工具。所有工具统一使用 `<functioncall>` 标签，通过 `tool` 字段指定工具名。\n';
-        doc += '> 内容为 JSON 对象，包含 `tool`（工具名，无需 `local-` 前缀）、`params`（参数）和 `body`（内容体）。\n\n';
+        doc += '> 内容为 JSON 对象，包含 `tool`（工具名）、`params`（参数）和 `body`（内容体）。\n\n';
         doc += '---\n\n';
 
         for (var oi = 0; oi < toolOrder.length; oi++) {
@@ -161,12 +181,14 @@
             doc += '---\n\n';
         }
 
-        doc += '## JSON 调用格式\n\n';
-        doc += '所有工具统一使用 `<functioncall>` 标签：\n\n';
-        doc += '```\n<functioncall>{"tool": "read", "params": {"key": "value"}, "body": "多行内容放在 body 字段中"}</functioncall>\n```\n\n';
-        doc += '- `tool`: 工具名称（必填），如 `exec`、`read`、`save` 等，无需 `local-` 前缀\n';
-        doc += '- `params`: 工具参数，key-value 对象\n';
-        doc += '- `body`: 多行内容体（命令、文件内容等），可选\n\n';
+        doc += '## 工具调用格式\n\n';
+        doc += '所有工具统一使用 `<tool:工具名>` 标签（独占一行，JSON 放在标签之间）：\n\n';
+        doc += '```\n<tool:read>\n{"key": "value", "body": "多行内容放在 body 字段中"}\n</tool:read>\n```\n\n';
+        doc += '或单行格式：\n\n';
+        doc += '```\n<tool:read>{"key": "value"}</tool:read>\n```\n\n';
+        doc += '- 工具名在标签中（如 `exec`、`read`、`save` 等）\n';
+        doc += '- JSON 参数直接填写，不需要 params 嵌套\n';
+        doc += '- body 字段用于多行内容\n\n';
         doc += '## JSON 返回格式\n\n';
         doc += '所有工具返回统一 JSON 结构：\n\n';
         doc += '```json\n{\n  "success": true,\n  "data": "结果数据",\n  "error": null,\n  "meta": { "tool": "xxx" }\n}\n```\n\n';
@@ -178,6 +200,7 @@
         doc += '### 自动执行\n所有 `<functioncall>` 标签在 DeepSeek 回复后自动检测并执行。\n\n';
         doc += '### 确认机制\n危险命令默认需要用户确认，安全操作自动执行。\n\n';
         doc += '### 输出控制\n输出超过 10KB 时自动警告，超过 159KB 时强制拒绝。\n\n';
+        doc += '### 错误反馈\n如果 `<functioncall>` 中的 JSON 格式错误，系统会自动检测并反馈错误信息，帮助修正。\n\n';
 
         return doc;
     }

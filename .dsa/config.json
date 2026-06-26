@@ -1,0 +1,43 @@
+{
+  "dangerousCommands": [
+    "del ",
+    "erase",
+    "rd ",
+    "rmdir",
+    "format",
+    "diskpart",
+    "shutdown",
+    "restart",
+    "reboot",
+    "taskkill",
+    "tskill",
+    "reg delete",
+    "reg add",
+    "sc delete",
+    "net user",
+    "takeown",
+    "icacls",
+    "cacls",
+    "attrib -r -s -h",
+    "powershell remove-item",
+    "rm -rf",
+    "rm -r",
+    "dd if=/dev/zero",
+    "move ",
+    "ren ",
+    "rename "
+  ],
+  "safeOperations": [
+    "read",
+    "list",
+    "info",
+    "exists",
+    "subreader",
+    "interval",
+    "interval-list"
+  ],
+  "confirmMode": "loose",
+  "commandWhitelist": [],
+  "mcpServers": [],
+  "skillsStoragePath": ""
+}

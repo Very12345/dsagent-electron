@@ -1,15 +1,15 @@
-// local-list - 列出目录内容
+// list - 列出目录内容
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._list_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-list',
+        name: 'list',
         scope: '浏览文件系统目录结构',
         description: '列出指定目录下的所有文件和子目录，显示文件名、类型（文件/目录）和大小。',
         params: [
             { name: 'path', type: '字符串', default: '.', required: false, description: '要列出的目录路径，省略时默认为当前工作目录' }
         ],
-        usage: '{"tool": "list", "params": {"path": "D:\\\\project\\\\src"}}',
+        usage: '<tool:list>{"path": "D:\\\\project\\\\src"}</tool:list>',
         notes: '省略路径时默认为当前工作目录。结果包含文件大小和修改时间信息。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

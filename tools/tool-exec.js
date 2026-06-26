@@ -1,9 +1,9 @@
-// local-exec / local-cmd - 本地命令执行
+// exec / cmd - 本地命令执行
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._exec_registered) return;
 
     window.__dsagent_tools.register({
-        name: ['local-exec', 'local-cmd'],
+        name: ['exec', 'cmd'],
         scope: '执行系统命令、运行脚本、启动程序',
         description: '在用户电脑上执行系统命令（shell/cmd）。Windows 下使用 cmd.exe，输出会自动处理中文编码。支持超时设置、管理员权限运行、多终端持久化执行。\n\n'
             + '### 多终端（terminal）使用说明\n\n'
@@ -28,7 +28,7 @@
             { name: 'terminal', type: '字符串', default: '—', required: false, description: '指定持久化终端名称' },
             { name: 'mode', type: '字符串', default: 'sync', required: false, description: 'async=不等待结果直接返回，sync=等待结果' }
         ],
-        usage: '{"tool": "exec", "params": {"timeout": 60000}, "body": "echo Hello World"}\n\n// Terminal mode\n{"tool": "exec", "params": {"terminal": "web-server", "mode": "async"}, "body": "python app.py"}\n\n// Admin mode\n{"tool": "exec", "params": {"runas": true}, "body": "netstat -ano"}',
+        usage: '<tool:exec>{"timeout": 60000, "body": "echo Hello World"}</tool:exec>\n\n// Terminal mode\n<tool:exec>{"terminal": "web-server", "mode": "async", "body": "python app.py"}</tool:exec>\n\n// Admin mode\n<tool:exec>{"runas": true, "body": "netstat -ano"}</tool:exec>',
         notes: '命令放在 body 中。危险命令需要用户确认。terminal 模式下创建的是持久化 cmd 进程。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
@@ -73,7 +73,7 @@
 
             if (!actualCmd) return makeResult(false, null, 'Missing command');
 
-            if (!(await window.__dsagent_confirmCommand('local-exec', actualCmd))) return makeResult(false, null, 'Cancelled by user');
+            if (!(await window.__dsagent_confirmCommand('exec', actualCmd))) return makeResult(false, null, 'Cancelled by user');
 
             // === 终端模式 ===
             if (terminalName || asyncMode) {
@@ -85,7 +85,7 @@
                 }
                 await window.electronAPI.terminalWrite(termName, actualCmd);
                 if (asyncMode) {
-                    return makeResult(true, '命令已发送到终端 `' + termName + '`（异步模式）。使用 local-term action=output name=' + termName + ' 查看输出。');
+                    return makeResult(true, '命令已发送到终端 `' + termName + '`（异步模式）。使用 term action=output name=' + termName + ' 查看输出。');
                 }
                 await new Promise(function(r) { setTimeout(r, 3000); });
                 var out = await window.electronAPI.terminalOutput(termName, 50);

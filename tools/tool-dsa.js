@@ -1,9 +1,9 @@
-// local-dsa - 管理 MCP 服务器和技能系统
+// dsa - 管理 MCP 服务器和技能系统
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._dsa_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-dsa',
+        name: 'dsa',
         scope: '管理 MCP 服务器和技能系统',
         description: '管理 dsagent 的 MCP 服务器和技能系统。\n\n'
             + '### MCP 管理\n\n'
@@ -32,7 +32,7 @@
             { name: 'name', type: '字符串', default: '—', required: false, description: '技能名称（skill-sync/unsync/delete/toggle 需要）' },
             { name: 'path', type: '字符串', default: '—', required: false, description: '技能存储路径（skill-path-set 需要）' }
         ],
-        usage: '{"tool": "dsa", "params": {"action": "mcp-list"}}\n\n{"tool": "dsa", "params": {"action": "skill-list"}}\n\n{"tool": "dsa", "params": {"action": "mcp-tool-toggle", "server": "chrome-devtools", "tool": "navigate_page", "enabled": false}}\n\n{"tool": "dsa", "params": {"action": "skill-sync", "name": "my-skill"}}',
+        usage: '<tool:dsa>{"action": "mcp-list"}</tool:dsa>\n\n<tool:dsa>{"action": "skill-list"}</tool:dsa>\n\n<tool:dsa>{"action": "mcp-tool-toggle", "server": "chrome-devtools", "tool": "navigate_page", "enabled": false}</tool:dsa>\n\n<tool:dsa>{"action": "skill-sync", "name": "my-skill"}</tool:dsa>',
         notes: '此工具用于管理 MCP 和技能系统配置。mcp-reload 和 skill-path-set 会影响全局配置。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

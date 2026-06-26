@@ -39,6 +39,10 @@
         { "type": "separator" },
         { "id": "theme-dark", "label": "深色主题", "action": "theme", "theme": "dark", "type": "radio", "group": "theme" },
         { "id": "theme-light", "label": "浅色主题", "action": "theme", "theme": "light", "type": "radio", "group": "theme" },
+        { "id": "theme-ocean", "label": "海洋主题", "action": "theme", "theme": "ocean", "type": "radio", "group": "theme" },
+        { "id": "theme-desert", "label": "沙漠主题", "action": "theme", "theme": "desert", "type": "radio", "group": "theme" },
+        { "id": "theme-forest", "label": "森林主题", "action": "theme", "theme": "forest", "type": "radio", "group": "theme" },
+        { "id": "theme-sunset", "label": "日落主题", "action": "theme", "theme": "sunset", "type": "radio", "group": "theme" },
         { "type": "separator" },
         { "id": "devtools", "label": "开发者工具", "accelerator": "F12", "action": "devtools" }
       ]

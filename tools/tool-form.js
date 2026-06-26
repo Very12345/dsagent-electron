@@ -1,10 +1,10 @@
-// local-form - 表单收集（一次性询问多个问题，支持选项）
+// form - 表单收集（一次性询问多个问题，支持选项）
 // AI 通过此工具向用户提问，用户填写后结果返回给 AI
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._form_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-form',
+        name: 'form',
         scope: '向用户展示表单，收集多个问题的回答',
         description: '向用户展示一个或多个问题，支持提供选项供用户选择。\n'
             + '用户填写或选择后，结果会返回给 AI 继续处理。\n'
@@ -14,7 +14,7 @@
             { name: 'questions', type: '字符串', default: '—', required: true, description: '问题列表，用 | 分隔（如：项目名称?|技术栈?|是否需要数据库?）' },
             { name: 'options', type: '字符串', default: '—', required: false, description: '每个问题的选项，用 | 分隔，每个问题的选项用逗号分隔（如：React,Vue,Angular|是,否|）' }
         ],
-        usage: '{"tool": "form", "params": {"title": "新项目设置", "questions": "项目名称?|技术栈?|是否需要TypeScript?", "options": "|React,Vue,Angular|是,否"}}',
+        usage: '<tool:form>{"title": "新项目设置", "questions": "项目名称?|技术栈?|是否需要TypeScript?", "options": "|React,Vue,Angular|是,否"}</tool:form>',
         notes: 'questions 和 options 分别用 | 分隔。options 中每个问题对应一项，空项表示自由输入。表单结果会通过 Agent 端或外部客户端按钮返回。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

@@ -154,7 +154,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     agentSkillUnsync: (skillName) => ipcRenderer.invoke('agent-skill-unsync', skillName),
     agentSkillDelete: (skillName) => ipcRenderer.invoke('agent-skill-delete', skillName),
 
-    // 获取技能完整内容（local-skill 命令）
+    // 获取技能完整内容（skill 命令）
     agentSkillGetContent: (skillName) => ipcRenderer.invoke('agent-skill-get-content', skillName),
     agentSkillToggleDisabled: (skillName) => ipcRenderer.invoke('agent-skill-toggle-disabled', skillName),
     agentSkillGetDisabled: () => ipcRenderer.invoke('agent-skill-get-disabled'),
@@ -198,6 +198,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Skill 步骤更新通知
     onAgentSkillStep: (callback) => {
         ipcRenderer.on('agent-skill-step', (event, data) => callback(data));
+    },
+
+    // 菜单栏注入：由 shell.html 触发，在当前可见的 agentView 中渲染菜单 overlay
+    onMenuOverlay: (callback) => {
+        ipcRenderer.on('render-menu-overlay', (event, data) => callback(data));
     },
 
     // 状态消息发送到 controlbar（统一任务栏）

@@ -1,15 +1,15 @@
-// local-info - 获取文件或目录详细信息
+// info - 获取文件或目录详细信息
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._info_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-info',
+        name: 'info',
         scope: '获取文件或目录的详细信息',
         description: '返回文件或目录的详细信息，包括路径、大小、修改时间和类型。',
         params: [
             { name: 'path', type: '字符串', default: '—', required: true, description: '要查看的文件或目录路径' }
         ],
-        usage: '{"tool": "info", "params": {"path": "D:\\\\project\\\\config.json"}}',
+        usage: '<tool:info>{"path": "D:\\\\project\\\\config.json"}</tool:info>',
         notes: '返回信息包含：路径、大小、最后修改时间、类型。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

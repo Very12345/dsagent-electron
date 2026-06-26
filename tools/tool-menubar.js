@@ -1,11 +1,11 @@
-// local-menubar - 菜单栏配置管理工具
+// menubar - 菜单栏配置管理工具
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._menubar_registered) return;
 
     var CONFIG_FILE = 'menubar-config.json';
 
     window.__dsagent_tools.register({
-        name: 'local-menubar',
+        name: 'menubar',
         scope: '查看和操作自定义标题栏菜单配置',
         description: '管理 menubar-config.json 配置文件，支持查看菜单树、添加菜单项、删除菜单项、修改标签。\n所有更改即时生效，标题栏会自动重新加载配置。',
         params: [
@@ -17,7 +17,7 @@
             { name: 'role', type: '字符串', default: '—', required: false, description: '角色操作类型（action=role 时使用）：undo / redo / cut / copy / paste / selectAll' },
             { name: 'accelerator', type: '字符串', default: '—', required: false, description: '快捷键显示文本，如 Ctrl+O、Ctrl+Z' }
         ],
-        usage: '# 列出现有菜单\n{"tool": "menubar", "params": {"action": "list"}}\n\n# 添加顶级菜单\n{"tool": "menubar", "params": {"action": "add-menu", "menuId": "format", "label": "格式"}}\n\n# 添加子项\n{"tool": "menubar", "params": {"action": "add-item", "menuId": "file", "id": "save", "label": "保存", "actionType": "role", "role": "save", "accelerator": "Ctrl+S"}}\n\n# 删除菜单项\n{"tool": "menubar", "params": {"action": "remove", "id": "devtools"}}\n\n# 修改菜单项\n{"tool": "menubar", "params": {"action": "modify", "id": "about", "label": "关于 DS Agent Desktop"}}',
+        usage: '# 列出现有菜单\n<tool:menubar>{"action": "list"}</tool:menubar>\n\n# 添加顶级菜单\n<tool:menubar>{"action": "add-menu", "menuId": "format", "label": "格式"}</tool:menubar>\n\n# 添加子项\n<tool:menubar>{"action": "add-item", "menuId": "file", "id": "save", "label": "保存", "actionType": "role", "role": "save", "accelerator": "Ctrl+S"}</tool:menubar>\n\n# 删除菜单项\n<tool:menubar>{"action": "remove", "id": "devtools"}</tool:menubar>\n\n# 修改菜单项\n<tool:menubar>{"action": "modify", "id": "about", "label": "关于 DS Agent Desktop"}</tool:menubar>',
         notes: '删除操作会从所有菜单中查找并删除匹配 id 的项。添加顶级菜单时只需 menuId 和 label。修改操作支持修改 label、accelerator、actionType、role。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

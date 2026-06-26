@@ -1,4 +1,4 @@
-// local-skill - 获取指定技能的完整 SKILL.md 内容
+// skill - 获取指定技能的完整 SKILL.md 内容
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._skill_registered) return;
 
@@ -18,13 +18,13 @@
     }
 
     window.__dsagent_tools.register({
-        name: 'local-skill',
+        name: 'skill',
         scope: '获取已加载技能的完整指令内容（SKILL.md），或使用 all 列出所有已安装技能及其描述',
         description: '返回已加载技能的完整 SKILL.md 内容。\n\n特殊参数 `all`：列出所有已安装技能的名称和描述。\n\n技能对应的附加文件存放在 `.dsa/skills/{技能名}/` 目录下。',
         params: [
             { name: 'name', type: '字符串', default: '—', required: false, description: '技能名称。传入 all 可列出所有已安装技能及其描述。' }
         ],
-        usage: '{"tool": "skill", "params": {"name": "all"}}\n\n{"tool": "skill", "params": {"name": "翻译助手"}}',
+        usage: '<tool:skill>{"name": "all"}</tool:skill>\n\n<tool:skill>{"name": "翻译助手"}</tool:skill>',
         notes: '每次调用只返回一个技能的完整内容。使用 all 可以快速浏览所有技能。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

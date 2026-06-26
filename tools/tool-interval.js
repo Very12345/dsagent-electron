@@ -1,10 +1,10 @@
-// local-interval - 后台定时任务管理
+// interval - 后台定时任务管理
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._interval_registered) return;
 
     // ==================== 创建定时任务 ====================
     window.__dsagent_tools.register({
-        name: 'local-interval',
+        name: 'interval',
         scope: '创建后台定时任务，定时执行命令或发送固定消息',
         description: '创建后台定时任务，不会阻塞对话。支持两种模式：\n\n'
             + '- **command 模式**（默认）：每 N 毫秒执行一次命令，结果会注入到 AI 提示词中\n'
@@ -18,7 +18,7 @@
             { name: 'message', type: '字符串', default: '—', required: false, description: 'trigger 模式下定时发送的消息内容' },
             { name: 'command', type: '字符串', default: '—', required: false, description: 'command 模式下执行的命令（放在 body 中）' }
         ],
-        usage: '// command 模式：每 10 秒执行一次命令\n{"tool": "interval", "params": {"taskName": "监控CPU", "interval": 10000, "mode": "command"}, "body": "wmic cpu get loadpercentage"}\n\n// trigger 模式：每 30 秒发送提醒\n{"tool": "interval", "params": {"taskName": "定时提醒", "interval": 30000, "mode": "trigger", "message": "记得检查服务器状态"}}',
+        usage: '<tool:interval>{"taskName": "监控CPU", "interval": 10000, "mode": "command", "body": "wmic cpu get loadpercentage"}</tool:interval>\n\n// trigger 模式：每 30 秒发送提醒\n<tool:interval>{"taskName": "定时提醒", "interval": 30000, "mode": "trigger", "message": "记得检查服务器状态"}</tool:interval>',
         notes: '使用 taskName 创建和停止任务。不会阻塞对话。停止用 break 工具。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
@@ -54,11 +54,11 @@
 
     // ==================== 列出活跃定时任务 ====================
     window.__dsagent_tools.register({
-        name: 'local-interval-list',
+        name: 'interval-list',
         scope: '列出所有活跃的后台定时任务',
         description: '查看当前所有正在运行的后台定时任务，包括任务名称、模式、间隔等信息。',
         params: [],
-        usage: '{"tool": "interval-list"}',
+        usage: '<tool:interval-list></tool:interval-list>',
         notes: '只返回活跃任务列表。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

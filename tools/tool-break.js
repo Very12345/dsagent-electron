@@ -1,9 +1,9 @@
-// local-break - 停止后台定时任务
+// break - 停止后台定时任务
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._break_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-break',
+        name: 'break',
         scope: '停止正在运行的后台定时任务',
         description: '停止指定的后台定时任务。\n\n'
             + '- 无参数：停止正在执行的循环任务（向后兼容）\n'
@@ -12,7 +12,7 @@
         params: [
             { name: 'taskName', type: '字符串', default: '—', required: false, description: '要停止的任务名称' }
         ],
-        usage: '// 停止指定任务\n{"tool": "break", "params": {"taskName": "监控CPU"}}\n\n// 停止所有任务\n{"tool": "break", "params": {"taskName": "*"}}',
+        usage: '<tool:break>{"taskName": "监控CPU"}</tool:break>\n\n// 停止所有任务\n<tool:break>{"taskName": "*"}</tool:break>',
         notes: '指定 taskName 停止特定任务，不指定时向后兼容旧版循环。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

@@ -114,4 +114,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     mcpGetTools: () => ipcRenderer.invoke('mcp-get-tools'),
     mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp-call-tool', serverName, toolName, args),
     mcpShutdown: () => ipcRenderer.invoke('mcp-shutdown'),
+
+    // 菜单项点击（注入菜单 overlay 中使用）
+    sendMenuAction: (data) => ipcRenderer.send('menu-item-clicked', data),
 });

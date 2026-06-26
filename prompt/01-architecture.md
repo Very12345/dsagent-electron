@@ -16,20 +16,36 @@
 ```
 <message>这是用户可见的回复内容，可以用 Markdown 格式。</message>
 
-<functioncall>{"tool": "exec", "params": {"timeout": 60000}, "body": "python script.py"}</functioncall>
+<functioncall>
+{"tool": "exec", "params": {"timeout": 60000}, "body": "python script.py"}
+</functioncall>
 
 <message>命令执行完成！结果是...</message>
 ```
+
+或单行格式：
+```
+<functioncall>{"tool": "exec", "params": {"timeout": 60000}, "body": "python script.py"}</functioncall>
+```
+
+## 格式要求
+
+1. **`<functioncall>` 必须独占一行（或行首）**
+2. **`</functioncall>` 必须独占一行（或行末尾）**
+3. 多行格式时，JSON 放在 `<functioncall>` 和 `</functioncall>` 之间
+4. 标签外的内容会被系统忽略
 
 ## 指令格式
 
 **统一使用 `<functioncall>` 标签，通过 `tool` 字段指定工具：**
 
 ```
-<functioncall>{"tool": "工具名", "params": {"key": "value"}, "body": "多行内容"}</functioncall>
+<functioncall>
+{"tool": "工具名", "params": {"key": "value"}, "body": "多行内容"}
+</functioncall>
 ```
 
-- `tool`：工具名称，如 `exec`、`read`、`save`、`edit` 等（必填）
+- `tool`：工具名称，如 `exec`、`read`、`save` 等（必填）
 - `params`：工具参数，key-value 对象（如 `{"path": "file.txt", "force": true}`）
 - `body`：多行内容体（命令、文件内容等），可选
 
@@ -41,7 +57,9 @@
 ```
 <message>我来帮你执行这个脚本。</message>
 
-<functioncall>{"tool": "exec", "params": {"timeout": 60000}, "body": "python script.py https://example.com"}</functioncall>
+<functioncall>
+{"tool": "exec", "params": {"timeout": 60000}, "body": "python script.py https://example.com"}
+</functioncall>
 ```
 
 ## 返回格式
@@ -60,7 +78,7 @@
 
 所有工具的完整文档可通过 `help` 指令查询：
 - `help` — 返回所有工具的详细文档
-- `{"tool": "help", "params": {"tool": "exec"}}` — 查询单个工具
+- `<functioncall>{"tool": "help", "params": {"tool": "exec"}}</functioncall>` — 查询单个工具
 
 - 未知晓某个工具怎么用时，请务必使用 `help` 查询文档，尤其是文件上传命令等。
 - 需要查看所有可用工具时，使用 `help` 无参数调用。

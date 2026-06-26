@@ -1,17 +1,17 @@
-// local-term - 终端管理（创建、查看输出、停止）
+// term - 终端管理（创建、查看输出、停止）
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._term_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-term',
+        name: 'term',
         scope: '管理持久化终端（查看输出、停止终端、列出终端）',
-        description: '管理通过 local-exec 创建的持久化终端。可以查看终端输出、停止终端、清空输出等。',
+        description: '管理通过 exec 创建的持久化终端。可以查看终端输出、停止终端、清空输出等。',
         params: [
             { name: 'action', type: '字符串', default: '—', required: true, description: '操作类型：output / list / clear / stop / create' },
             { name: 'name', type: '字符串', default: '—', required: false, description: '终端名称' },
             { name: 'lines', type: '数字', default: '50', required: false, description: '返回的行数（action=output 时有效）' }
         ],
-        usage: '{"tool": "term", "params": {"action": "list"}}\n\n{"tool": "term", "params": {"action": "output", "name": "my-server", "lines": 100}}',
+        usage: '<tool:term>{"action": "list"}</tool:term>\n\n<tool:term>{"action": "output", "name": "my-server", "lines": 100}</tool:term>',
         notes: '终端是持久化 cmd.exe 进程。使用完毕后请通过 action=stop 清理。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

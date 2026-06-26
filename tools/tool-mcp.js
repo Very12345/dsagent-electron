@@ -10,7 +10,7 @@
             { name: 'server', type: '字符串', default: '—', required: true, description: 'MCP 服务器名称' },
             { name: 'tool', type: '字符串', default: '—', required: true, description: '工具名称' }
         ],
-        usage: '{"tool": "mcp", "params": {"server": "adk-docs-mcp", "tool": "fetch_docs", "query": "如何创建 agent"}}',
+        usage: '<tool:mcp>{"server": "adk-docs-mcp", "tool": "fetch_docs", "query": "如何创建 agent"}</tool:mcp>',
         notes: 'MCP 工具由外部进程提供，超时时间 30 秒。请先使用 mcp-list 查看可用工具。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
@@ -88,7 +88,7 @@
             { name: 'server', type: '字符串', default: '—', required: false, description: 'MCP 服务器名称。不填则返回所有服务器概览' },
             { name: 'detail', type: '字符串', default: '—', required: false, description: '工具名称。需配合 server 使用，返回该工具的完整参数 schema' }
         ],
-        usage: '{"tool": "mcp-list"}\n\n// 获取某个服务器的工具\n{"tool": "mcp-list", "params": {"server": "chrome-devtools"}}\n\n// 获取某个工具的详细参数\n{"tool": "mcp-list", "params": {"server": "chrome-devtools", "detail": "navigate_page"}}',
+        usage: '<tool:mcp-list></tool:mcp-list>\n\n<tool:mcp-list>{"server": "chrome-devtools"}</tool:mcp-list>\n\n<tool:mcp-list>{"server": "chrome-devtools", "detail": "navigate_page"}</tool:mcp-list>',
         notes: '仅返回已缓存的工具列表，不会主动连接。如果列表为空，请使用 mcp-init 初始化连接。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
@@ -183,7 +183,7 @@
         scope: '初始化/重新连接所有 MCP 服务器',
         description: '强制重新加载所有配置的 MCP 服务器并获取工具列表。',
         params: [],
-        usage: '{"tool": "mcp-init"}',
+        usage: '<tool:mcp-init></tool:mcp-init>',
         notes: '通常在 mcp-list 返回空时使用。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;

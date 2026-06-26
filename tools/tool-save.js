@@ -1,16 +1,16 @@
-// local-save - 保存文件
+// save - 保存文件
 ;(function() {
     if (window.__dsagent_tools && window.__dsagent_tools._save_registered) return;
 
     window.__dsagent_tools.register({
-        name: 'local-save',
+        name: 'save',
         scope: '创建或覆盖文件',
         description: '将内容保存到指定文件中。如果文件已存在则覆盖，目录不存在时自动创建。',
         params: [
             { name: 'path', type: '字符串', default: '—', required: true, description: '保存路径（必填）' },
             { name: 'content', type: '字符串', default: '—', required: false, description: '文件内容（也可放在 body 中）' }
         ],
-        usage: '{"tool": "save", "params": {"path": "D:\\\\project\\\\notes.txt"}, "body": "文件内容\\n第二行内容"}',
+        usage: '<tool:save>{"path": "D:\\\\project\\\\notes.txt", "body": "文件内容\\n第二行内容"}</tool:save>',
         notes: '路径中的目录会自动创建。内容可放在 body 字段中，或 params.content 中。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
