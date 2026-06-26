@@ -162,6 +162,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 配置管理
     agentConfigLoad: () => ipcRenderer.invoke('agent-config-load'),
     agentConfigSave: (config) => ipcRenderer.invoke('agent-config-save', config),
+    // 记忆管理
+    memoryGet: (type) => ipcRenderer.invoke('memory-get', type),
+    memorySet: (type, content) => ipcRenderer.invoke('memory-set', type, content),
     agentSkillsStoragePath: () => ipcRenderer.invoke('agent-skills-storage-path'),
     agentSkillsSetStoragePath: (path) => ipcRenderer.invoke('agent-skills-set-storage-path', path),
     agentSkillsSelectFolder: () => ipcRenderer.invoke('agent-skills-select-folder'),
@@ -203,6 +206,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 菜单栏注入：由 shell.html 触发，在当前可见的 agentView 中渲染菜单 overlay
     onMenuOverlay: (callback) => {
         ipcRenderer.on('render-menu-overlay', (event, data) => callback(data));
+    },
+
+    // 获取 INSTRUCTION.md 基本指令内容
+    getInstructionText: () => ipcRenderer.invoke('get-instruction-text'),
+
+    // 启动进度更新（来自主进程的 DeepSeek→Qwen→Agent 顺序加载）
+    onSplashProgress: (callback) => {
+        ipcRenderer.on('splash-progress', (event, data) => callback(data));
+    },
+    onSplashComplete: (callback) => {
+        ipcRenderer.on('splash-complete', () => callback());
     },
 
     // 状态消息发送到 controlbar（统一任务栏）

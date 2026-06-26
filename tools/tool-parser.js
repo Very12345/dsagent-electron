@@ -47,9 +47,13 @@
         return line.trim().match(/^<\/tool:[a-zA-Z0-9_-]+>$/) !== null;
     }
 
-    // 检查是否 <message> 行首标签
+    // 检查是否 <message> 行首标签（支持 <message>内容同行起始 以及 <message> 单独一行）
     function isMessageStart(line) {
-        return line.trim() === '<message>';
+        var trimmed = line.trim();
+        if (trimmed === '<message>') return true;
+        // 同行 <message>内容...（无同行闭合标签）
+        if (trimmed.startsWith('<message>') && trimmed.indexOf('</message>') === -1) return true;
+        return false;
     }
 
     function isMessageEnd(line) {
@@ -109,15 +113,32 @@
         while (i < lines.length) {
             var line = lines[i];
 
-            // 1. 多行 <message>
+            // 1. 多行 <message>（支持 <message>内容同行起始、</message>同行结尾）
             if (isMessageStart(line)) {
                 i++;
                 var contentLines = [];
-                while (i < lines.length && !isMessageEnd(lines[i])) {
-                    contentLines.push(lines[i]);
+                // 如果起始行有同行内容（<message>当前目录...），提取出来
+                var trimmedLine = line.trim();
+                if (trimmedLine !== '<message>' && trimmedLine.startsWith('<message>')) {
+                    contentLines.push(trimmedLine.substring('<message>'.length));
+                }
+                while (i < lines.length) {
+                    var cline = lines[i];
+                    // 检查此行是否包含 </message>（可能同行结尾）
+                    var endIdx = cline.indexOf('</message>');
+                    if (endIdx !== -1) {
+                        var before = cline.substring(0, endIdx).trim();
+                        if (before) contentLines.push(before);
+                        i++; // skip past this line
+                        break;
+                    }
+                    if (isMessageEnd(cline)) {
+                        i++; // skip the </message> line
+                        break;
+                    }
+                    contentLines.push(cline);
                     i++;
                 }
-                if (i < lines.length) i++; // skip </message>
                 var content = contentLines.join('\n').trim();
                 if (content) {
                     segments.push({ type: 'text', content: content });

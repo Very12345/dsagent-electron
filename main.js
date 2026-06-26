@@ -29,6 +29,7 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 let mainWindow = null;
 let currentRootDir = null;  // null = 未打开文件夹
+var _startupComplete = false;  // 启动动画是否完成（期间禁止 shell 显示）
 
 // QQ Bot 托管
 const QQBotClient = require('./qqbot.js');
@@ -362,6 +363,29 @@ function setupAgentIPC() {
 
     ipcMain.handle('agent-config-save', async (event, config) => {
         return agent.saveConfig(config);
+    });
+
+    // 记忆管理
+    ipcMain.handle('memory-get', async (event, type) => {
+        var filePath = path.join(app.getPath('userData'), '.dsa-memory-' + type + '.json');
+        try {
+            if (fs.existsSync(filePath)) {
+                var data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+                return { success: true, content: data.content || '' };
+            }
+            return { success: true, content: '' };
+        } catch (e) {
+            return { success: true, content: '' };
+        }
+    });
+    ipcMain.handle('memory-set', async (event, type, content) => {
+        var filePath = path.join(app.getPath('userData'), '.dsa-memory-' + type + '.json');
+        try {
+            fs.writeFileSync(filePath, JSON.stringify({ type: type, content: content, updatedAt: new Date().toISOString() }), 'utf-8');
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
     });
 
     ipcMain.handle('agent-whitelist-add', async (event, cmd) => {
@@ -1290,6 +1314,41 @@ function setupControlBarIPC() {
         if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
             agentView.webContents.send('agent-show-skills', result.skills || []);
             agentView.webContents.send('agent-open-skills-modal');
+        }
+    });
+
+    // 显示工具箱弹窗
+    ipcMain.on('ctrl-open-toolbox', () => {
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('agent-message', { _toolbarModal: 'toolbox' });
+        }
+    });
+
+    // 显示记忆管理弹窗
+    ipcMain.on('ctrl-show-memory', () => {
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('agent-message', { _toolbarModal: 'memory' });
+        }
+    });
+
+    // 显示 MCP 配置弹窗
+    ipcMain.on('ctrl-show-mcp', () => {
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('agent-message', { _toolbarModal: 'mcp' });
+        }
+    });
+
+    // 显示 QQ 托管弹窗
+    ipcMain.on('ctrl-show-qqbot', () => {
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('agent-message', { _toolbarModal: 'qqbot' });
+        }
+    });
+
+    // 显示后台任务弹窗
+    ipcMain.on('ctrl-show-tasks', () => {
+        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+            agentView.webContents.send('agent-message', { _toolbarModal: 'tasks' });
         }
     });
 
@@ -3203,6 +3262,20 @@ function setupIpcHandlers() {
         }
     });
 
+    // 获取 INSTRUCTION.md 基本指令（用于注入到每条用户消息）
+    ipcMain.handle('get-instruction-text', async () => {
+        try {
+            var text = '';
+            const file = path.join(__dirname, 'prompt', 'INSTRUCTION.md');
+            if (fs.existsSync(file)) {
+                text = fs.readFileSync(file, 'utf-8');
+            }
+            return { success: true, text: text };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
     // 选择文件夹
     ipcMain.handle('select-folder', async () => {
         const result = await dialog.showOpenDialog(mainWindow, {
@@ -3371,21 +3444,21 @@ const THEME_PRESETS = {
     dark: null,   // 使用 :root 默认值，不注入
     light: null,  // 使用 body.light 默认值，不注入
     ocean: {
-        '--bg-base': '#0a1929',
-        '--bg-panel': '#0f2942',
-        '--bg-elevated': '#13395e',
-        '--bg-chat': '#0a1929',
-        '--bg-hover': 'rgba(0,180,216,0.08)',
-        '--bg-active': 'rgba(0,180,216,0.12)',
-        '--border': 'rgba(0,119,182,0.4)',
-        '--border-light': 'rgba(0,119,182,0.2)',
+        '--bg-base': '#0a1628',
+        '--bg-panel': '#0f1f3d',
+        '--bg-elevated': '#152b52',
+        '--bg-chat': '#0a1628',
+        '--bg-hover': 'rgba(0,180,216,0.10)',
+        '--bg-active': 'rgba(0,180,216,0.16)',
+        '--border': 'rgba(0,150,200,0.5)',
+        '--border-light': 'rgba(0,150,200,0.25)',
         '--border-active': '#00b4d8',
-        '--text-primary': '#cae9ff',
-        '--text-secondary': '#7fb3d5',
-        '--text-muted': '#5a8fa8',
-        '--accent': '#00b4d8',
-        '--accent-2': '#0077b6',
-        '--accent-gradient': 'linear-gradient(135deg, #00b4d8, #0077b6)',
+        '--text-primary': '#d6f0ff',
+        '--text-secondary': '#8cc8e8',
+        '--text-muted': '#5a9abb',
+        '--accent': '#ff7e67',
+        '--accent-2': '#00b4d8',
+        '--accent-gradient': 'linear-gradient(135deg, #ff7e67, #00b4d8)',
         '--success': '#06d6a0',
         '--danger': '#ef476f',
         '--warning': '#ffd166',
@@ -3393,110 +3466,110 @@ const THEME_PRESETS = {
         '--shadow-sm': '0 1px 3px rgba(0,0,0,0.4)',
         '--shadow-md': '0 4px 12px rgba(0,0,0,0.45)',
         '--shadow-lg': '0 8px 24px rgba(0,0,0,0.5)',
-        '--shadow-glow': '0 0 20px rgba(0,180,216,0.2)',
-        '--hover-overlay': 'rgba(0,180,216,0.06)',
-        '--accent-soft': 'rgba(0,180,216,0.08)',
-        '--accent-soft-strong': 'rgba(0,180,216,0.18)',
+        '--shadow-glow': '0 0 25px rgba(255,126,103,0.25)',
+        '--hover-overlay': 'rgba(0,180,216,0.08)',
+        '--accent-soft': 'rgba(255,126,103,0.10)',
+        '--accent-soft-strong': 'rgba(255,126,103,0.20)',
         '--surface-muted': 'rgba(255,255,255,0.06)',
         '--surface-muted-strong': 'rgba(255,255,255,0.1)',
-        '--bg-gradient': 'linear-gradient(180deg, rgba(0,180,216,0.04) 0%, transparent 100%)',
-        '--gradient-overlay': 'linear-gradient(180deg, rgba(0,180,216,0.15) 0%, rgba(0,119,182,0.08) 30%, rgba(10,25,41,0.03) 60%, transparent 80%)'
+        '--bg-gradient': 'linear-gradient(180deg, rgba(0,180,216,0.06) 0%, transparent 100%)',
+        '--gradient-overlay': 'linear-gradient(180deg, rgba(255,126,103,0.18) 0%, rgba(0,180,216,0.10) 30%, rgba(10,22,40,0.03) 60%, transparent 80%)'
     },
     desert: {
-        '--bg-base': '#1a1410',
-        '--bg-panel': '#2a1f17',
-        '--bg-elevated': '#3a2a1f',
-        '--bg-chat': '#1a1410',
-        '--bg-hover': 'rgba(212,165,116,0.08)',
-        '--bg-active': 'rgba(212,165,116,0.12)',
-        '--border': 'rgba(201,123,60,0.4)',
-        '--border-light': 'rgba(201,123,60,0.2)',
-        '--border-active': '#d4a574',
-        '--text-primary': '#f5e6d3',
-        '--text-secondary': '#c4a882',
-        '--text-muted': '#9a7e5e',
-        '--accent': '#d4a574',
-        '--accent-2': '#c97b3c',
-        '--accent-gradient': 'linear-gradient(135deg, #d4a574, #c97b3c)',
-        '--success': '#94d2bd',
-        '--danger': '#e76f51',
-        '--warning': '#e9c46a',
-        '--cyan': '#d4a574',
+        '--bg-base': '#1a0f08',
+        '--bg-panel': '#2a1a0e',
+        '--bg-elevated': '#3d2814',
+        '--bg-chat': '#1a0f08',
+        '--bg-hover': 'rgba(255,180,80,0.10)',
+        '--bg-active': 'rgba(255,180,80,0.16)',
+        '--border': 'rgba(230,150,50,0.5)',
+        '--border-light': 'rgba(230,150,50,0.25)',
+        '--border-active': '#ffb450',
+        '--text-primary': '#fff0dc',
+        '--text-secondary': '#d4b08a',
+        '--text-muted': '#a07a56',
+        '--accent': '#40e0d0',
+        '--accent-2': '#ffb450',
+        '--accent-gradient': 'linear-gradient(135deg, #40e0d0, #ffb450)',
+        '--success': '#66d4a0',
+        '--danger': '#ff5540',
+        '--warning': '#ffcc00',
+        '--cyan': '#40e0d0',
         '--shadow-sm': '0 1px 3px rgba(0,0,0,0.4)',
         '--shadow-md': '0 4px 12px rgba(0,0,0,0.45)',
         '--shadow-lg': '0 8px 24px rgba(0,0,0,0.5)',
-        '--shadow-glow': '0 0 20px rgba(212,165,116,0.2)',
-        '--hover-overlay': 'rgba(212,165,116,0.06)',
-        '--accent-soft': 'rgba(212,165,116,0.08)',
-        '--accent-soft-strong': 'rgba(212,165,116,0.18)',
+        '--shadow-glow': '0 0 25px rgba(64,224,208,0.25)',
+        '--hover-overlay': 'rgba(255,180,80,0.08)',
+        '--accent-soft': 'rgba(64,224,208,0.10)',
+        '--accent-soft-strong': 'rgba(64,224,208,0.20)',
         '--surface-muted': 'rgba(255,255,255,0.06)',
         '--surface-muted-strong': 'rgba(255,255,255,0.1)',
-        '--bg-gradient': 'linear-gradient(180deg, rgba(212,165,116,0.04) 0%, transparent 100%)',
-        '--gradient-overlay': 'linear-gradient(180deg, rgba(212,165,116,0.15) 0%, rgba(201,123,60,0.08) 30%, rgba(26,20,16,0.03) 60%, transparent 80%)'
+        '--bg-gradient': 'linear-gradient(180deg, rgba(255,180,80,0.06) 0%, transparent 100%)',
+        '--gradient-overlay': 'linear-gradient(180deg, rgba(64,224,208,0.18) 0%, rgba(255,180,80,0.10) 30%, rgba(26,15,8,0.03) 60%, transparent 80%)'
     },
     forest: {
-        '--bg-base': '#0d1b14',
-        '--bg-panel': '#142920',
-        '--bg-elevated': '#1c3a2a',
-        '--bg-chat': '#0d1b14',
-        '--bg-hover': 'rgba(74,222,128,0.08)',
-        '--bg-active': 'rgba(74,222,128,0.12)',
-        '--border': 'rgba(22,163,74,0.4)',
-        '--border-light': 'rgba(22,163,74,0.2)',
+        '--bg-base': '#0a1a10',
+        '--bg-panel': '#0f2618',
+        '--bg-elevated': '#163822',
+        '--bg-chat': '#0a1a10',
+        '--bg-hover': 'rgba(74,222,128,0.10)',
+        '--bg-active': 'rgba(74,222,128,0.16)',
+        '--border': 'rgba(40,180,80,0.5)',
+        '--border-light': 'rgba(40,180,80,0.25)',
         '--border-active': '#4ade80',
-        '--text-primary': '#d1fadf',
-        '--text-secondary': '#87b893',
-        '--text-muted': '#5e8a6b',
-        '--accent': '#4ade80',
-        '--accent-2': '#16a34a',
-        '--accent-gradient': 'linear-gradient(135deg, #4ade80, #16a34a)',
-        '--success': '#4ade80',
-        '--danger': '#ef4444',
-        '--warning': '#facc15',
+        '--text-primary': '#d4ffdf',
+        '--text-secondary': '#88c99b',
+        '--text-muted': '#5a9a6e',
+        '--accent': '#e8a040',
+        '--accent-2': '#4ade80',
+        '--accent-gradient': 'linear-gradient(135deg, #e8a040, #4ade80)',
+        '--success': '#50ff8c',
+        '--danger': '#ff4455',
+        '--warning': '#ffdd00',
         '--cyan': '#4ade80',
         '--shadow-sm': '0 1px 3px rgba(0,0,0,0.4)',
         '--shadow-md': '0 4px 12px rgba(0,0,0,0.45)',
         '--shadow-lg': '0 8px 24px rgba(0,0,0,0.5)',
-        '--shadow-glow': '0 0 20px rgba(74,222,128,0.2)',
-        '--hover-overlay': 'rgba(74,222,128,0.06)',
-        '--accent-soft': 'rgba(74,222,128,0.08)',
-        '--accent-soft-strong': 'rgba(74,222,128,0.18)',
+        '--shadow-glow': '0 0 25px rgba(232,160,64,0.25)',
+        '--hover-overlay': 'rgba(74,222,128,0.08)',
+        '--accent-soft': 'rgba(232,160,64,0.10)',
+        '--accent-soft-strong': 'rgba(232,160,64,0.20)',
         '--surface-muted': 'rgba(255,255,255,0.06)',
         '--surface-muted-strong': 'rgba(255,255,255,0.1)',
-        '--bg-gradient': 'linear-gradient(180deg, rgba(74,222,128,0.04) 0%, transparent 100%)',
-        '--gradient-overlay': 'linear-gradient(180deg, rgba(74,222,128,0.15) 0%, rgba(22,163,74,0.08) 30%, rgba(13,27,20,0.03) 60%, transparent 80%)'
+        '--bg-gradient': 'linear-gradient(180deg, rgba(74,222,128,0.06) 0%, transparent 100%)',
+        '--gradient-overlay': 'linear-gradient(180deg, rgba(232,160,64,0.18) 0%, rgba(74,222,128,0.10) 30%, rgba(10,26,16,0.03) 60%, transparent 80%)'
     },
     sunset: {
-        '--bg-base': '#1a0d1f',
-        '--bg-panel': '#2a1530',
-        '--bg-elevated': '#3a2040',
-        '--bg-chat': '#1a0d1f',
-        '--bg-hover': 'rgba(244,114,182,0.08)',
-        '--bg-active': 'rgba(244,114,182,0.12)',
-        '--border': 'rgba(192,132,252,0.4)',
-        '--border-light': 'rgba(192,132,252,0.2)',
-        '--border-active': '#f472b6',
-        '--text-primary': '#fce7f3',
-        '--text-secondary': '#c4a0b8',
-        '--text-muted': '#8e6a80',
-        '--accent': '#f472b6',
-        '--accent-2': '#c084fc',
-        '--accent-gradient': 'linear-gradient(135deg, #f472b6, #c084fc)',
-        '--success': '#34d399',
-        '--danger': '#fb7185',
-        '--warning': '#fbbf24',
-        '--cyan': '#c084fc',
+        '--bg-base': '#1a0a18',
+        '--bg-panel': '#2a1025',
+        '--bg-elevated': '#3d1a35',
+        '--bg-chat': '#1a0a18',
+        '--bg-hover': 'rgba(255,100,180,0.10)',
+        '--bg-active': 'rgba(255,100,180,0.16)',
+        '--border': 'rgba(220,100,200,0.5)',
+        '--border-light': 'rgba(220,100,200,0.25)',
+        '--border-active': '#ff64b4',
+        '--text-primary': '#ffe0f0',
+        '--text-secondary': '#d4a0c0',
+        '--text-muted': '#9a6a88',
+        '--accent': '#ffd166',
+        '--accent-2': '#c060ff',
+        '--accent-gradient': 'linear-gradient(135deg, #ffd166, #c060ff)',
+        '--success': '#50e0a0',
+        '--danger': '#ff5570',
+        '--warning': '#ffcc00',
+        '--cyan': '#c060ff',
         '--shadow-sm': '0 1px 3px rgba(0,0,0,0.4)',
         '--shadow-md': '0 4px 12px rgba(0,0,0,0.45)',
         '--shadow-lg': '0 8px 24px rgba(0,0,0,0.5)',
-        '--shadow-glow': '0 0 20px rgba(244,114,182,0.2)',
-        '--hover-overlay': 'rgba(244,114,182,0.06)',
-        '--accent-soft': 'rgba(244,114,182,0.08)',
-        '--accent-soft-strong': 'rgba(244,114,182,0.18)',
+        '--shadow-glow': '0 0 25px rgba(255,209,102,0.25)',
+        '--hover-overlay': 'rgba(255,100,180,0.08)',
+        '--accent-soft': 'rgba(255,209,102,0.10)',
+        '--accent-soft-strong': 'rgba(255,209,102,0.20)',
         '--surface-muted': 'rgba(255,255,255,0.06)',
         '--surface-muted-strong': 'rgba(255,255,255,0.1)',
-        '--bg-gradient': 'linear-gradient(180deg, rgba(244,114,182,0.04) 0%, transparent 100%)',
-        '--gradient-overlay': 'linear-gradient(180deg, rgba(244,114,182,0.15) 0%, rgba(192,132,252,0.08) 30%, rgba(26,13,31,0.03) 60%, transparent 80%)'
+        '--bg-gradient': 'linear-gradient(180deg, rgba(255,100,180,0.06) 0%, transparent 100%)',
+        '--gradient-overlay': 'linear-gradient(180deg, rgba(255,209,102,0.18) 0%, rgba(192,96,255,0.10) 30%, rgba(26,10,24,0.03) 60%, transparent 80%)'
     }
 };
 
@@ -3746,7 +3819,7 @@ function updateBounds() {
         height: mainHeight
     };
     // shellView 覆盖整个窗口（底层，内联 viewbar/controlbar/filebrowser）
-    if (shellView) {
+    if (shellView && _startupComplete) {
         shellView.setBounds({ x: 0, y: 0, width: width, height: height });
     }
     // 内容区视图（DeepSeek / Qwen / Agent）覆盖在 shellView 的 content-spacer 区域上方
@@ -3840,7 +3913,7 @@ function createWindow() {
     mainWindow = new BrowserWindow({
         width: CONFIG.WINDOW_WIDTH,
         height: CONFIG.WINDOW_HEIGHT,
-        minWidth: 320,   // 允许缩小到只剩标题栏+内容
+        minWidth: 320,
         minHeight: 200,
         title: 'DeepSeek Local Agent',
         frame: false,
@@ -3849,6 +3922,15 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js')
         }
+    });
+    // 启动时缩小窗口居中（类似 Office 开场动画），启动完成后恢复
+    var winBounds = mainWindow.getBounds();
+    var startupWidth = Math.min(520, winBounds.width);
+    var startupHeight = Math.min(360, winBounds.height);
+    mainWindow.setBounds({
+        x: winBounds.x + Math.round((winBounds.width - startupWidth) / 2),
+        y: winBounds.y + Math.round((winBounds.height - startupHeight) / 2),
+        width: startupWidth, height: startupHeight
     });
 
     // 创建浏览器窗口
@@ -3864,6 +3946,8 @@ function createWindow() {
     });
     const shellPath = path.join(__dirname, 'shell.html');
     shellView.webContents.loadFile(shellPath);
+    // 启动时 shell 先置于屏幕外，等 startup 完成后才显示（必须在 addBrowserView 之前）
+    shellView.setBounds({ x: -10000, y: 0, width: 100, height: 100 });
     mainWindow.addBrowserView(shellView);
     // shell 加载完成后发送初始状态
     shellView.webContents.on('did-finish-load', function() {
@@ -3913,7 +3997,8 @@ function createWindow() {
         console.error('[DeepSeek] Page unresponsive');
     });
 
-    // 创建 Qwen 网页视图（后台加载，默认不显示）
+    // 创建 Qwen 网页视图（DeepSeek 加载完成后再加载，避免同时加载抢占资源）
+    var qwenLoadingTimer = null;
     function createQwenView() {
         if (qwenView) return;
         qwenView = new BrowserView({
@@ -3963,13 +4048,18 @@ function createWindow() {
         });
         qwenView.webContents.on('did-fail-load', (event, code, desc, url) => {
             console.error('[Qwen] Load failed:', code, desc, url);
+            if (qwenLoadingTimer) clearTimeout(qwenLoadingTimer);
+            qwenLoadingTimer = setTimeout(() => {
+                if (qwenView && qwenView.webContents && !qwenView.webContents.isDestroyed()) {
+                    qwenView.webContents.loadURL(QWEN_URL);
+                }
+            }, 2000);
         });
+        // 立即加入 Qwen 视图到主窗口，置于屏幕外保持 JS 全速运行
+        mainWindow.addBrowserView(qwenView);
+        // 初始尺寸保持正常窗口大小，避免 1x1 导致 Chromium 丢弃帧缓冲；updateBounds 会立即修正精确坐标
+        qwenView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
     }
-    createQwenView();
-    // 立即加入 Qwen 视图到主窗口，置于屏幕外保持 JS 全速运行
-    mainWindow.addBrowserView(qwenView);
-    // 初始尺寸保持正常窗口大小，避免 1x1 导致 Chromium 丢弃帧缓冲；updateBounds 会立即修正精确坐标
-    qwenView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
 
     // 创建 Agent 视图（默认隐藏）
     agentView = new BrowserView({
@@ -3984,6 +4074,8 @@ function createWindow() {
     agentView.webContents.on('did-finish-load', function() {
         // 延迟同步，让 viewBar 先完成其初始化
         setTimeout(syncSkillsCount, 800);
+        // 打开开发者工具以便调试
+        agentView.webContents.openDevTools();
     });
     agentView.webContents.on('render-process-gone', (event, details) => {
         console.error('[Agent] Renderer gone:', details.reason);
@@ -4000,9 +4092,18 @@ function createWindow() {
     agentView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
 
     // 设置布局
-
     mainWindow.on('resize', updateBounds);
-    // 不再需要 move 同步（Qwen 在主窗口内）
+
+    // ========== 简化启动流程：Agent 视图直接可见，DeepSeek 后台加载 ==========
+    // 不显示 DeepSeek 页面，避免闪烁
+    agentViewVisible = true;
+    qwenVisible = false;
+    // Agent 在正常位置
+    if (qwenView) qwenView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
+    // DeepSeek 也置于屏幕外（后台加载）
+    deepseekView.setBounds({ x: -10000, y: 38, width: 800, height: 600 });
+    agentView.setBounds({ x: 0, y: 38, width: 800, height: 600 });
+    updateBounds();
 
     // 加载 DeepSeek 网页
     setupSession();
@@ -4054,6 +4155,52 @@ function createWindow() {
                 console.warn('[DeepSeek] SVG warmup failed:', e);
             }
         }, 100);
+
+        // ========== 后台加载 Qwen，完成后通知 splash ==========
+        if (global.__ds_startup_done) return;
+        global.__ds_startup_done = true;
+
+        console.log('[Main] DeepSeek loaded, background init...');
+        function sendSplashProgress(msg, pct) {
+            if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+                agentView.webContents.send('splash-progress', { text: msg, percent: pct });
+            }
+        }
+        sendSplashProgress('DeepSeek 已就绪', 40);
+
+        // 异步加载 Qwen
+        setTimeout(() => {
+            console.log('[Main] Loading Qwen...');
+            sendSplashProgress('正在加载 Qwen...', 55);
+            createQwenView();
+        }, 500);
+
+        // 启动完成后恢复窗口 + 显示 shell
+        setTimeout(() => {
+            sendSplashProgress('启动完成', 100);
+            _startupComplete = true;
+            if (shellView) {
+                var winSize = mainWindow ? mainWindow.getContentBounds() : { width: 800, height: 600 };
+                shellView.setBounds({ x: 0, y: 0, width: winSize.width, height: winSize.height });
+            }
+            // 恢复窗口到正常大小（居中）
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                var disp = require('electron').screen.getPrimaryDisplay().workAreaSize;
+                var targetW = Math.min(CONFIG.WINDOW_WIDTH, disp.width);
+                var targetH = Math.min(CONFIG.WINDOW_HEIGHT, disp.height);
+                mainWindow.setBounds({
+                    width: targetW, height: targetH,
+                    x: Math.round((disp.width - targetW) / 2),
+                    y: Math.round((disp.height - targetH) / 2)
+                });
+                setTimeout(updateBounds, 100);
+            }
+            setTimeout(() => {
+                if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+                    agentView.webContents.send('splash-complete');
+                }
+            }, 300);
+        }, 2000);
     });
 
     // DeepSeek 导航事件：检测 VPN 切换导致的会话丢失，自动恢复
@@ -4087,9 +4234,6 @@ function createWindow() {
     deepseekView.webContents.on('did-fail-load', (event, code, desc, url) => {
         console.error('[DeepSeek] Load failed:', code, desc, url);
     });
-
-    // 更新布局
-    setTimeout(updateBounds, 100);
 
     // 定期从 DeepSeek 页面获取状态并同步到控制栏
     setInterval(() => {

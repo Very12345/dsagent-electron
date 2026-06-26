@@ -1682,6 +1682,31 @@ async function deleteCurrentConversation() {
                 }
             }
 
+            // 3.5. 尝试从 DOM 提取深度思考/推理内容（如果开启了深度思考）
+            var thinkContent = '';
+            try {
+                // DeepSeek 的深度思考内容通常在一个折叠面板中，尝试多种选择器
+                var thinkEl = document.querySelector('[class*="think-content"], [class*="reasoning"], [class*="thought"], .ds-think, [class*="ThinkContent"]');
+                if (!thinkEl) {
+                    // 尝试查找包含"深度思考"或"Thinking"标题的相邻容器
+                    var allDivs = document.querySelectorAll('div');
+                    for (var ti = 0; ti < allDivs.length; ti++) {
+                        var txt = allDivs[ti].textContent || '';
+                        if ((txt.indexOf('深度思考') >= 0 || txt.indexOf('Thinking') >= 0) && txt.length > 20 && txt.length < 50000) {
+                            thinkEl = allDivs[ti];
+                            break;
+                        }
+                    }
+                }
+                if (thinkEl) {
+                    thinkContent = thinkEl.textContent || '';
+                    // 限制长度避免过大
+                    if (thinkContent.length > 10000) thinkContent = thinkContent.substring(0, 10000) + '\n...（截断）';
+                }
+            } catch(e) {
+                console.warn('[Process] Failed to extract think content:', e);
+            }
+
             // 4.5. 检测并过滤系统反馈 JSON（工具执行结果返回给 AI 的 JSON）
             // 格式: {"summary": {"total": N, "success": N, "failed": N}, "results": [...]}
             // 防止被误识别为 AI 回复发送到 agentview
@@ -1756,7 +1781,10 @@ async function deleteCurrentConversation() {
 
             try {
                 if (segments.length > 0) {
-                    window.electronAPI.agentForwardResult({ type: 'response', segments: segments });
+                    var responseData = { type: 'response', segments: segments };
+                    // 附带深度思考/推理内容
+                    if (thinkContent) responseData.thinkContent = thinkContent;
+                    window.electronAPI.agentForwardResult(responseData);
                 }
             } catch (e) {
                 console.warn('Failed to forward to agent view:', e);
@@ -1780,6 +1808,14 @@ async function deleteCurrentConversation() {
                         window.electronAPI.agentForwardResult({ type: 'tasks-end', stopped: false });
                     } catch (e) { /* ignore */ }
                     showToast('异步任务完成: ' + asyncResults.length, 3000);
+                } else if (segments.length === 0) {
+                    // 既无命令也无消息框：AI 回复了未格式化内容（纯文本），发送提示引导修正
+                    showToast('AI 回复格式不正确，已发送提示', 3000);
+                    var formatHint = '<message>⚠️ 未检测到有效的标签格式</message>\n\n';
+                    formatHint += '<message>你的回复中未包含可识别的 `<message>` 或 `<tool:xxx>` 标签，请按以下格式重新回复：</message>\n\n';
+                    formatHint += '<tool:exec>{"body": "echo 格式测试"}</tool:exec>\n\n';
+                    formatHint += '<message>如果只是回复用户消息，请使用 `<message>内容</message>` 包裹。</message>';
+                    await fillAndSend(formatHint);
                 } else {
                     showToast('未找到可执行的指令', 2000);
                 }
@@ -2593,6 +2629,13 @@ async function deleteCurrentConversation() {
 
             // 发送初始化提示词
             var initText = await window.__dsagent_getInitPromptText();
+
+            // 首轮附加明确指令：要求 AI 先输出就绪消息，避免无目的自动发挥
+            initText += '\n\n## 首次启动指令\n\n';
+            initText += '你现在已加载所有工具和指令。**请先不要执行任何操作**，只需输出一个就绪确认：\n\n';
+            initText += '<message>✅ 就绪，请输入你的需求</message>\n\n';
+            initText += '等待用户输入具体需求后，再按照上述指令格式执行。';
+
             sendTimestamp = Date.now();  // 标记发送时间，启用兜底轮询保底
             await fillAndSend(initText);
             startPollingFallback();  // 启动兜底轮询，防止主检测错过 stop-square 状态

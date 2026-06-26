@@ -301,6 +301,13 @@ html, body {
 .fb-sync-btn:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .fb-sync-progress { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .fb-list-container { flex: 1; overflow-y: auto; padding: 8px; }
+/* 文件浏览器滚动条适配主题 */
+.fb-list-container::-webkit-scrollbar { width: 5px; }
+.fb-list-container::-webkit-scrollbar-track { background: transparent; }
+.fb-list-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.fb-list-container::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+#status-text::-webkit-scrollbar { height: 3px; }
+#status-text::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .fb-list-header { display: flex; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--border-light); font-size: 11px; color: var(--text-muted); font-weight: 600; }
 .fb-list-header .h-icon { width: 36px; text-align: center; }
 .fb-list-header .h-name { flex: 1; }
@@ -443,8 +450,7 @@ html, body {
             <div class="vb-sep"></div>
             <div class="vb-group-label">工具</div>
             <button class="vb-tool-btn" id="intro-btn" onclick="ipcRenderer.send('ctrl-show-intro')" title="查看使用说明">💡</button>
-            <button class="vb-tool-btn" onclick="ipcRenderer.send('ctrl-import-skills')" title="导入技能文件夹">📥</button>
-            <button class="vb-tool-btn" id="skills-btn" onclick="ipcRenderer.send('ctrl-show-skills')" title="查看已加载的技能">🧩</button>
+            <button class="vb-tool-btn" style="margin-top:4px;width:48px;height:32px;border:none;border-radius:6px;background:var(--accent-gradient);color:#fff;cursor:pointer;font-size:10px;font-weight:600;" onclick="ipcRenderer.send('ctrl-open-toolbox')" title="工具箱">箱</button>
             <div class="vb-sep"></div>
             <div class="vb-group-label">审核</div>
             <div class="vb-confirm-group">
