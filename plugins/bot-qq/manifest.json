@@ -1,0 +1,15 @@
+{
+  "id": "bot-qq",
+  "name": "QQ 机器人",
+  "version": "1.0.0",
+  "platform": "qq",
+  "loginType": "credentials",
+  "description": "QQ 开放平台官方机器人，通过 AppID + ClientSecret 凭据登录，WebSocket 接收消息。",
+  "fields": [
+    { "key": "appId",        "label": "AppID",        "type": "text",     "required": true },
+    { "key": "clientSecret", "label": "ClientSecret", "type": "password", "required": true }
+  ],
+  "capabilities": ["c2c", "image", "file", "rich", "keyboard", "interaction"],
+  "ipcPrefix": "qqbot",
+  "configKeys": ["qqRobots", "qqBotSavedUser", "qqBotNetMode", "qqBotDeepThink", "qqBotMode", "qqBotDir"]
+}

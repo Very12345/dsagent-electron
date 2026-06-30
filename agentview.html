@@ -129,6 +129,11 @@ body {
 #chat-area::-webkit-scrollbar-thumb:hover, #history-list::-webkit-scrollbar-thumb:hover {
     background: var(--text-muted);
 }
+/* 输入框自定义滚动条 */
+#prompt-input::-webkit-scrollbar { width: 5px; }
+#prompt-input::-webkit-scrollbar-track { background: transparent; }
+#prompt-input::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+#prompt-input::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ============ Main layout ============ */
 #main-layout {
@@ -526,6 +531,47 @@ body {
     border: 1px solid var(--border);
     line-height: 1.45;
 }
+/* 代码框滚动条主题化（替代原生白色滚动条） */
+.msg-assistant pre::-webkit-scrollbar,
+.msg-bubble.user pre::-webkit-scrollbar,
+.result-content pre::-webkit-scrollbar,
+.tool-result-section pre::-webkit-scrollbar,
+.wf-body pre::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+}
+.msg-assistant pre::-webkit-scrollbar-track,
+.msg-bubble.user pre::-webkit-scrollbar-track,
+.result-content pre::-webkit-scrollbar-track,
+.tool-result-section pre::-webkit-scrollbar-track,
+.wf-body pre::-webkit-scrollbar-track {
+    background: color-mix(in srgb, var(--bg-base) 60%, transparent);
+    border-radius: 4px;
+}
+.msg-assistant pre::-webkit-scrollbar-thumb,
+.msg-bubble.user pre::-webkit-scrollbar-thumb,
+.result-content pre::-webkit-scrollbar-thumb,
+.tool-result-section pre::-webkit-scrollbar-thumb,
+.wf-body pre::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--accent) 45%, var(--border));
+    border-radius: 4px;
+    transition: background 0.2s ease;
+}
+.msg-assistant pre::-webkit-scrollbar-thumb:hover,
+.msg-bubble.user pre::-webkit-scrollbar-thumb:hover,
+.result-content pre::-webkit-scrollbar-thumb:hover,
+.tool-result-section pre::-webkit-scrollbar-thumb:hover,
+.wf-body pre::-webkit-scrollbar-thumb:hover {
+    background: var(--accent);
+}
+/* 滚动条两端的箭头按钮也主题化（隐藏原生白色按钮） */
+.msg-assistant pre::-webkit-scrollbar-button,
+.msg-bubble.user pre::-webkit-scrollbar-button,
+.result-content pre::-webkit-scrollbar-button,
+.tool-result-section pre::-webkit-scrollbar-button,
+.wf-body pre::-webkit-scrollbar-button {
+    display: none;
+}
 .msg-assistant pre code {
     background: none;
     padding: 0;
@@ -627,20 +673,26 @@ body {
 }
 
 /* ============ 启动加载动画 ============ */
+/* 以卡片形式居中，周围留白显示 deepseek/qwen 背景 */
 #splash-overlay {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
     z-index: 99998;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    background: var(--bg-base);
-    transition: opacity 0.8s ease, visibility 0.8s ease;
+    padding: 44px 52px;
+    border-radius: 20px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.3);
+    transition: opacity 0.6s ease, visibility 0.6s ease;
 }
 #splash-overlay.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
-/* CSS 兜底：8.5 秒后自动隐藏（备用方案） */
-#splash-overlay { animation: splash-fadeout 8.5s forwards; }
-@keyframes splash-fadeout {
-    0%, 99% { opacity: 1; visibility: visible; }
-    100% { opacity: 0; visibility: hidden; pointer-events: none; }
-}
+/* 启动时身体透明，让 deepseek/qwen 从背后透出 */
+body.startup { background: transparent !important; }
+body.startup #chat-container,
+body.startup #bottom-panel,
+body.startup #history-panel,
+body.startup #menu-bar { display: none !important; }
 .splash-logo {
     width: 72px; height: 72px;
     border-radius: 18px;
@@ -660,6 +712,106 @@ body {
 .splash-bar-wrap { width: 200px; height: 3px; background: var(--bg-panel); border-radius: 2px; overflow: hidden; }
 .splash-bar { height: 100%; width: 0%; background: var(--accent-gradient); border-radius: 2px; transition: width 0.3s ease; }
 .splash-status { font-size: 11px; color: var(--text-muted); margin-top: 10px; letter-spacing: 0.5px; }
+/* 审核模式按钮组 — 选中态由 .seg-indicator 表示，见下方 segmented slider 样式 */
+
+/* ============ 深度思考胶囊滑块 ============ */
+.dt-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    padding: 4px 10px;
+    height: 28px;
+    border-radius: 14px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.2);
+    transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.dt-switch:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent), inset 0 1px 2px rgba(0,0,0,0.35); }
+.dt-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    transition: color 0.25s ease;
+}
+.dt-track {
+    position: relative;
+    width: 32px;
+    height: 16px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--text-muted) 40%, var(--bg-base));
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.4);
+    transition: background 0.25s ease;
+    flex-shrink: 0;
+}
+.dt-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.5), 0 0 0 0.5px rgba(0,0,0,0.1);
+    transition: left 0.25s cubic-bezier(0.4, 0, 0.2, 1), background 0.25s ease;
+}
+/* 开启态 */
+.dt-switch.on { background: color-mix(in srgb, var(--success) 28%, var(--bg-base)); border-color: color-mix(in srgb, var(--success) 65%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 20%, transparent), inset 0 1px 2px rgba(0,0,0,0.3); }
+.dt-switch.on .dt-label { color: var(--success); }
+.dt-switch.on .dt-track { background: var(--success); box-shadow: inset 0 1px 2px rgba(0,0,0,0.25); }
+.dt-switch.on .dt-knob { left: 18px; }
+
+/* ============ 审核模式 segmented slider ============ */
+.seg-group {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 3px;
+    border-radius: 14px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.2);
+    gap: 1px;
+    isolation: isolate;
+}
+.seg-indicator {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    height: 20px;
+    width: 0;
+    border-radius: 10px;
+    background: var(--accent-gradient);
+    transition: left 0.28s cubic-bezier(0.4, 0, 0.2, 1), width 0.28s cubic-bezier(0.4, 0, 0.2, 1), background 0.28s ease;
+    z-index: 1;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.35), 0 0 0 0.5px rgba(255,255,255,0.08);
+}
+.seg-group .cfm-btn {
+    position: relative;
+    z-index: 2;
+    padding: 0 14px;
+    height: 20px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 10px;
+    transition: color 0.25s ease;
+    white-space: nowrap;
+}
+.seg-group .cfm-btn:hover { color: var(--text-primary); }
+.seg-group .cfm-btn.active { color: #fff; font-weight: 600; background: transparent !important; }
+/* 不同模式不同配色 */
+.seg-group[data-active="smart"] .seg-indicator { background: linear-gradient(135deg, #388bfd, #8957e5); }
+.seg-group[data-active="strict"] .seg-indicator { background: linear-gradient(135deg, #f85149, #d29922); }
+.seg-group[data-active="loose"] .seg-indicator { background: linear-gradient(135deg, #3fb950, #22d3ee); }
+.seg-group[data-active="custom"] .seg-indicator { background: linear-gradient(135deg, #8957e5, #d29922); }
 
 /* ============ 璀璨聊天背景（固定在容器上，滚动时全程可见） ============ */
 #chat-container {
@@ -767,6 +919,13 @@ body {
     background: var(--bg-base);
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
+    transition: max-height 0.3s ease, padding 0.3s ease, border 0.3s ease, margin 0.3s ease;
+}
+#file-panel[style*="max-height:0"],
+#file-panel[style*="max-height: 0"] {
+    padding: 0 8px !important;
+    border: none !important;
+    margin: 0 !important;
 }
 #file-panel-bar {
     display: flex;
@@ -913,6 +1072,17 @@ body {
 .workflow-wrap .wf-body .msg-bubble.assistant {
     border-bottom-left-radius: 14px;
 }
+/* 工作流内行内代码背景不透明 */
+.workflow-wrap .wf-body .msg-bubble code {
+    background: color-mix(in srgb, var(--bg-elevated) 60%, transparent) !important;
+    padding: 1px 5px !important;
+    border-radius: 3px !important;
+    color: var(--text-primary) !important;
+}
+.workflow-wrap .wf-body .msg-bubble pre code {
+    background: none !important;
+    padding: 0 !important;
+}
 .workflow-wrap .wf-body .tool-card {
     background: transparent !important;
     border: none !important;
@@ -948,6 +1118,109 @@ body {
 }
 .workflow-wrap .wf-body > .msg-group:first-child { margin-top: 4px; }
 .workflow-wrap .wf-body > .msg-group:last-child { margin-bottom: 4px; }
+
+/* 工作流内部预览卡片（AI 输出预览 / 工具调用状态） */
+.wf-preview {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; margin: 6px 8px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--bg-elevated) 60%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+    font-size: 12px;
+}
+.wf-preview .wfp-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.wf-preview .wfp-dot.running { background: var(--warning); animation: pulse-glow 1.2s ease-in-out infinite; }
+.wf-preview .wfp-dot.done { background: var(--success); }
+.wf-preview .wfp-label { font-weight: 600; color: var(--text-secondary); flex-shrink: 0; }
+.wf-preview .wfp-text { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+/* ============ 推理过程：字样 + 上下两条线（简约可展开） ============ */
+.wf-think-line { margin: 2px 0; padding: 0; border: none; font-size: 11px; }
+/* 覆盖 workflow summary::before 的旋转箭头，强制使用水平线 */
+.wf-think-line > .wf-think-summary,
+.workflow-wrap .wf-body .wf-think-line > .wf-think-summary {
+    cursor: pointer; user-select: none;
+    color: var(--text-muted); font-size: 11px; font-weight: 500;
+    padding: 2px 0; display: flex; align-items: center; gap: 8px;
+    list-style: none;
+}
+.wf-think-line > .wf-think-summary::before,
+.wf-think-line > .wf-think-summary::after,
+.workflow-wrap .wf-body .wf-think-line > .wf-think-summary::before,
+.workflow-wrap .wf-body .wf-think-line > .wf-think-summary::after {
+    content: '' !important; flex: 1; height: 1px;
+    background: color-mix(in srgb, var(--accent-2) 30%, transparent);
+    border: none !important; width: auto !important;
+    transform: none !important; opacity: 1 !important;
+}
+.wf-think-line > .wf-think-summary::-webkit-details-marker,
+.workflow-wrap .wf-body .wf-think-line > .wf-think-summary::-webkit-details-marker { display: none; }
+.wf-think-line[open] > .wf-think-summary { color: var(--accent-2); }
+.wf-think-line > .wf-think-body {
+    padding: 4px 12px; margin: 2px 0;
+    color: var(--text-secondary); line-height: 1.5;
+    white-space: pre-wrap; font-size: 11px;
+    border-left: 2px solid color-mix(in srgb, var(--accent-2) 40%, transparent);
+    background: color-mix(in srgb, var(--bg-elevated) 30%, transparent);
+    border-radius: 0 4px 4px 0;
+}
+
+/* ============ 工具：> name < 形式（彩色、简约、可展开） ============ */
+.tool-line { margin: 2px 0; padding: 0; border: none; background: transparent; font-size: 12px; }
+.tool-line > .tool-line-summary {
+    cursor: pointer; user-select: none;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 0; font-size: 12px;
+    list-style: none;
+}
+.tool-line > .tool-line-summary::-webkit-details-marker { display: none; }
+.tool-line .tl-bracket { color: var(--text-muted); font-weight: 400; }
+.tool-line .tl-name {
+    font-weight: 600;
+    color: color-mix(in srgb, var(--accent) 70%, var(--text-primary));
+}
+.tool-line .tl-status {
+    margin-left: 8px; font-size: 11px; color: var(--text-muted);
+    display: inline-flex; align-items: center; gap: 4px;
+}
+.tool-line .tool-pulse {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--warning); animation: pulse-glow 1.2s ease-in-out infinite;
+    display: inline-block;
+}
+.tool-line > .tool-line-body {
+    margin: 4px 0 4px 12px; padding: 6px 10px;
+    background: color-mix(in srgb, var(--bg-elevated) 40%, transparent);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 0 4px 4px 0;
+    font-size: 12px;
+}
+.tool-line .tool-call-section { margin-bottom: 4px; }
+.tool-line .tool-call-content {
+    margin: 0; font-family: monospace; font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; word-wrap: break-word;
+    color: color-mix(in srgb, var(--accent-2) 80%, var(--text-primary));
+}
+.tool-line .tool-result-section {
+    margin-top: 4px; padding-top: 4px;
+    border-top: 1px solid color-mix(in srgb, var(--success) 20%, transparent);
+}
+.tool-line .res-label {
+    font-size: 11px; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;
+    color: var(--text-muted);
+}
+.tool-line .res-copy-btn {
+    cursor: pointer; font-size: 11px; padding: 1px 6px;
+    border: 1px solid var(--border); border-radius: 3px; user-select: none;
+    color: var(--text-secondary);
+}
+.tool-line .res-copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.tool-line .result-content {
+    font-family: monospace; font-size: 12px; line-height: 1.5; word-wrap: break-word;
+    color: color-mix(in srgb, var(--success) 85%, var(--text-primary));
+}
 
 /* ============ Modal Theming（覆盖内联样式，使用 CSS 变量） ============ */
 /* 遮罩层 */
@@ -1376,65 +1649,87 @@ body {
 
     <div id="chat-container">
         <div id="chat-area">
-            <div class="empty-msg">选择模式后点击「创建对话」开始</div>
+            <div class="empty-msg"><div style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">欢迎使用 DeepSeek Agent</div><div style="font-size:12px;color:var(--text-muted);">选择一个模型，输入消息即可开始对话</div></div>
         </div>
         <button id="scroll-to-bottom-btn" onclick="scrollToBottom(true)" title="回到最新消息" style="display:none;position:absolute;left:50%;bottom:16px;width:40px;height:40px;border-radius:50%;background:#2a2a4a;border:1px solid #3a3a6a;color:#aaa;cursor:pointer;font-size:18px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.4);align-items:center;justify-content:center;transform:translateX(-50%);">↓</button>
-        <div id="tool-status-bar" class="hidden"></div>
     </div>
 </div>
 
 <div id="bottom-panel">
-    <!-- 初始化前：模式选择 + 创建对话按钮 -->
-    <div id="pre-init-section">
-        <div class="mode-selector" id="pre-init-mode-selector" style="margin-bottom:16px;">
-            <button class="mode-btn active" data-mode="expert" onclick="selectPreInitMode('expert', this)">
-                <span style="font-size:18px;">🧿</span>
-                <span style="font-weight:600;font-size:13px;">专家模式</span>
-                <span style="font-size:10px;color:#7a7a9a;">深度思考，逐步推理</span>
-            </button>
-            <button class="mode-btn" data-mode="image" onclick="selectPreInitMode('image', this)">
-                <span style="font-size:18px;">🖼</span>
-                <span style="font-weight:600;font-size:13px;">识图模式</span>
-                <span style="font-size:10px;color:#7a7a9a;">快速看图，找控件</span>
-            </button>
-            <button class="mode-btn" data-mode="quick" onclick="selectPreInitMode('quick', this)">
-                <span style="font-size:18px;">⚡</span>
-                <span style="font-weight:600;font-size:13px;">快速模式</span>
-                <span style="font-size:10px;color:#7a7a9a;">快速响应，简洁回答</span>
-            </button>
-        </div>
-        <div id="init-btn-row">
-            <button id="init-btn" onclick="startNewChat()">创建对话</button>
-        </div>
-    </div>
 
-    <!-- 初始化后：模式标签 + Token 统计 + 输入框 -->
-    <div id="post-init-section" style="display:none;">
+    <!-- 输入框 + 控制条（始终可见，无需创建对话步骤） -->
+    <div id="post-init-section">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-            <span style="font-size:12px;color:#888;" id="mode-label">专家模式</span>
-            <div id="deepthink-switch" class="switch on" onclick="toggleDeepThink()" style="flex-shrink:0;" title="深度思考"></div>
-            <label onclick="toggleDeepThink()" style="font-size:11px;color:var(--text-muted);cursor:pointer;user-select:none;">深度思考</label>
-            <!-- Token 统计 -->
-            <div id="token-stats" style="display:none;align-items:center;gap:10px;margin-left:auto;">
-                <div id="ctx-ring-wrap" style="position:relative;width:22px;height:22px;cursor:pointer;" title="上下文占用">
-                    <svg viewBox="0 0 24 24" width="22" height="22">
-                        <circle cx="12" cy="12" r="10" fill="none" stroke="var(--border)" stroke-width="2.5"/>
-                        <circle id="ctx-ring" cx="12" cy="12" r="10" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="62.83" stroke-dashoffset="62.83" transform="rotate(-90,12,12)" style="transition:stroke-dashoffset 0.5s ease,stroke 0.3s ease;"/>
-                    </svg>
-                    <span id="ctx-pct" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:7px;font-weight:700;color:var(--text-muted);">0</span>
-                </div>
-                <span id="tok-total" style="font-size:10px;color:var(--text-muted);" title="总 token 数">0</span>
-                <span id="tok-round" style="font-size:10px;color:var(--text-muted);" title="本轮 token">+0</span>
-                <span id="tok-speed" style="font-size:10px;color:var(--text-muted);" title="输出速度">0 t/s</span>
-                <span id="tok-time" style="font-size:10px;color:var(--text-muted);" title="对话已用时">0s</span>
+            <span style="font-size:12px;color:#888;" id="mode-label">DeepSeek-Expert</span>
+            <!-- 统一预览栏：AI 输出预览 / 工具状态 / 推理过程 都显示在这里 -->
+            <div id="preview-bar" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--text-secondary);background:color-mix(in srgb, var(--bg-elevated) 60%, transparent);padding:2px 10px;border-radius:10px;border:1px solid var(--border);max-width:60%;overflow:hidden;">
+                <span id="preview-dot" style="width:6px;height:6px;border-radius:50%;flex-shrink:0;background:var(--warning);"></span>
+                <span id="preview-label" style="font-weight:600;flex-shrink:0;"></span>
+                <span id="preview-text" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;"></span>
             </div>
             <!-- 状态栏 -->
             <div id="status-bar" style="display:none;"></div>
-            <button id="bottom-collapse-btn" onclick="toggleBottomExtras()" title="折叠/展开下方面板" style="padding:2px 8px;background:transparent;border:1px solid #3a3a6a;border-radius:6px;color:#8a8aaa;cursor:pointer;font-size:11px;line-height:1;">▼</button>
         </div>
-        <div id="prompt-row">
-            <textarea id="prompt-input" rows="2" spellcheck="false" placeholder="输入消息..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendPrompt()}" onfocus="this._focused=true" onblur="this._focused=false"></textarea>
-            <button id="send-prompt-btn" onclick="sendPrompt()">发送</button>
+        <div id="prompt-row" style="display:flex;align-items:stretch;gap:6px;margin-top:2px;">
+            <textarea id="prompt-input" rows="2" spellcheck="false" placeholder="输入消息..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendPrompt()}" onfocus="this._focused=true" onblur="this._focused=false" style="flex:1;padding:8px 10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-size:13px;resize:none;font-family:inherit;min-height:36px;"></textarea>
+            <button id="send-prompt-btn" onclick="sendPrompt()" title="发送" style="width:36px;height:36px;padding:0;border:none;border-radius:50%;background:var(--accent-gradient);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+        </div>
+        <div id="prompt-controls" style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:10px;">
+            <div id="token-stats" style="display:none;align-items:center;gap:6px;background:linear-gradient(135deg, color-mix(in srgb, #22d3ee 18%, transparent), color-mix(in srgb, #818cf8 10%, transparent));padding:3px 12px;border-radius:8px;border:1px solid color-mix(in srgb, #22d3ee 15%, transparent);">
+                <div id="ctx-ring-wrap" style="position:relative;width:16px;height:16px;cursor:pointer;" title="上下文占用">
+                    <svg viewBox="0 0 24 24" width="16" height="16">
+                        <circle cx="12" cy="12" r="10" fill="none" stroke="color-mix(in srgb, var(--border) 50%, transparent)" stroke-width="2.5"/>
+                        <circle id="ctx-ring" cx="12" cy="12" r="10" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="62.83" stroke-dashoffset="62.83" transform="rotate(-90,12,12)" style="transition:stroke-dashoffset 0.5s ease,stroke 0.3s ease;"/>
+                    </svg>
+                    <span id="ctx-pct" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:5px;font-weight:700;color:#22d3ee;">0</span>
+                </div>
+                <span style="color:#22d3ee;font-weight:600;">上下:</span><span id="tok-total" style="color:#22d3ee;">—</span>
+                <span style="color:#818cf8;font-weight:600;">本轮:</span><span id="tok-round" style="color:#818cf8;">—</span>
+                <span style="color:#f472b6;font-weight:600;">速度:</span><span id="tok-speed" style="color:#f472b6;">—</span>
+                <span style="color:#34d399;font-weight:600;">用时:</span><span id="tok-time" style="color:#34d399;">—</span>
+            </div>
+            <div id="cfm-group" style="margin:0 auto;display:flex;align-items:center;gap:10px;">
+                <!-- 模型下拉框 -->
+                <div id="model-dropdown" style="position:relative;display:inline-block;">
+                    <div id="model-dropdown-trigger" onclick="toggleModelDropdown()" title="选择模型"
+                        style="display:flex;align-items:center;gap:4px;padding:4px 8px;background:color-mix(in srgb,var(--bg-elevated) 60%,transparent);border:1px solid var(--border);border-radius:6px;cursor:pointer;user-select:none;font-size:10px;color:var(--text-primary);white-space:nowrap;">
+                        <span id="model-dd-name">DeepSeek-Expert</span>
+                        <span style="font-size:8px;color:var(--text-muted);transition:transform .2s;" id="model-dd-arrow">▾</span>
+                    </div>
+                    <div id="model-dropdown-panel" style="display:none;position:absolute;bottom:100%;left:0;margin-bottom:4px;width:220px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;z-index:1000;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.3);">
+                        <div class="model-dd-item active" data-model="expert" onclick="selectModelDropdown('expert')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .15s;">
+                            <div style="font-size:13px;font-weight:600;color:var(--text-primary);">DeepSeek-Expert</div>
+                            <div style="font-size:9px;color:var(--text-muted);margin-top:1px;">深度思考，逐步推理</div>
+                        </div>
+                        <div class="model-dd-item" data-model="fast" onclick="selectModelDropdown('fast')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .15s;">
+                            <div style="font-size:13px;font-weight:600;color:var(--text-primary);">DeepSeek-Fast</div>
+                            <div style="font-size:9px;color:var(--text-muted);margin-top:1px;">快速响应，简洁回答</div>
+                        </div>
+                        <div class="model-dd-item" data-model="imagesupport" onclick="selectModelDropdown('imagesupport')" style="padding:8px 12px;cursor:pointer;">
+                            <div style="font-size:13px;font-weight:600;color:var(--text-primary);">DeepSeek-ImageSupport</div>
+                            <div style="font-size:9px;color:var(--text-muted);margin-top:1px;">支持识图，分析图片</div>
+                        </div>
+                    </div>
+                </div>
+                <!-- 深度思考：现代胶囊滑块（仅 Expert 开启） -->
+                <div id="deepthink-pill" class="dt-switch" onclick="toggleDeepThink()" title="深度思考">
+                    <span class="dt-label">深度思考</span>
+                    <div class="dt-track">
+                        <div class="dt-knob"></div>
+                    </div>
+                </div>
+                <!-- 审核模式：segmented slider -->
+                <div id="cfm-segmented" class="seg-group">
+                    <div class="seg-indicator"></div>
+                    <button class="cfm-btn active" data-mode="smart" onclick="setConfirmMode('smart')">智能</button>
+                    <button class="cfm-btn" data-mode="strict" onclick="setConfirmMode('strict')">严格</button>
+                    <button class="cfm-btn" data-mode="loose" onclick="setConfirmMode('loose')">宽松</button>
+                    <button class="cfm-btn" data-mode="custom" onclick="setConfirmMode('custom')">自定义</button>
+                </div>
+            </div>
+            <button id="file-upload-icon-btn" onclick="var inp=document.createElement('input');inp.type='file';inp.multiple=true;inp.onchange=function(){for(var i=0;i<inp.files.length;i++){(function(f){if(f.type.indexOf('image')===0){var r=new FileReader();r.onload=function(ev){window.electronAPI.saveTempImage({data:ev.target.result,name:f.name}).then(function(res){if(res&&res.success)addFileToPanel(res.path,f.name,'image');});};r.readAsDataURL(f);}else{addFileToPanel(f.path||f.name,f.name,'file');}})(inp.files[i]);}};inp.click();" title="上传文件" style="width:32px;height:32px;padding:0;border:1px solid var(--border);border-radius:50%;background:transparent;color:var(--text-muted);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">🔗</button>
         </div>
         <div id="file-panel" style="max-height:0;overflow:hidden;transition:max-height 0.3s ease;">
             <div id="file-panel-bar" style="display:none;">
@@ -1463,7 +1758,6 @@ body {
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="font-weight:600;color:#8888cc;">已读文档</span>
             <button onclick="syncReadTools()" style="margin-left:auto;padding:4px 10px;font-size:10px;background:linear-gradient(135deg,var(--accent),var(--accent-2));border:none;border-radius:6px;color:#fff;cursor:pointer;box-shadow:0 2px 6px rgba(56,139,253,0.2);">从历史同步</button>
-            <button onclick="refreshReadToolsDisplay()" style="padding:4px 10px;font-size:10px;background:linear-gradient(135deg,var(--accent),var(--accent-2));border:none;border-radius:6px;color:#fff;cursor:pointer;box-shadow:0 2px 6px rgba(56,139,253,0.2);">刷新</button>
         </div>
         <div id="readtools-list" style="max-height:120px;overflow-y:auto;line-height:1.8;color:#ccc;">
             <span style="color:#666;">加载中...</span>
@@ -1475,7 +1769,10 @@ body {
         <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:24px;max-width:380px;width:90%;margin:20px;">
             <h3 style="margin:0 0 16px;color:#e0e0f0;font-size:15px;" id="qqbot-edit-title">新建 Bot</h3>
             <input id="qqbot-edit-name" placeholder="名称（如：我的机器人）" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
-            <input id="qqbot-edit-appid" placeholder="AppID" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+            <select id="qqbot-edit-platform" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
+                <option value="qq">QQ</option><option value="wechat">微信</option><option value="feishu">飞书</option>
+            </select>
+            <input id="qqbot-edit-appid" placeholder="AppID / CorpID" style="width:100%;padding:8px 10px;margin-bottom:8px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
             <input id="qqbot-edit-secret" type="password" placeholder="ClientSecret" style="width:100%;padding:8px 10px;margin-bottom:16px;background:#0d0d20;border:1px solid #3a3a5a;border-radius:6px;color:#ccc;font-size:13px;box-sizing:border-box;">
             <div style="display:flex;gap:10px;">
                 <button onclick="document.getElementById('qqbot-edit-modal').style.display='none'" style="flex:1;padding:10px 0;background:transparent;color:#8a8aaa;border:1px solid #3a3a6a;border-radius:8px;cursor:pointer;font-size:13px;">取消</button>
@@ -1543,6 +1840,19 @@ body {
     <div id="init-status" style="display:none;">初始化中...</div>
 </div>
 
+<!-- 自定义审核模式弹窗 -->
+<div id="custom-confirm-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:10001;align-items:center;justify-content:center;" onclick="if(event.target===this)closeCustomConfirm()">
+    <div style="background:var(--bg-panel);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:380px;width:90%;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+        <h3 style="margin:0 0 16px;color:var(--text-primary);font-size:15px;">⚙️ 自定义审核</h3>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">选择哪些操作需要确认：</p>
+        <div id="custom-confirm-items" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;"></div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button onclick="closeCustomConfirm()" style="padding:8px 16px;background:transparent;color:var(--text-muted);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;">取消</button>
+            <button onclick="saveCustomConfirm()" style="padding:8px 16px;background:var(--accent-gradient);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">保存</button>
+        </div>
+    </div>
+</div>
+
 <!-- 存储路径设置弹窗（偏好设置 → 技能存储路径...） -->
 <div id="storage-path-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:10000;align-items:center;justify-content:center;" onclick="if(event.target===this)closeStoragePathDialog()">
     <div style="background:#222240;border:1px solid #3a3a6a;border-radius:16px;padding:24px;max-width:440px;width:90%;box-shadow:0 12px 40px rgba(0,0,0,.5);">
@@ -1594,7 +1904,7 @@ body {
             <div style="border-bottom:1px solid var(--border);margin:4px 8px;"></div>
             <button class="tb-nav-btn active" data-tab="memory" onclick="switchToolboxTab('memory')" style="padding:8px 4px;border:none;background:var(--accent-gradient);color:#fff;cursor:pointer;font-size:11px;font-weight:600;text-align:center;transition:all .2s;">记忆</button>
             <button class="tb-nav-btn" data-tab="mcp" onclick="switchToolboxTab('mcp')" style="padding:8px 4px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:11px;text-align:center;transition:all .2s;">MCP</button>
-            <button class="tb-nav-btn" data-tab="qqbot" onclick="switchToolboxTab('qqbot')" style="padding:8px 4px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:11px;text-align:center;transition:all .2s;">QQ</button>
+            <button class="tb-nav-btn" data-tab="qqbot" onclick="switchToolboxTab('qqbot')" style="padding:8px 4px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:11px;text-align:center;transition:all .2s;">机器人</button>
             <button class="tb-nav-btn" data-tab="tasks" onclick="switchToolboxTab('tasks')" style="padding:8px 4px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:11px;text-align:center;transition:all .2s;">任务</button>
             <button class="tb-nav-btn" data-tab="skills" onclick="switchToolboxTab('skills')" style="padding:8px 4px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:11px;text-align:center;transition:all .2s;">技能</button>
             <div style="flex:1;"></div>
@@ -1632,15 +1942,17 @@ body {
                 </div>
             </div>
             <!-- MCP 面板（接收从底部迁移的 DOM） -->
-            <div class="tb-content" id="tb-mcp" style="display:none;height:100%;padding:12px 16px;overflow-y:auto;">
+            <div class="tb-content" id="tb-mcp" style="display:none;height:100%;padding:20px 24px;overflow-y:auto;">
                 <div id="tb-mcp-body"></div>
             </div>
             <!-- QQ 托管面板（接收从底部迁移的 DOM） -->
-            <div class="tb-content" id="tb-qqbot" style="display:none;height:100%;padding:12px 16px;overflow-y:auto;">
+            <div class="tb-content" id="tb-qqbot" style="display:none;height:100%;padding:20px 24px;overflow-y:auto;">
                 <div id="tb-qqbot-body"></div>
+                <!-- 页面内 toast（替代 alert，避免失焦） -->
+                <div id="bot-toast" style="position:fixed;bottom:40px;left:50%;transform:translateX(-50%) translateX(220px);background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;padding:10px 18px;font-size:12px;color:var(--text-primary);box-shadow:var(--shadow-lg);z-index:9999;max-width:320px;display:none;"></div>
             </div>
             <!-- 后台任务面板（接收从底部迁移的 DOM） -->
-            <div class="tb-content" id="tb-tasks" style="display:none;height:100%;padding:12px 16px;overflow-y:auto;">
+            <div class="tb-content" id="tb-tasks" style="display:none;height:100%;padding:20px 24px;overflow-y:auto;">
                 <div id="tb-tasks-body"></div>
             </div>
             <!-- 技能面板（原左侧按钮并入） -->
@@ -1649,7 +1961,6 @@ body {
                     <h3 style="margin:0;font-size:15px;color:var(--text-primary);">技能管理</h3>
                     <div style="display:flex;gap:6px;">
                         <button onclick="document.getElementById('tb-skills-import').click()" style="padding:5px 12px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">📥 导入</button>
-                        <button onclick="openToolboxSkills()" style="padding:5px 12px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">🔄 刷新</button>
                     </div>
                 </div>
                 <input type="file" id="tb-skills-import" accept=".json" style="display:none;" onchange="importSkillsFromFile(this)">
@@ -1746,10 +2057,10 @@ window.electronAPI.onAgentShowConfirm(function(data) {
     var area = document.getElementById('chat-area');
 
     // 找到第一个仍显示"执行中"的工具卡片（按创建顺序）
-    var cards = area.querySelectorAll('.tool-card');
+    var cards = area.querySelectorAll('.tool-line');
     var targetCard = null;
     for (var ci = 0; ci < cards.length; ci++) {
-        var statusEl = cards[ci].querySelector('.tool-status');
+        var statusEl = cards[ci].querySelector('.tl-status');
         if (statusEl && statusEl.textContent.indexOf('执行中') !== -1) {
             targetCard = cards[ci];
             break;
@@ -1779,12 +2090,10 @@ window.electronAPI.onAgentShowConfirm(function(data) {
         // 卡片没有预留结果区 → 创建一个
         resSec = document.createElement('div');
         resSec.className = 'tool-result-section';
-        resSec.style.cssText = 'padding:10px 14px;';
-        var toolBody = targetCard.querySelector('.tool-card-body');
+        var toolBody = targetCard.querySelector('.tool-line-body');
         if (!toolBody) {
             toolBody = document.createElement('div');
-            toolBody.className = 'tool-card-body';
-            toolBody.style.cssText = 'display:block;padding:0;border-top:1px solid var(--border-light);';
+            toolBody.className = 'tool-line-body';
             targetCard.appendChild(toolBody);
         }
         toolBody.appendChild(resSec);
@@ -1809,13 +2118,10 @@ window.electronAPI.onAgentShowConfirm(function(data) {
     })(resSec);
     resSec.appendChild(btnRow);
     // 更新状态
-    var statusEl = targetCard.querySelector('.tool-status');
-    if (statusEl) statusEl.innerHTML = '<span style="color:#e8b0b0;">⚠ 待确认</span>';
+    var statusEl = targetCard.querySelector('.tl-status');
+    if (statusEl) statusEl.innerHTML = '⚠ 待确认';
     // 展开卡片以便看到按钮
-    var body = targetCard.querySelector('.tool-card-body');
-    if (body && body.style.display === 'none') {
-        body.style.display = '';
-    }
+    targetCard.setAttribute('open', '');
     scrollChatToBottom();
 });
 
@@ -1918,21 +2224,49 @@ let initCompleted = false;
 let currentTheme = 'dark';
 let _cachedInstructionText = null;  // INSTRUCTION.md 内容缓存，注入到每条用户消息
 
-// 对话内工具状态条：显示最近一次工具调用 / AI 输出进展
-var _toolStatusTimer = null;
-function updateToolStatusBar(toolName, statusText, dotClass, noAutoHide) {
-    var bar = document.getElementById('tool-status-bar');
+// 统一预览栏：AI 输出预览 / 工具状态 / 推理过程 都显示在输入框上方 #preview-bar
+var _previewTimer = null;
+function showPreviewBar(label, text, dotClass) {
+    var bar = document.getElementById('preview-bar');
     if (!bar) return;
-    if (_toolStatusTimer) clearTimeout(_toolStatusTimer);
-    bar.className = '';
-    bar.innerHTML = '<span class="ts-dot ' + (dotClass || 'running') + '"></span><span class="ts-name">' + toolName + '</span><span class="ts-text">' + statusText + '</span>';
-    if (!noAutoHide && (statusText.indexOf('完成') !== -1 || statusText.indexOf('返回') !== -1 || statusText.indexOf('失败') !== -1)) {
-        _toolStatusTimer = setTimeout(function() { bar.classList.add('hidden'); }, 3000);
+    if (_previewTimer) { clearTimeout(_previewTimer); _previewTimer = null; }
+    bar.style.display = 'flex';
+    var dot = document.getElementById('preview-dot');
+    var lab = document.getElementById('preview-label');
+    var txt = document.getElementById('preview-text');
+    if (dot) dot.style.background = dotClass === 'done' ? 'var(--success)' : (dotClass === 'think' ? 'var(--accent-2)' : 'var(--warning)');
+    if (lab) lab.textContent = label || '';
+    if (txt) txt.textContent = text || '';
+}
+function hidePreviewBar(delay) {
+    if (_previewTimer) { clearTimeout(_previewTimer); _previewTimer = null; }
+    if (delay && delay > 0) {
+        _previewTimer = setTimeout(function() { var bar = document.getElementById('preview-bar'); if (bar) bar.style.display = 'none'; }, delay);
+    } else {
+        var bar = document.getElementById('preview-bar'); if (bar) bar.style.display = 'none';
     }
 }
-function hideToolStatusBar() {
-    var bar = document.getElementById('tool-status-bar');
-    if (bar) { bar.classList.add('hidden'); if (_toolStatusTimer) clearTimeout(_toolStatusTimer); }
+// 兼容旧调用：updateToolStatusBar / updateWorkflowPreview 统一转发到预览栏
+function updateToolStatusBar(toolName, statusText, dotClass, noAutoHide) {
+    showPreviewBar(toolName, statusText, dotClass);
+    if (!noAutoHide && (statusText.indexOf('完成') !== -1 || statusText.indexOf('返回') !== -1 || statusText.indexOf('失败') !== -1)) {
+        hidePreviewBar(3000);
+    }
+}
+function hideToolStatusBar() { hidePreviewBar(0); }
+
+// 工作流内部预览：统一转发到预览栏（不再在 workflow body 内显示）
+function updateWorkflowPreview(type, content, dotClass) {
+    if (type === 'tool') {
+        showPreviewBar(content || '', dotClass === 'done' ? '已完成' : '执行中...', dotClass);
+    } else if (type === 'text') {
+        var preview = (content || '').replace(/<[^>]*>/g, '').substring(0, 60);
+        if (!preview) return;
+        showPreviewBar('DeepSeek', preview + (preview.length >= 60 ? '...' : ''), 'done');
+    } else if (type === 'think') {
+        var thinkText = (content || '').replace(/<[^>]*>/g, '').substring(0, 50);
+        showPreviewBar('推理过程', thinkText + (thinkText.length >= 50 ? '...' : ''), 'think');
+    }
 }
 
 // Token 估算与上下文统计
@@ -1943,47 +2277,74 @@ function estimateTokens(text) {
     if (!text) return 0;
     return Math.ceil(text.length / 3);
 }
+// 从 DOM 实时获取 token 数（反映真实显示内容，含深度思考）
 function getTotalTokens() {
+    var area = document.getElementById('chat-area');
+    if (!area) return 0;
     var total = 0;
-    (currentHistoryMessages || []).forEach(function(m) {
-        if (typeof m.content === 'string') total += estimateTokens(m.content);
-        if (m.segments) m.segments.forEach(function(s) {
-            if (s.content) total += estimateTokens(s.content);
-        });
+    // 用户消息气泡
+    area.querySelectorAll('.msg-bubble.user').forEach(function(el) {
+        total += estimateTokens(el.textContent || '');
+    });
+    // AI 消息气泡（含 markdown 渲染后的文本）
+    area.querySelectorAll('.msg-bubble.assistant, .msg-bubble.msg-assistant').forEach(function(el) {
+        total += estimateTokens(el.textContent || '');
+    });
+    // 推理过程（深度思考）— details 内文本
+    area.querySelectorAll('.wf-think, details.wf-think').forEach(function(el) {
+        total += estimateTokens(el.textContent || '');
+    });
+    // 工具调用参数 + 结果
+    area.querySelectorAll('.tool-call-content, .result-content, .tool-result-section').forEach(function(el) {
+        total += estimateTokens(el.textContent || '');
     });
     return total;
+}
+// Token 实时刷新定时器（轮次活跃时每秒更新速度/用时）
+var _tokenStatsTimer = null;
+function startTokenStatsTimer() {
+    stopTokenStatsTimer();
+    _tokenStatsTimer = setInterval(function() { updateTokenStats(); }, 1000);
+}
+function stopTokenStatsTimer() {
+    if (_tokenStatsTimer) { clearInterval(_tokenStatsTimer); _tokenStatsTimer = null; }
 }
 function updateTokenStats() {
     var stats = document.getElementById('token-stats');
     if (!stats) return;
-    if (initCompleted && currentHistoryId) {
-        stats.style.display = 'flex';
-        var total = getTotalTokens();
-        var roundTok = total - (_roundStartTokens || 0);
-        var elapsed = _roundStartTime ? (Date.now() - _roundStartTime) / 1000 : 0;
-        var speed = elapsed > 0.5 ? Math.round(roundTok / elapsed) : 0;
-        document.getElementById('tok-total').textContent = (total / 1000).toFixed(1) + 'K';
-        document.getElementById('tok-round').textContent = '+' + roundTok;
-        document.getElementById('tok-speed').textContent = speed + ' t/s';
-        // 显示对话已用时
-        var timeEl = document.getElementById('tok-time');
+    // 始终显示 token 面板，无对话时显示 0%
+    stats.style.display = 'flex';
+    var total = currentHistoryId ? getTotalTokens() : 0;
+    var roundTok = total - (_roundStartTokens || 0);
+    var elapsed = _roundStartTime ? (Date.now() - _roundStartTime) / 1000 : 0;
+    var speed = elapsed > 0.5 ? Math.round(roundTok / elapsed) : 0;
+    var totalEl = document.getElementById('tok-total');
+    var roundEl = document.getElementById('tok-round');
+    var speedEl = document.getElementById('tok-speed');
+    var timeEl = document.getElementById('tok-time');
+    // 上下文环
+    var ctxPct = Math.min(100, Math.round(total / CTX_THRESHOLD * 100));
+    var ring = document.getElementById('ctx-ring');
+    var pctEl = document.getElementById('ctx-pct');
+    if (ring) {
+        var circ = 2 * Math.PI * 10;
+        var offset = circ * (1 - ctxPct / 100);
+        ring.style.strokeDashoffset = offset;
+        ring.style.stroke = ctxPct > 80 ? 'var(--danger)' : ctxPct > 60 ? 'var(--warning)' : 'var(--accent)';
+    }
+    if (pctEl) pctEl.textContent = ctxPct;
+    if (totalEl) totalEl.textContent = total > 0 ? (total / 1000).toFixed(1) + 'K' : '0';
+    if (roundEl) roundEl.textContent = roundTok > 0 ? '+' + roundTok : '0';
+    if (!_roundStartTime) {
+        if (speedEl) speedEl.textContent = '—';
+        if (timeEl) timeEl.textContent = '—';
+    } else {
+        if (speedEl) speedEl.textContent = speed + ' t/s';
         if (timeEl) {
             if (elapsed < 60) timeEl.textContent = Math.round(elapsed) + 's';
             else if (elapsed < 3600) timeEl.textContent = Math.floor(elapsed / 60) + 'm ' + Math.round(elapsed % 60) + 's';
             else timeEl.textContent = Math.floor(elapsed / 3600) + 'h ' + Math.floor((elapsed % 3600) / 60) + 'm';
         }
-        var ctxPct = Math.min(100, Math.round(total / CTX_THRESHOLD * 100));
-        var ring = document.getElementById('ctx-ring');
-        var pctEl = document.getElementById('ctx-pct');
-        if (ring) {
-            var circ = 2 * Math.PI * 10;
-            var offset = circ * (1 - ctxPct / 100);
-            ring.style.strokeDashoffset = offset;
-            ring.style.stroke = ctxPct > 80 ? 'var(--danger)' : ctxPct > 60 ? 'var(--warning)' : 'var(--accent)';
-        }
-        if (pctEl) pctEl.textContent = ctxPct;
-    } else {
-        stats.style.display = 'none';
     }
 }
 
@@ -1996,19 +2357,25 @@ let currentHistoryExpired = false;
 // 每个对话独立的计划和 Skill 步骤数据
 let currentPlan = null;          // { title, steps, ... }
 let currentSkillStepStore = {};  // { skillName: [ { step, status, ts } ] }
+// 发送/停止按钮图标 SVG
+var _sendIconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+var _stopIconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
 // 更新发送按钮状态（根据 isTaskChainActive 综合决定）
 // isTaskChainActive 标记整个任务链（输入→工具调用→...→最终输出）是否活跃
 function updateSendBtn() {
     var btn = document.getElementById('send-prompt-btn');
     if (!btn) return;
     if (isTaskChainActive) {
-        btn.textContent = '⏹ 停止';
+        btn.innerHTML = _stopIconSvg;
         btn.disabled = false;
         btn.classList.add('stop-btn');
+        btn.style.background = 'var(--danger)';
     } else {
-        btn.textContent = '发送';
+        btn.innerHTML = _sendIconSvg;
         btn.disabled = false;
         btn.classList.remove('stop-btn');
+        btn.style.background = 'var(--accent-gradient)';
     }
 }
 
@@ -2241,9 +2608,12 @@ function loadHistoryConversation(id) {
         agentMode = h.mode || 'expert';
         agentDeepThink = h.deepthink !== false;
         document.getElementById('deepthink-switch').classList.toggle('on', agentDeepThink);
-        document.getElementById('pre-init-section').style.display = 'none';
+        var dtPill = document.getElementById('deepthink-pill');
+        if (dtPill) dtPill.classList.toggle('on', agentDeepThink);
         document.getElementById('post-init-section').style.display = 'block';
         document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : (agentMode === 'image' ? '识图模式' : '快速模式');
+        // 初始化 segmented slider 指示器位置
+        requestAnimationFrame(function() { if (window.setConfirmMode) setConfirmMode('smart', false); });
 
         currentHistoryId = h.id;
         conversationId = parseInt(h.id) || Date.now();
@@ -2312,7 +2682,7 @@ function loadHistoryConversation(id) {
                 if (restoreRes && restoreRes.valid) {
                     currentHistoryExpired = false;
                     btn.disabled = false;
-                    btn.textContent = '发送';
+                    btn.innerHTML = _sendIconSvg;
                     setTimeout(function() { document.getElementById('prompt-input').focus(); }, 300);
                 } else {
                     // 检查是否已有失效标记，避免重复
@@ -2366,15 +2736,50 @@ function loadHistoryConversation(id) {
 
 function renderHistoryMessages(area, messages, workflowCollapsed) {
     var lastWasWorkflow = false;
+    var pendingThink = null;  // 缓存未挂载的 think 段，合并到下一个 AI 消息
     (messages || []).forEach(function(msg) {
+        // think 段单独存储：缓存起来，挂到下一个 AI 气泡内最前面（不单独成消息）
+        if (msg.segments && msg.segments.every(function(s) { return s.type === 'think'; })) {
+            pendingThink = msg.segments[0].content;
+            return;
+        }
         if (msg.role === 'user') {
             addMessage('user', msg.content);
             lastWasWorkflow = false;
         } else if (msg.role === 'assistant') {
             addMessage('assistant', msg.content);
+            // 挂载缓存的 think 到刚创建的 AI 气泡内最前面
+            if (pendingThink) {
+                var aiB = document.querySelector('#chat-area .msg-bubble.assistant:last-of-type, #chat-area .msg-bubble.msg-assistant:last-of-type');
+                if (!aiB) {
+                    var allAi = document.querySelectorAll('#chat-area .msg-bubble.assistant, #chat-area .msg-bubble.msg-assistant');
+                    aiB = allAi[allAi.length - 1];
+                }
+                if (aiB) {
+                    var td = document.createElement('details');
+                    td.className = 'wf-think inline-think';
+                    td.style.cssText = 'font-size:11px;margin:0 0 4px 0;';
+                    var ts = document.createElement('summary');
+                    ts.style.cssText = 'cursor:pointer;color:var(--text-muted);font-weight:400;padding:2px 8px;border-radius:4px;background:color-mix(in srgb, var(--accent-2) 8%, transparent);display:inline-block;font-size:10px;list-style:none;';
+                    ts.textContent = '推理过程';
+                    td.appendChild(ts);
+                    var tb = document.createElement('div');
+                    tb.style.cssText = 'padding:6px 10px;margin-top:2px;background:color-mix(in srgb, var(--bg-elevated) 20%, transparent);border-radius:6px;color:var(--text-secondary);line-height:1.5;white-space:pre-wrap;font-size:11px;';
+                    tb.textContent = pendingThink;
+                    td.appendChild(tb);
+                    aiB.insertBefore(td, aiB.firstChild);
+                }
+                pendingThink = null;
+            }
             lastWasWorkflow = false;
         } else if (msg.segments) {
-            if (msg.isWorkflow) {
+            // 合并缓存的 think 到本段最前面（若本段含 AI 气泡）
+            if (pendingThink) {
+                msg.segments.unshift({ type: 'think', content: pendingThink });
+                pendingThink = null;
+            }
+            var onlyThink = msg.segments.every(function(s) { return s.type === 'think'; });
+            if (msg.isWorkflow && !onlyThink) {
                 // 连续 workflow 段共享同一个 wrapper
                 if (!lastWasWorkflow) {
                     var details = document.createElement('details');
@@ -2398,6 +2803,10 @@ function renderHistoryMessages(area, messages, workflowCollapsed) {
             lastWasWorkflow = false;
         }
     });
+    // 兜底：残留的 think（无后续 AI 消息）作为独立段渲染
+    if (pendingThink) {
+        addAssistantSegments([{ type: 'think', content: pendingThink }], true);
+    }
     if ((messages || []).length === 0) {
         var empty = document.createElement('div');
         empty.className = 'empty-msg';
@@ -2411,6 +2820,21 @@ function renderWorkflowSegments(container, segments) {
     segments.forEach(function(seg) {
         var group = document.createElement('div');
         group.className = 'msg-group';
+        if (seg.type === 'think' && seg.content) {
+            // 推理过程：字样 + 上下两条线（CSS 画线，可展开）
+            var thinkLine = document.createElement('details');
+            thinkLine.className = 'wf-think-line';
+            var thinkSum = document.createElement('summary');
+            thinkSum.className = 'wf-think-summary';
+            thinkSum.textContent = '推理过程';
+            thinkLine.appendChild(thinkSum);
+            var thinkTxt = document.createElement('div');
+            thinkTxt.className = 'wf-think-body';
+            thinkTxt.textContent = seg.content;
+            thinkLine.appendChild(thinkTxt);
+            container.appendChild(thinkLine);
+            return;
+        }
         if (seg.type === 'text' && seg.content.trim()) {
             // DeepSeek 头像左 + 气泡
             var avatar = document.createElement('div');
@@ -2421,71 +2845,65 @@ function renderWorkflowSegments(container, segments) {
             bubble.className = 'msg-bubble assistant';
         } else if (seg.type === 'tool-call') {
             if (!seg.content && !seg.lang) return;
-            var toolCard = document.createElement('div');
-            toolCard.className = 'tool-card';
-            toolCard.style.marginLeft = '20px';
-            var toolHeader = document.createElement('div');
-            toolHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;font-size:13px;user-select:none;transition:background .2s;';
+            // 工具：> name < 形式（彩色文字、可展开、简约）
+            var toolCard = document.createElement('details');
+            toolCard.className = 'tool-line';
+            var toolSum = document.createElement('summary');
+            toolSum.className = 'tool-line-summary';
             var toolName = (seg.lang || 'unknown');
-            var toolIcon = getToolIcon(seg.lang || '');
-            toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span style="font-size:14px;margin-right:6px;">' + toolIcon + '</span><span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;">● 已返回</span>';
+            toolSum.innerHTML = '<span class="tl-bracket">&gt;</span><span class="tl-name">' + escapeHtml(toolName) + '</span><span class="tl-bracket">&lt;</span><span class="tl-status">● 已返回</span>';
+            toolCard.appendChild(toolSum);
             var toolBody = document.createElement('div');
-            toolBody.className = 'tool-card-body';
-            toolBody.style.cssText = 'display:none;padding:0;border-top:1px solid var(--border-light);';
+            toolBody.className = 'tool-line-body';
             var callSection = document.createElement('div');
             callSection.className = 'tool-call-section';
-            callSection.style.cssText = 'padding:10px 14px;';
-            var callLabel = document.createElement('div');
-            callLabel.className = 'tool-call-label';
-            callLabel.style.cssText = 'font-size:11px;margin-bottom:4px;color:var(--text-muted);';
-            callLabel.textContent = '调用参数';
-            callSection.appendChild(callLabel);
             var callContent = document.createElement('pre');
             callContent.className = 'tool-call-content';
-            callContent.style.cssText = 'margin:0;font-family:monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;';
             callContent.textContent = seg.content;
             callSection.appendChild(callContent);
             toolBody.appendChild(callSection);
-            toolHeader.addEventListener('click', function() {
-                var arrow = this.querySelector('.tool-arrow');
-                if (toolBody.style.display === 'none') {
-                    toolBody.style.display = '';
-                    arrow.style.transform = 'rotate(0deg)';
-                    this.style.background = 'var(--bg-hover)';
-                } else {
-                    toolBody.style.display = 'none';
-                    arrow.style.transform = 'rotate(-90deg)';
-                    this.style.background = '';
-                }
-            });
-            toolCard.appendChild(toolHeader);
             toolCard.appendChild(toolBody);
-            group.appendChild(toolCard);
-            container.appendChild(group);
+            container.appendChild(toolCard);
+            return;
         } else if (seg.type === 'tool-result') {
-            var cards = container.querySelectorAll('.tool-card');
-            var targetCard = cards[cards.length - 1];
+            var toolLines = container.querySelectorAll('.tool-line');
+            var targetCard = toolLines[toolLines.length - 1];
             if (targetCard) {
-                // 找到 toolBody，将结果追加到可折叠区域内
-                var toolBody = targetCard.querySelector('.tool-card-body');
+                var toolBody = targetCard.querySelector('.tool-line-body');
                 if (!toolBody) {
                     toolBody = document.createElement('div');
-                    toolBody.className = 'tool-card-body';
-                    toolBody.style.cssText = 'display:none;padding:0;border-top:1px solid var(--border-light);';
+                    toolBody.className = 'tool-line-body';
                     targetCard.appendChild(toolBody);
                 }
                 var resSec = document.createElement('div');
                 resSec.className = 'tool-result-section';
-                resSec.style.cssText = 'padding:10px 14px;background:color-mix(in srgb, var(--success) 10%, transparent);';
                 var resLabel = document.createElement('div');
-                resLabel.style.cssText = 'font-size:11px;margin-bottom:4px;display:flex;align-items:center;gap:6px;';
-                resLabel.innerHTML = '<span>返回结果</span><span class="res-copy-btn" style="cursor:pointer;font-size:11px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;user-select:none;" title="复制结果">复制</span>';
+                resLabel.className = 'res-label';
+                resLabel.innerHTML = '<span>返回结果</span><span class="res-copy-btn" title="复制结果">复制</span>';
                 resSec.appendChild(resLabel);
                 var resContent = document.createElement('div');
                 resContent.className = 'result-content';
                 resContent.style.cssText = 'font-family:monospace;font-size:13px;line-height:1.5;word-wrap:break-word;';
-                resContent.innerHTML = renderMarkdown(seg.content);
-                resSec.appendChild(resContent);
+                var fullHtml = renderMarkdown(seg.content);
+                var lines = seg.content.split('\n');
+                if (lines.length > 5) {
+                    var plainText = lines.slice(0, 5).join('\n');
+                    resContent.innerHTML = renderMarkdown(plainText);
+                    var toggleBtn = document.createElement('div');
+                    toggleBtn.style.cssText = 'font-size:11px;color:var(--accent);cursor:pointer;margin-top:4px;user-select:none;';
+                    toggleBtn.textContent = '展开全部 [+' + (lines.length - 5) + ' 行]';
+                    var expanded = false;
+                    toggleBtn.onclick = function() {
+                        expanded = !expanded;
+                        resContent.innerHTML = expanded ? fullHtml : renderMarkdown(plainText);
+                        toggleBtn.textContent = expanded ? '收起' : '展开全部 [+' + (lines.length - 5) + ' 行]';
+                    };
+                    resSec.appendChild(resContent);
+                    resSec.appendChild(toggleBtn);
+                } else {
+                    resContent.innerHTML = fullHtml;
+                    resSec.appendChild(resContent);
+                }
                 // 复制按钮
                 resLabel.querySelector('.res-copy-btn').addEventListener('click', function(e) {
                     e.stopPropagation();
@@ -2536,7 +2954,7 @@ function deleteHistoryItem(id) {
             // 通知主进程清除保存的历史对话 ID
             window.electronAPI.setLastHistoryId(null);
             var btn = document.getElementById('send-prompt-btn');
-            if (btn) { btn.disabled = false; btn.textContent = '发送'; btn.classList.remove('stop-btn'); }
+            if (btn) { btn.disabled = false; btn.innerHTML = _sendIconSvg; btn.classList.remove('stop-btn'); }
             // 清理可能残留的进度元素
             var progressEl = document.querySelector('.msg-assistant[id="qwen-progress-msg"]');
             if (progressEl && progressEl.parentNode) progressEl.parentNode.remove();
@@ -2548,10 +2966,8 @@ function deleteHistoryItem(id) {
             area.innerHTML = '';
             var empty = document.createElement('div');
             empty.className = 'empty-msg';
-            empty.textContent = '选择模式后点击「创建对话」开始';
-            area.appendChild(empty);
-            document.getElementById('pre-init-section').style.display = '';
-            document.getElementById('post-init-section').style.display = 'none';
+            empty.innerHTML = '<div style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">欢迎使用 DeepSeek Agent</div><div style="font-size:12px;color:var(--text-muted);">选择一个模型开始对话</div>';
+area.appendChild(empty);
             // 确保弹窗关闭
             document.getElementById('newchat-modal').style.display = 'none';
             // 确保输入框可用并聚焦
@@ -2571,10 +2987,67 @@ function selectMode(el) {
 
 function toggleDeepThink() {
     agentDeepThink = !agentDeepThink;
-    document.getElementById('deepthink-switch').classList.toggle('on', agentDeepThink);
+    var pill = document.getElementById('deepthink-pill');
+    if (pill) pill.classList.toggle('on', agentDeepThink);
     // 实时同步到 DeepSeek 页面
     window.electronAPI.agentToggleDeepThink(agentDeepThink);
 }
+
+// ==================== 模型下拉框 ====================
+function toggleModelDropdown() {
+    var panel = document.getElementById('model-dropdown-panel');
+    var arrow = document.getElementById('model-dd-arrow');
+    if (!panel) return;
+    var show = panel.style.display !== 'block';
+    panel.style.display = show ? 'block' : 'none';
+    if (arrow) arrow.style.transform = show ? 'rotate(180deg)' : '';
+}
+function selectModelDropdown(model) {
+    toggleModelDropdown();
+    if (model === agentMode && initCompleted) return;
+    if (initCompleted && currentHistoryId) {
+        showQQBotConfirm('切换模型将结束当前对话并迁移历史记录，确定要继续吗？', function() { doSwitchModel(model); });
+        return;
+    }
+    doSwitchModel(model);
+}
+async function doSwitchModel(model) {
+    agentMode = model;
+    var modelMeta = { expert: { name: 'DeepSeek-Expert', desc: '深度思考，逐步推理，适合复杂任务' }, fast: { name: 'DeepSeek-Fast', desc: '快速响应，简洁回答，适合简单问答' }, imagesupport: { name: 'DeepSeek-ImageSupport', desc: '支持识图，快速分析图片内容' } };
+    var meta = modelMeta[model] || modelMeta.expert;
+    document.getElementById('model-dd-name').textContent = meta.name;
+    document.getElementById('model-dd-desc').textContent = meta.desc;
+    document.querySelectorAll('.model-dd-item').forEach(function(i) { i.style.background = i.dataset.model === model ? 'color-mix(in srgb,var(--accent) 20%,transparent)' : ''; });
+    document.getElementById('mode-label').textContent = meta.name;
+    var dtPill = document.getElementById('deepthink-pill');
+    if (dtPill) { dtPill.style.opacity = model === 'expert' ? '1' : '0.4'; dtPill.style.pointerEvents = model === 'expert' ? '' : 'none'; }
+    if (currentHistoryId && currentHistoryMessages.length > 0) {
+        showToast('正在迁移对话到 ' + meta.name + '...', 'info');
+        try {
+            var histRes = await window.electronAPI.agentGetConversationHistory();
+            if (histRes && histRes.success && histRes.history && histRes.history.length > 0) {
+                var isExpert = model === 'expert';
+                var chunks = isExpert ? chunkHistory(histRes.history, 3) : [histRes.history];
+                await window.electronAPI.agentNavigateModel(model);
+                await new Promise(function(r) { setTimeout(r, 2000); });
+                for (var ci = 0; ci < chunks.length; ci++) {
+                    var msg = isExpert ? '请快速阅读以下历史对话并确认上下文：\n\n' + JSON.stringify(chunks[ci]) + '\n\n请立即回复"已收到，继续"并等待下一步指令。' : JSON.stringify(chunks[ci]);
+                    await window.electronAPI.agentSendMessage({ text: msg, mode: model === 'imagesupport' ? 'quick' : (isExpert ? 'expert' : 'quick'), deepthink: false, conversationId: conversationId });
+                    if (ci < chunks.length - 1) await new Promise(function(r) { setTimeout(r, 1000); });
+                }
+                showToast('对话已迁移到 ' + meta.name, 'success');
+            }
+        } catch (e) { console.error('[Model] 迁移失败:', e); }
+        return;
+    }
+    window.electronAPI.agentNavigateModel(model).catch(function(e) { console.error('[Model] 导航失败:', e); });
+}
+function chunkHistory(h, n) { if (!Array.isArray(h) || h.length <= n) return [h]; var c=[]; for(var i=0;i<h.length;i+=n) c.push(h.slice(i,i+n)); return c; }
+document.addEventListener('click', function(e) {
+    var dd = document.getElementById('model-dropdown');
+    if (dd && !dd.contains(e.target)) { var p = document.getElementById('model-dropdown-panel'); var a = document.getElementById('model-dd-arrow'); if (p) p.style.display = 'none'; if (a) a.style.transform = ''; }
+});
+
 
 async function startNewChat() {
     // 清除 qwen 进度指示
@@ -2590,12 +3063,6 @@ async function startNewChat() {
 
     // 重置为初始化前状态：显示模式选择和深度思考
     initCompleted = false;
-    document.getElementById('pre-init-section').style.display = '';
-    document.getElementById('post-init-section').style.display = 'none';
-    // 同步预初始化模式选择器
-    document.querySelectorAll('#pre-init-mode-selector .mode-btn').forEach(function(b) {
-        b.classList.toggle('active', b.getAttribute('data-mode') === agentMode);
-    });
     hideLoading();
 
     btn.disabled = true;
@@ -2610,7 +3077,7 @@ async function startNewChat() {
     workflowWrappers = [];
     var empty = document.createElement('div');
     empty.className = 'empty-msg';
-    empty.textContent = '初始化中...';
+    empty.textContent = '…';
     area.appendChild(empty);
 
     // 重置历史追踪
@@ -2626,8 +3093,15 @@ async function startNewChat() {
             deepthink: agentDeepThink
         });
 
+        if (!initResult || !initResult.success) {
+            showStatus('初始化失败: ' + ((initResult && initResult.error) || '创建新对话失败'));
+            btn.disabled = false;
+            initBtn.disabled = false;
+            return;
+        }
+
         // 保存 DeepSeek 会话 URL
-        if (initResult && initResult.deepseekUrl) {
+        if (initResult.deepseekUrl) {
             currentHistoryDeepseekUrl = initResult.deepseekUrl;
             saveCurrentHistory();
         }
@@ -2637,9 +3111,12 @@ async function startNewChat() {
 
         initCompleted = true;
         // 初始化成功：隐藏模式选择，显示输入框和模式标签
-        document.getElementById('pre-init-section').style.display = 'none';
         document.getElementById('post-init-section').style.display = 'block';
         document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : (agentMode === 'image' ? '识图模式' : '快速模式');
+        // 同步深度思考滑块 + 初始化 segmented slider 指示器
+        var dtPill2 = document.getElementById('deepthink-pill');
+        if (dtPill2) dtPill2.classList.toggle('on', agentDeepThink);
+        requestAnimationFrame(function() { if (window.setConfirmMode) setConfirmMode('smart', false); });
 
         conversationId = Date.now();
         showStatus('初始化完成');
@@ -2661,9 +3138,6 @@ var newchatModalMode = 'expert';
 // 预初始化模式选择（直接在界面上切换）
 function selectPreInitMode(mode, btn) {
     agentMode = mode;
-    document.querySelectorAll('#pre-init-mode-selector .mode-btn').forEach(function(b) {
-        b.classList.remove('active');
-    });
     btn.classList.add('active');
 }
 
@@ -2726,10 +3200,16 @@ async function sendPrompt() {
     var input = document.getElementById('prompt-input');
     var btn = document.getElementById('send-prompt-btn');
 
+    // 还原粘贴截断的完整内容（覆盖所有发送入口：Enter 键 / 按钮 / IPC）
+    if (input._pastedFull) {
+        input.value = input._pastedFull;
+        delete input._pastedFull;
+    }
+
     // 如果正在生成或执行任务中 -> 点击停止（优先于空输入检查）
     if (isTaskChainActive) {
         btn.disabled = true;
-        btn.textContent = '停止中...';
+        btn.innerHTML = '…';
         try {
             await window.electronAPI.agentStop();
         } catch(e) {}
@@ -2761,6 +3241,10 @@ async function sendPrompt() {
 
     // 允许纯附件发送（无文本但有文件时也能发）
     if (!text && attachedFiles.length === 0) return;
+
+    // 没有活跃对话时自动创建（第一条消息自动初始化）
+    // 直接发送用户消息，由 agentSendMessage 自动处理
+    // 不需要提前创建对话
 
     // 检测文本中的 <file>...</file> 标签，自动提取为文件附件
     var fileRegex = /<file>([\s\S]*?)<\/file>/g;
@@ -2795,23 +3279,43 @@ async function sendPrompt() {
 
     // 发送前确保 DeepSeek 处于正确的对话页面（如果 URL 不对会自动切回来）
     if (currentHistoryDeepseekUrl) {
-        var navRes = await window.electronAPI.historyRestoreConversation(currentHistoryDeepseekUrl);
-        if (!navRes || !navRes.valid) {
-            // URL 无效，清除并尝试直接发送（新建对话时 URL 可能还没就绪）
-            currentHistoryDeepseekUrl = null;
-            if (!initCompleted) {
-                currentHistoryExpired = true;
-                addAssistantError('对话已过期，请创建新对话。');
-                return;
+        // 先检查当前是否已经在正确的对话页面上，避免 loadURL 触发重定向丢失会话
+        var needNav = true;
+        try {
+            var curUrlRes = await window.electronAPI.agentGetDeepseekUrl();
+            if (curUrlRes && curUrlRes.url && curUrlRes.url === currentHistoryDeepseekUrl) {
+                needNav = false;  // 已经在正确的对话上
             }
-            // initCompleted = true 时可能是新建对话 URL 未就绪，不清除标记，尝试直接发送
-        } else {
-            // 导航后 inject.js 重建，readTools 被重置，立即从历史记录恢复
-            if (currentHistoryId) {
-                var histRes = await window.electronAPI.historyLoad(currentHistoryId);
-                if (histRes.success && histRes.history && histRes.history.readTools) {
-                    await window.electronAPI.setReadTools(histRes.history.readTools);
+        } catch(e) {}
+        if (needNav) {
+            var navRes = await window.electronAPI.historyRestoreConversation(currentHistoryDeepseekUrl);
+            if (!navRes || !navRes.valid) {
+                // URL 无效，清除并尝试直接发送（新建对话时 URL 可能还没就绪）
+                currentHistoryDeepseekUrl = null;
+                if (!initCompleted) {
+                    currentHistoryExpired = true;
+                    addAssistantError('对话已过期，请创建新对话。');
+                    return;
                 }
+                // initCompleted = true 时可能页面已被重定向，尝试直接发送
+            } else {
+                // 导航后 inject.js 重建，readTools 被重置，立即从历史记录恢复
+                if (currentHistoryId) {
+                    var histRes = await window.electronAPI.historyLoad(currentHistoryId);
+                    if (histRes.success && histRes.history && histRes.history.readTools) {
+                        await window.electronAPI.setReadTools(histRes.history.readTools);
+                    }
+                }
+            }
+        } else {
+            // 已在正确对话上，只需恢复 readTools
+            if (currentHistoryId) {
+                try {
+                    var histRes = await window.electronAPI.historyLoad(currentHistoryId);
+                    if (histRes.success && histRes.history && histRes.history.readTools) {
+                        await window.electronAPI.setReadTools(histRes.history.readTools);
+                    }
+                } catch(e) {}
             }
         }
     }
@@ -2836,14 +3340,20 @@ async function sendPrompt() {
     }
     if (filePrefix || skillPrefix) clearFilePanel();
 
-    btn.textContent = '发送';
+    btn.innerHTML = _sendIconSvg;
     btn.disabled = true;
 
     // Add user message (仅显示用户原始消息，不含隐藏的 INSTRUCTION.md 注入)
     addMessage('user', displayText);
     updateTokenStats();
 
-    // 记录到历史
+    // 记录到历史（首次发送时自动创建历史记录）
+    if (!currentHistoryId) {
+        currentHistoryId = Date.now().toString();
+        currentHistoryMessages = [];
+        currentHistoryDeepseekUrl = null;
+        window.electronAPI.setLastHistoryId(currentHistoryId);
+    }
     if (currentHistoryId) {
         currentHistoryMessages.push({ role: 'user', content: displayText, timestamp: new Date().toISOString() });
         saveCurrentHistory();
@@ -2854,12 +3364,33 @@ async function sendPrompt() {
 
     // Send via IPC
     try {
-        await window.electronAPI.agentSendMessage({
+        var result = await window.electronAPI.agentSendMessage({
             text: fullText,
             mode: agentMode,
             deepthink: agentDeepThink,
-            conversationId: conversationId
+            conversationId: conversationId,
+            // 由 agentview 决定是否新建对话：无 URL 时创建新对话
+            createNew: !currentHistoryDeepseekUrl
         });
+        if (!result || !result.success) {
+            addAssistantError('发送失败：' + ((result && result.error) || '未知错误'));
+            btn.disabled = false;
+            return;
+        }
+        // 新对话时保存 DeepSeek URL（用于后续导航和有效性校验）
+        if (!currentHistoryDeepseekUrl && result.deepseekUrl && /\/chat\/[^?#]+/.test(result.deepseekUrl)) {
+            currentHistoryDeepseekUrl = result.deepseekUrl;
+            if (currentHistoryId) {
+                window.electronAPI.historyLoadUrl(currentHistoryId, result.deepseekUrl);
+            }
+            // 首次对话同步 UI 模式/深度思考显示
+            document.getElementById('mode-label').textContent = agentMode === 'expert' ? '专家模式' : (agentMode === 'image' ? '识图模式' : '快速模式');
+            document.getElementById('deepthink-switch').classList.toggle('on', agentDeepThink);
+            var dtP = document.getElementById('deepthink-pill');
+            if (dtP) dtP.classList.toggle('on', agentDeepThink);
+            if (!initCompleted) initCompleted = true;
+            saveCurrentHistory();
+        }
         showLoading();
     } catch (e) {
         addAssistantError('发送失败：' + e.message);
@@ -3001,8 +3532,14 @@ function addMessage(role, content) {
     // 消息气泡
     var bubble = document.createElement('div');
     bubble.className = 'msg-bubble ' + (isUser ? 'user' : 'assistant');
-    if (!isUser) bubble.classList.add('msg-assistant');
-    bubble.innerHTML = renderMarkdown(content);
+    if (!isUser) {
+        bubble.classList.add('msg-assistant');
+        bubble.innerHTML = renderMarkdown(content);
+    } else {
+        // 用户消息：纯文本，不做 markdown 渲染（保留换行）
+        bubble.textContent = content;
+        bubble.style.whiteSpace = 'pre-wrap';
+    }
     group.appendChild(bubble);
 
     area.appendChild(group);
@@ -3057,22 +3594,24 @@ function addAssistantSegments(segments, skipSave) {
     });
     if (textBuf) merged.push({ type: 'text', content: textBuf });
 
-    // 每段作为独立消息组显示
+    // 分离 think 段：先渲染非 think 段（创建本轮气泡），最后再挂载 think 到本轮气泡最前面
+    var thinkSegs = [];
+    var nonThinkSegs = [];
     merged.forEach(function(seg) {
+        if (seg.type === 'think' && seg.content) thinkSegs.push(seg);
+        else nonThinkSegs.push(seg);
+    });
+
+    // 先渲染非 think 段
+    nonThinkSegs.forEach(function(seg) {
         var group = document.createElement('div');
         group.className = 'msg-group';
 
         if (seg.type === 'text' && seg.content.trim()) {
-            // 更新浮空状态条：显示 AI 输出预览，5 秒后自动清除
+            // 工作流内预览（页面底部不再显示文字预览）
             var preview = seg.content.trim().replace(/<[^>]*>/g, '').substring(0, 60);
-            if (preview) {
-                updateToolStatusBar('DeepSeek', preview.substring(0, 40) + (preview.length > 40 ? '...' : ''), 'done');
-                // 强制 5 秒后清除文本预览（防止残留）
-                if (_toolStatusTimer) clearTimeout(_toolStatusTimer);
-                _toolStatusTimer = setTimeout(function() {
-                    var bar = document.getElementById('tool-status-bar');
-                    if (bar) bar.classList.add('hidden');
-                }, 5000);
+            if (preview && isInWorkflow) {
+                updateWorkflowPreview('text', preview);
             }
             // DeepSeek 头像左 + 气泡
             var avatar = document.createElement('div');
@@ -3085,77 +3624,66 @@ function addAssistantSegments(segments, skipSave) {
             bubble.innerHTML = renderMarkdown(seg.content);
             group.appendChild(bubble);
         } else if (seg.type === 'tool-call') {
-            // 更新浮空状态条
-            updateToolStatusBar(seg.lang || 'tool', '执行中...', 'running');
-            // 工具调用 + 结果合并为单一可展开卡片
-            var toolCard = document.createElement('div');
-            toolCard.className = 'tool-card';
-            toolCard.style.marginLeft = '20px';
-            var toolHeader = document.createElement('div');
-            toolHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;font-size:13px;user-select:none;transition:background .2s;';
+            // 更新预览栏
+            if (isInWorkflow) {
+                updateWorkflowPreview('tool', seg.lang || 'tool', 'running');
+            } else {
+                updateToolStatusBar(seg.lang || 'tool', '执行中...', 'running');
+            }
+            // 工具：> name < 形式（彩色文字、可展开、简约）
+            var toolCard = document.createElement('details');
+            toolCard.className = 'tool-line';
+            var toolSum = document.createElement('summary');
+            toolSum.className = 'tool-line-summary';
             var toolName2 = (seg.lang || 'unknown');
-            var toolIcon2 = getToolIcon(seg.lang || '');
-            toolHeader.innerHTML = '<span class="tool-arrow" style="transition:transform .25s;transform:rotate(-90deg);font-size:10px;">&#9660;</span><span style="font-size:14px;margin-right:6px;">' + toolIcon2 + '</span><span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName2) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;display:flex;align-items:center;gap:4px;"><span class="tool-pulse" style="width:6px;height:6px;border-radius:50%;background:var(--warning);display:inline-block;"></span>执行中...</span>';
+            toolSum.innerHTML = '<span class="tl-bracket">&gt;</span><span class="tl-name">' + escapeHtml(toolName2) + '</span><span class="tl-bracket">&lt;</span><span class="tl-status"><span class="tool-pulse"></span>执行中...</span>';
+            toolCard.appendChild(toolSum);
             var toolBody = document.createElement('div');
-            toolBody.className = 'tool-card-body';
-            toolBody.style.cssText = 'display:none;padding:0;border-top:1px solid var(--border-light);';
+            toolBody.className = 'tool-line-body';
             // 调用内容区
             var callSection = document.createElement('div');
-            callSection.style.cssText = 'padding:10px 14px;border-bottom:1px solid var(--border-light);';
-            var callLabel = document.createElement('div');
-            callLabel.style.cssText = 'font-size:11px;margin-bottom:4px;color:var(--text-muted);';
-            callLabel.textContent = '调用参数';
-            callSection.appendChild(callLabel);
+            callSection.className = 'tool-call-section';
             var callContent = document.createElement('pre');
-            callContent.style.cssText = 'margin:0;font-family:monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;';
             callContent.className = 'tool-call-content';
             callContent.textContent = seg.content;
             callSection.appendChild(callContent);
             // 结果区（预留，结果到达时填充）
             var resultSection = document.createElement('div');
             resultSection.className = 'tool-result-section';
-            resultSection.style.cssText = 'display:none;padding:10px 14px;';
+            resultSection.style.cssText = 'display:none;';
             toolBody.appendChild(callSection);
             toolBody.appendChild(resultSection);
             // 注册到待填充队列
             _pendingToolCards.push({ card: toolCard, resSec: resultSection });
-            // 展开/折叠
-            toolHeader.addEventListener('click', function() {
-                var arrow = this.querySelector('.tool-arrow');
-                if (toolBody.style.display === 'none') {
-                    toolBody.style.display = '';
-                    arrow.style.transform = 'rotate(0deg)';
-                    this.style.background = 'var(--bg-hover)';
-                } else {
-                    toolBody.style.display = 'none';
-                    arrow.style.transform = 'rotate(-90deg)';
-                    this.style.background = '';
-                }
-            });
-            toolCard.appendChild(toolHeader);
             toolCard.appendChild(toolBody);
             group.appendChild(toolCard);
         } else if (seg.type === 'tool-result') {
-            // 更新浮空状态条：已完成
-            updateToolStatusBar(seg.lang || '工具', '已完成', 'done');
+            // 更新浮空状态条或工作流内预览：已完成
+            if (isInWorkflow) {
+                updateWorkflowPreview('tool', seg.lang || '工具', 'done');
+            } else {
+                updateToolStatusBar(seg.lang || '工具', '已完成', 'done');
+            }
             // 从待填充队列中取出最早未填充的工具卡片
             var pending = _pendingToolCards.shift();
             if (pending) {
                 var targetCard = pending.card;
                 var resSec = pending.resSec;
-                var statusEl = targetCard.querySelector('.tool-status');
+                var statusEl = targetCard.querySelector('.tl-status');
                 // 先更新状态（确保即使后续渲染失败，状态也已更新）
-                if (statusEl) statusEl.innerHTML = '<span class="tool-status" style="font-size:12px;">● 已返回</span>';
+                if (statusEl) statusEl.innerHTML = '● 已返回';
+                // 更新预览栏为已完成
+                if (isInWorkflow) {
+                    updateWorkflowPreview('tool', seg.lang || 'tool', 'done');
+                }
                 try {
                     resSec.style.display = '';
-                    resSec.style.background = 'color-mix(in srgb, var(--success) 10%, transparent)';
                     var resLabel = document.createElement('div');
-                    resLabel.style.cssText = 'font-size:11px;margin-bottom:4px;display:flex;align-items:center;gap:6px;';
-                    resLabel.innerHTML = '<span>返回结果</span><span class="res-copy-btn" style="cursor:pointer;font-size:11px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;user-select:none;" title="复制结果">复制</span>';
+                    resLabel.className = 'res-label';
+                    resLabel.innerHTML = '<span>返回结果</span><span class="res-copy-btn" title="复制结果">复制</span>';
                     resSec.appendChild(resLabel);
                     var resContent = document.createElement('div');
                     resContent.className = 'result-content';
-                    resContent.style.cssText = 'font-family:monospace;font-size:13px;line-height:1.5;word-wrap:break-word;';
                     resContent.innerHTML = renderMarkdown(seg.content);
                     resSec.appendChild(resContent);
                     // 复制按钮
@@ -3183,10 +3711,10 @@ function addAssistantSegments(segments, skipSave) {
                 return;  // 不创建空 group
             } else {
                 // 队列为空 → 在 DOM 中查找最后一张"执行中"卡片来更新
-                var allCards = document.querySelectorAll('.tool-card');
+                var allCards = document.querySelectorAll('.tool-line');
                 var lastExecuting = null;
                 for (var ci = allCards.length - 1; ci >= 0; ci--) {
-                    var st = allCards[ci].querySelector('.tool-status');
+                    var st = allCards[ci].querySelector('.tl-status');
                     if (st && st.textContent.indexOf('执行中') !== -1) {
                         lastExecuting = allCards[ci];
                         break;
@@ -3195,27 +3723,24 @@ function addAssistantSegments(segments, skipSave) {
                 if (lastExecuting) {
                     // 找到匹配的卡片，更新它
                     var targetCard2 = lastExecuting;
-                    var statusEl2 = targetCard2.querySelector('.tool-status');
+                    var statusEl2 = targetCard2.querySelector('.tl-status');
                     // 先更新状态（确保即使后续渲染失败，状态也已更新）
-                    if (statusEl2) statusEl2.innerHTML = '<span class="tool-status" style="font-size:12px;">● 已返回</span>';
-                    var toolBody2 = targetCard2.querySelector('.tool-card-body');
+                    if (statusEl2) statusEl2.innerHTML = '● 已返回';
+                    var toolBody2 = targetCard2.querySelector('.tool-line-body');
                     if (!toolBody2) {
                         toolBody2 = document.createElement('div');
-                        toolBody2.className = 'tool-card-body';
-                        toolBody2.style.cssText = 'display:none;padding:0;border-top:1px solid var(--border-light);';
+                        toolBody2.className = 'tool-line-body';
                         targetCard2.appendChild(toolBody2);
                     }
                     try {
                         var resSec2 = document.createElement('div');
                         resSec2.className = 'tool-result-section';
-                        resSec2.style.cssText = 'display:block;padding:10px 14px;background:color-mix(in srgb, var(--success) 10%, transparent);';
                         var resLabel2 = document.createElement('div');
-                        resLabel2.style.cssText = 'font-size:11px;margin-bottom:4px;display:flex;align-items:center;gap:6px;';
-                        resLabel2.innerHTML = '<span>返回结果</span><span class="res-copy-btn" style="cursor:pointer;font-size:11px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;user-select:none;" title="复制结果">复制</span>';
+                        resLabel2.className = 'res-label';
+                        resLabel2.innerHTML = '<span>返回结果</span><span class="res-copy-btn" title="复制结果">复制</span>';
                         resSec2.appendChild(resLabel2);
                         var resContent2 = document.createElement('div');
                         resContent2.className = 'result-content';
-                        resContent2.style.cssText = 'font-family:monospace;font-size:13px;line-height:1.5;word-wrap:break-word;';
                         resContent2.innerHTML = renderMarkdown(seg.content);
                         resSec2.appendChild(resContent2);
                         resLabel2.querySelector('.res-copy-btn').addEventListener('click', function(e) {
@@ -3235,35 +3760,35 @@ function addAssistantSegments(segments, skipSave) {
                         toolBody2.appendChild(resSec2);
                     } catch (e) {
                         console.warn('tool-result DOM fallback render error:', e);
-                        toolBody2.innerHTML = '<div style="color:var(--danger);padding:10px;">渲染结果时出错: ' + escapeHtml(e.message) + '</div>';
+                        toolBody2.innerHTML = '<div style="color:var(--danger);padding:6px 10px;">渲染结果时出错: ' + escapeHtml(e.message) + '</div>';
                     }
                     scrollToBottom();
                     return;
                 }
-                // 实在找不到 → 创建新卡片兜底
+                // 实在找不到 → 创建新 tool-line 兜底
                 var resultArea = area;
                 if (isInWorkflow) {
                     var wfW = getCurrentWorkflowWrapper();
                     if (wfW) resultArea = wfW.querySelector('.wf-body') || area;
                 }
-                var autoCard = document.createElement('div');
-                autoCard.className = 'tool-card';
-                autoCard.style.marginLeft = '20px';
-                var autoHeader = document.createElement('div');
-                autoHeader.className = 'tool-header';
-                autoHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;font-size:13px;user-select:none;';
+                var autoCard = document.createElement('details');
+                autoCard.className = 'tool-line';
+                var autoSum = document.createElement('summary');
+                autoSum.className = 'tool-line-summary';
                 var toolName3 = (seg.lang || 'tool');
-                autoHeader.innerHTML = '<span class="tool-name" style="font-weight:600;">' + escapeHtml(toolName3) + '</span><span class="tool-status" style="font-size:12px;margin-left:auto;">● 已返回</span>';
-                autoCard.appendChild(autoHeader);
+                autoSum.innerHTML = '<span class="tl-bracket">&gt;</span><span class="tl-name">' + escapeHtml(toolName3) + '</span><span class="tl-bracket">&lt;</span><span class="tl-status">● 已返回</span>';
+                autoCard.appendChild(autoSum);
+                var autoBody = document.createElement('div');
+                autoBody.className = 'tool-line-body';
                 var autoResult = document.createElement('div');
                 autoResult.className = 'tool-result-section';
-                autoResult.style.cssText = 'padding:10px 14px;font-family:monospace;font-size:13px;line-height:1.5;word-wrap:break-word;';
-                autoResult.innerHTML = renderMarkdown(seg.content);
-                autoCard.appendChild(autoResult);
-                group.classList.remove('msg-group');
-                group.style.cssText = 'margin:0;padding:0;border:none;background:transparent;';
-                group.appendChild(autoCard);
-                resultArea.appendChild(group);
+                var autoResContent = document.createElement('div');
+                autoResContent.className = 'result-content';
+                autoResContent.innerHTML = renderMarkdown(seg.content);
+                autoResult.appendChild(autoResContent);
+                autoBody.appendChild(autoResult);
+                autoCard.appendChild(autoBody);
+                resultArea.appendChild(autoCard);
                 scrollToBottom();
                 return;
             }
@@ -3276,6 +3801,53 @@ function addAssistantSegments(segments, skipSave) {
             if (wfW3 && (seg.type === 'text' || seg.type === 'tool-call')) targetArea3 = wfW3.querySelector('.wf-body') || area;
         }
         targetArea3.appendChild(group);
+    });
+
+    // 所有非 think 段渲染完毕，现在挂载 think 段到本轮最新位置（避免错位/延迟一轮）
+    thinkSegs.forEach(function(seg) {
+        if (isInWorkflow) {
+            // 工作流内：插入到 workflow body 最前面（工具调用之上）
+            var wfW = getCurrentWorkflowWrapper();
+            if (wfW) {
+                var wfBody = wfW.querySelector('.wf-body');
+                if (wfBody) {
+                    var thinkHolder = document.createElement('div');
+                    renderWorkflowSegments(thinkHolder, [seg]);
+                    wfBody.insertBefore(thinkHolder, wfBody.firstChild);
+                }
+            }
+        } else {
+            // 非工作流：插入到本轮最新 AI 气泡内最前面（此时本轮气泡已创建）
+            var thinkDetails = document.createElement('details');
+            thinkDetails.className = 'wf-think inline-think';
+            thinkDetails.style.cssText = 'font-size:11px;margin:0 0 4px 0;';
+            var thinkSummary = document.createElement('summary');
+            thinkSummary.style.cssText = 'cursor:pointer;color:var(--text-muted);font-weight:400;padding:2px 8px;border-radius:4px;background:color-mix(in srgb, var(--accent-2) 8%, transparent);display:inline-block;font-size:10px;list-style:none;';
+            thinkSummary.textContent = '推理过程';
+            thinkDetails.appendChild(thinkSummary);
+            var thinkBody = document.createElement('div');
+            thinkBody.style.cssText = 'padding:6px 10px;margin-top:2px;background:color-mix(in srgb, var(--bg-elevated) 20%, transparent);border-radius:6px;color:var(--text-secondary);line-height:1.5;white-space:pre-wrap;font-size:11px;';
+            thinkBody.textContent = seg.content;
+            thinkDetails.appendChild(thinkBody);
+            var aiBubbles = area.querySelectorAll('.msg-bubble.assistant, .msg-bubble.msg-assistant');
+            var curBubble = aiBubbles[aiBubbles.length - 1];
+            if (curBubble) {
+                curBubble.insertBefore(thinkDetails, curBubble.firstChild);
+            } else {
+                // 兜底：新建独立 msg-group（含头像）
+                var thinkGroup = document.createElement('div');
+                thinkGroup.className = 'msg-group';
+                var thinkAvatar = document.createElement('div');
+                thinkAvatar.className = 'msg-avatar deepseek';
+                thinkAvatar.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2L4 14h5v8h6v-8h5L12 2z"/></svg>';
+                thinkGroup.appendChild(thinkAvatar);
+                var thinkBubble = document.createElement('div');
+                thinkBubble.className = 'msg-bubble assistant msg-assistant';
+                thinkBubble.appendChild(thinkDetails);
+                thinkGroup.appendChild(thinkBubble);
+                area.appendChild(thinkGroup);
+            }
+        }
     });
 
     scrollToBottom();
@@ -3315,6 +3887,11 @@ function showLoading() {
     isTaskChainActive = true;
     var btn = document.getElementById('send-prompt-btn');
     if (btn) { isGenerating = true; updateSendBtn(); syncIntervalState(); }
+    // 记录本轮开始的时间和 token 基数
+    _roundStartTime = Date.now();
+    _roundStartTokens = getTotalTokens();
+    // 启动实时刷新定时器（每秒更新速度/用时）
+    startTokenStatsTimer();
     scrollToBottom();
     showStatus('正在处理...');
     // 动态省略号动画
@@ -3493,12 +4070,37 @@ function clearActiveIntervals() {
 function updateIntervalDisplay() {
     var list = document.getElementById('interval-list');
     var count = document.getElementById('interval-count');
-    if (!list) return;
+    var tbList = document.getElementById('tb-interval-list');
+    var tbCount = document.getElementById('tb-interval-count');
+    if (!list && !tbList) return;
     var prevCount = _lastIntervalCount || 0;
     _lastIntervalCount = _activeIntervals.length;
     if (count) count.textContent = _activeIntervals.length;
+    if (tbCount) tbCount.textContent = _activeIntervals.length;
+    
+    function renderItems(items) {
+        if (items.length === 0) return '<span class="sp-empty">无活跃定时任务</span>';
+        var now = Date.now();
+        return items.map(function(item) {
+            var display = item.taskName || item.command;
+            if (display.length > 28) display = display.substring(0, 28) + '…';
+            var elapsed = now - item.createdAt;
+            var remaining = item.interval - (elapsed % item.interval);
+            var remainSec = (remaining / 1000).toFixed(remaining >= 10000 ? 0 : 1);
+            var modeIcon = item.mode === 'trigger' ? '💬' : '⚡';
+            return '<div class="sp-item">' +
+                '<span class="sp-item-dot" style="color:#8bc88b;">●</span>' +
+                '<code class="sp-item-code" title="' + escapeHtml(item.taskName || '') + '">' + escapeHtml(display) + '</code>' +
+                '<span class="sp-item-meta" title="下次触发: ' + remainSec + 's">' + modeIcon + remainSec + 's</span>' +
+                '<span class="sp-item-stop" onclick="stopIntervalFromUI(\'' + escapeHtml(item.taskName || item.id) + '\')" style="cursor:pointer;color:var(--danger);margin-left:4px;font-size:12px;flex-shrink:0;padding:0 2px;border-radius:3px;" title="停止任务">✕</span>' +
+                '</div>';
+        }).join('');
+    }
+    
     if (_activeIntervals.length === 0) {
-        list.innerHTML = '<span class="sp-empty">无活跃定时任务</span>';
+        var emptyMsg = '<span class="sp-empty">无活跃定时任务</span>';
+        if (list) list.innerHTML = emptyMsg;
+        if (tbList) tbList.innerHTML = '<span style="color:var(--text-muted);font-size:11px;">无活跃定时任务</span>';
         stopIntervalCountdown();
         // 清除 controlbar 定时任务状态
         var oldEl = statusMap['_ctrl_interval_count'];
@@ -3515,7 +4117,7 @@ function updateIntervalDisplay() {
             addStatus('_ctrl_interval_count', '⏰ ' + _activeIntervals.length + '个定时任务', 'tool', true);
         }
         var now = Date.now();
-        list.innerHTML = _activeIntervals.map(function(item) {
+        var itemsHtml = _activeIntervals.map(function(item) {
             var display = item.taskName || item.command;
             if (display.length > 28) display = display.substring(0, 28) + '…';
             var elapsed = now - item.createdAt;
@@ -3529,6 +4131,8 @@ function updateIntervalDisplay() {
                 '<span class="sp-item-stop" onclick="stopIntervalFromUI(\'' + escapeHtml(item.taskName || item.id) + '\')" style="cursor:pointer;color:var(--danger);margin-left:4px;font-size:12px;flex-shrink:0;padding:0 2px;border-radius:3px;" title="停止任务">✕</span>' +
                 '</div>';
         }).join('');
+        if (list) list.innerHTML = itemsHtml;
+        if (tbList) tbList.innerHTML = itemsHtml;
     }
     // 更新 badge
     var badge = document.getElementById('status-panel-badge');
@@ -3546,6 +4150,44 @@ function showAddIntervalModal() {
     document.getElementById('interval-add-name').value = '';
     document.getElementById('interval-add-interval').value = '5000';
     document.getElementById('interval-add-content').value = '';
+}
+
+function toggleTasksInlineForm() {
+    var form = document.getElementById('tb-tasks-inline-form');
+    if (!form) return;
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    if (form.style.display === 'block') {
+        document.getElementById('tb-interval-name').value = '';
+        document.getElementById('tb-interval-ms').value = '5';
+        document.getElementById('tb-interval-content').value = '';
+    }
+}
+
+function doAddIntervalInline() {
+    var name = document.getElementById('tb-interval-name').value.trim();
+    var intervalSec = parseFloat(document.getElementById('tb-interval-ms').value) || 5;
+    var interval = Math.round(intervalSec * 1000); // 秒 → 毫秒
+    var mode = document.getElementById('tb-interval-mode').value;
+    var content = document.getElementById('tb-interval-content').value.trim();
+    if (!name) { alert('请输入任务名称'); return; }
+    if (!content) { alert('请输入命令或消息内容'); return; }
+    document.getElementById('tb-tasks-inline-form').style.display = 'none';
+    addActiveInterval({ taskName: name, command: content, interval: interval, mode: mode });
+    if (window.electronAPI && window.electronAPI.intervalAddFromUI) {
+        window.electronAPI.intervalAddFromUI({
+            taskName: name, interval: interval, mode: mode,
+            command: mode === 'command' ? content : '',
+            message: mode === 'trigger' ? content : ''
+        }).then(function(result) {
+            if (!result || !result.success) {
+                removeActiveInterval(name);
+                addActiveInterval({ taskName: name, command: content, interval: interval, mode: mode, error: true });
+            }
+        }).catch(function(e) {
+            removeActiveInterval(name);
+            addActiveInterval({ taskName: name, command: content, interval: interval, mode: mode, error: true });
+        });
+    }
 }
 
 function doAddIntervalFromUI() {
@@ -3600,27 +4242,42 @@ function stopIntervalFromUI(taskName) {
 async function refreshTerminals() {
     try {
         var result = await window.electronAPI.terminalList();
+        // 旧面板（已废弃，兼容保留）
         var list = document.getElementById('terminal-list');
         var count = document.getElementById('terminal-count');
-        if (!list) return;
+        // 新工具箱面板
+        var tbList = document.getElementById('tb-terminal-list');
+        var tbCount = document.getElementById('tb-terminal-count');
+        if (!list && !tbList) return;
         if (!result || !Array.isArray(result)) {
-            list.innerHTML = '<span class="sp-empty">无活跃终端</span>';
+            if (list) list.innerHTML = '<span class="sp-empty">无活跃终端</span>';
             if (count) count.textContent = '0';
+            if (tbList) tbList.innerHTML = '<span>无活跃终端</span>';
+            if (tbCount) tbCount.textContent = '0';
             return;
         }
         var active = result.filter(function(t) { return t.running; });
-        if (count) count.textContent = active.length;
-        if (active.length === 0) {
-            list.innerHTML = '<span class="sp-empty">无活跃终端</span>';
-        } else {
-            list.innerHTML = active.map(function(t) {
+        var activeHtml = active.length === 0
+            ? (list ? '<span class="sp-empty">无活跃终端</span>' : '<span>无活跃终端</span>')
+            : active.map(function(t) {
                 return '<div class="sp-item">' +
                     '<span class="sp-item-dot" style="color:#3fb950;">●</span>' +
                     '<code class="sp-item-code">' + escapeHtml(t.name) + '</code>' +
                     '<span class="sp-item-meta">' + (t.stdoutLen || 0) + 'B</span>' +
                     '</div>';
             }).join('');
-        }
+        if (count) count.textContent = active.length;
+        if (list) list.innerHTML = activeHtml;
+        if (tbCount) tbCount.textContent = active.length;
+        if (tbList) tbList.innerHTML = active.length === 0
+            ? '<span style="color:var(--text-muted);">无活跃终端</span>'
+            : active.map(function(t) {
+                return '<div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid var(--border-light);font-size:11px;">' +
+                    '<span style="color:#3fb950;font-size:10px;">●</span>' +
+                    '<code style="flex:1;color:var(--text-primary);">' + escapeHtml(t.name) + '</code>' +
+                    '<span style="color:var(--text-muted);font-size:10px;">' + (t.stdoutLen || 0) + 'B</span>' +
+                    '</div>';
+            }).join('');
     } catch (e) {
         console.warn('[Status] Refresh terminals failed:', e);
     }
@@ -3713,6 +4370,13 @@ window.electronAPI.onAgentMessage(function(data) {
     if (data.type === 'tasks-end') {
         // 任务链结束，清除状态条
         hideToolStatusBar();
+        // 清除工作流内预览（已统一到预览栏，这里仅清理可能残留的旧元素）
+        var curWf = getCurrentWorkflowWrapper();
+        if (curWf) {
+            var pv = curWf.querySelector('.wf-preview');
+            if (pv) pv.remove();
+        }
+        hidePreviewBar(2000);
         // 当前命令执行完毕，但任务链未结束（结果还要反馈给 DeepSeek，DeepSeek 可能继续生成）
         // 只有用户主动停止时才结束任务链
         isExecutingTasks = false;
@@ -3723,14 +4387,18 @@ window.electronAPI.onAgentMessage(function(data) {
             isGenerating = false;
             syncIntervalState();
             flushIntervalQueue(); // 停止时清空队列
+            _roundStartTime = 0;  // 轮次结束，停止计时
+            stopTokenStatsTimer();
+            hidePreviewBar(0);
+            updateTokenStats();
         }
         // 未停止：排队消息等最终 response 再发
         // 兜底：将所有仍处于"执行中"的卡片更新为"已完成"
-        var allCards = document.querySelectorAll('.tool-card');
+        var allCards = document.querySelectorAll('.tool-line');
         for (var ci = 0; ci < allCards.length; ci++) {
-            var st = allCards[ci].querySelector('.tool-status');
+            var st = allCards[ci].querySelector('.tl-status');
             if (st && st.textContent.indexOf('执行中') !== -1) {
-                st.innerHTML = '<span class="tool-status" style="font-size:12px;">● 已完成</span>';
+                st.innerHTML = '● 已完成';
             }
         }
         hideLoading();
@@ -3770,12 +4438,9 @@ window.electronAPI.onAgentMessage(function(data) {
         scrollToBottom(true);
         return;
     }
-    // 流式预览：更新"输出中..."的文字，并确保滚动跟随
+    // 流式预览：统一显示在输入框上方预览栏
     if (data.type === 'streaming-preview') {
-        var loadingText = document.getElementById('loading-text');
-        if (loadingText) {
-            loadingText.textContent = data.text ? '输出中 ' + data.text : '输出中';
-        }
+        showPreviewBar('DeepSeek', data.text ? ('输出中 ' + data.text) : '输出中', 'running');
         scrollToBottom();
         return;
     }
@@ -3792,34 +4457,12 @@ window.electronAPI.onAgentMessage(function(data) {
                 if (badge) badge.textContent = '折叠';
             }
         }
-        addAssistantSegments(data.segments);
-        // 如果有深度思考内容且深度思考已开启，附加到刚生成的回复气泡上方
+        // 推理过程合并到本轮 segments 最前面，一起渲染一起存储（避免单独成消息 + 错位）
         if (agentDeepThink && data.thinkContent) {
-            var area = document.getElementById('chat-area');
-            if (area) {
-                var groups = area.querySelectorAll('.msg-group');
-                var lastGroup = groups[groups.length - 1];
-                if (lastGroup) {
-                    var thinkDetails = document.createElement('details');
-                    thinkDetails.style.cssText = 'font-size:11px;margin:0 0 2px 0;';
-                    var thinkSummary = document.createElement('summary');
-                    thinkSummary.style.cssText = 'cursor:pointer;color:var(--text-muted);font-weight:400;padding:2px 8px;border-radius:4px;background:color-mix(in srgb, var(--accent-2) 8%, transparent);display:inline-block;font-size:10px;';
-                    thinkSummary.textContent = '推理过程';
-                    thinkDetails.appendChild(thinkSummary);
-                    var thinkBody = document.createElement('div');
-                    thinkBody.style.cssText = 'padding:6px 10px;margin-top:2px;background:color-mix(in srgb, var(--bg-elevated) 20%, transparent);border-radius:6px;color:var(--text-secondary);line-height:1.5;white-space:pre-wrap;font-size:11px;';
-                    thinkBody.textContent = data.thinkContent;
-                    thinkDetails.appendChild(thinkBody);
-                    // 插入到气泡内容的上方（气泡内第一子元素）
-                    var bubble = lastGroup.querySelector('.msg-bubble');
-                    if (bubble) {
-                        bubble.insertBefore(thinkDetails, bubble.firstChild);
-                    } else {
-                        lastGroup.insertBefore(thinkDetails, lastGroup.firstChild);
-                    }
-                }
-            }
+            data.segments = [{ type: 'think', content: data.thinkContent }].concat(data.segments || []);
         }
+        // 先渲染本轮 AI 回复（think 在最前，会挂到本轮气泡内最前面）
+        addAssistantSegments(data.segments);
         scrollToBottom();
         isExecutingTasks = hasCommands;
         syncIntervalState();
@@ -3830,6 +4473,11 @@ window.electronAPI.onAgentMessage(function(data) {
             syncIntervalState();
             flushIntervalQueue(); // 最终响应，清空定时消息队列
             showStatus('任务完成');
+            // 轮次结束：最终刷新一次后重置计时 + 隐藏预览栏
+            updateTokenStats();
+            _roundStartTime = 0;
+            stopTokenStatsTimer();
+            hidePreviewBar(0);
         }
         updateSendBtn();
     } else if (data.type === 'tool-results') {
@@ -3919,231 +4567,157 @@ sendPrompt = function() {
     return origSend.apply(this, arguments);
 };
 
-// ==================== QQ Bot 托管 ====================
+// ==================== QQ / 微信 / 飞书 分 Tab 管理 ====================
 var qqBotEnabled = false;
+var botPlatformData = {
+    qq: { bots: [], selectedId: '', instance: null, running: false, statusEl: 'qq-bot-status', verifyEl: 'qq-bot-verify', verifyCodeEl: 'qq-bot-verify-code', authEl: 'qq-bot-authorized', authOpenidEl: 'qq-bot-authorized-openid', queueEl: 'qq-bot-queue', queueCountEl: 'qq-bot-queue-count', startBtn: 'qq-bot-start-btn', stopBtn: 'qq-bot-stop-btn', listEl: 'qq-bot-list', countEl: 'qq-bot-count' },
+    wechat: { bots: [], selectedId: '', instance: null, running: false, statusEl: 'wechat-bot-status', verifyEl: 'wechat-bot-verify', verifyCodeEl: 'wechat-bot-verify-code', authEl: 'wechat-bot-authorized', authOpenidEl: 'wechat-bot-authorized-openid', queueEl: 'wechat-bot-queue', queueCountEl: 'wechat-bot-queue-count', startBtn: 'wechat-bot-start-btn', stopBtn: 'wechat-bot-stop-btn', listEl: 'wechat-bot-list', countEl: 'wechat-bot-count' },
+    feishu: { bots: [], selectedId: '', instance: null, running: false, statusEl: 'feishu-bot-status', verifyEl: 'feishu-bot-verify', verifyCodeEl: 'feishu-bot-verify-code', authEl: 'feishu-bot-authorized', authOpenidEl: 'feishu-bot-authorized-openid', queueEl: 'feishu-bot-queue', queueCountEl: 'feishu-bot-queue-count', startBtn: 'feishu-bot-start-btn', stopBtn: 'feishu-bot-stop-btn', listEl: 'feishu-bot-list', countEl: 'feishu-bot-count' }
+};
+var _activeBotPlatform = 'qq';   // 当前活跃运行中的平台
+var _botToastTimer = null;
 
-function toggleQQBot() {
-    qqBotEnabled = !qqBotEnabled;
-    var arrowEl = document.getElementById('qqbot-arrow');
-    if (arrowEl) {
-        arrowEl.textContent = qqBotEnabled ? '▼' : '▶';
-    }
-    document.getElementById('qqbot-panel').style.display = qqBotEnabled ? '' : 'none';
-    if (qqBotEnabled) {
-        loadQQBotList();
-        loadQQBotNetMode();
-    }
-}
-
-// 外网模式（localtunnel 穿透）
-var qqBotNetMode = 'lan';
-async function loadQQBotNetMode() {
-    try {
-        var res = await window.electronAPI.qqbotGetNetMode();
-        qqBotNetMode = res.mode || 'lan';
-        updateQQBotNetModeUI();
-    } catch(e) {}
-}
-function updateQQBotNetModeUI() {
-    var sw = document.getElementById('qqbot-netmode-switch');
-    var desc = document.getElementById('qqbot-netmode-desc');
-    if (sw) sw.classList.toggle('on', qqBotNetMode === 'wan');
-    if (desc) {
-        desc.textContent = qqBotNetMode === 'wan'
-            ? 'localtunnel 穿透，外网可访问'
-            : '自动替换为局域网 IP';
-    }
-}
-async function toggleQQBotNetMode() {
-    qqBotNetMode = qqBotNetMode === 'wan' ? 'lan' : 'wan';
-    updateQQBotNetModeUI();
-    try {
-        await window.electronAPI.qqbotSetNetMode(qqBotNetMode);
-    } catch(e) {}
+// Tab 切换
+function switchBotTab(tab) {
+    document.querySelectorAll('.bot-tab').forEach(function (el) {
+        var isActive = el.getAttribute('data-bot-tab') === tab;
+        el.style.color = isActive ? 'var(--text-primary)' : 'var(--text-muted)';
+        el.style.borderBottomColor = isActive ? 'var(--accent)' : 'transparent';
+    });
+    document.querySelectorAll('.bot-panel').forEach(function (el) {
+        el.style.display = el.getAttribute('data-bot-panel') === tab ? '' : 'none';
+    });
+    loadBotList(tab);
 }
 
-// 加载已保存的机器人列表
-var qqBotSelectedId = '';
-var qqBotRobotsList = [];
-function loadQQBotList() {
-    window.electronAPI.qqbotListRobots().then(function(robots) {
-        qqBotRobotsList = robots || [];
-        var dd = document.getElementById('qqbot-robot-dropdown');
-        if (!dd) return;
-        dd.innerHTML = '';
-        // 空白项
-        var emptyItem = document.createElement('div');
-        emptyItem.textContent = '-- 选择已保存的 Bot --';
-        emptyItem.style.cssText = 'padding:6px 10px;cursor:pointer;color:#666;font-size:12px;';
-        emptyItem.onclick = function() { selectQQBot(''); };
-        dd.appendChild(emptyItem);
-        (robots || []).forEach(function(r) {
+// 加载指定平台的 Bot 列表
+function loadBotList(platform) {
+    var listApi = platform === 'qq' ? window.electronAPI.qqbotListRobots
+        : platform === 'wechat' ? window.electronAPI.wechatbotListRobots
+        : window.electronAPI.feishubotListRobots;
+    if (!listApi) return;
+    listApi().then(function (bots) {
+        var data = botPlatformData[platform];
+        data.bots = bots || [];
+        var listEl = document.getElementById(data.listEl);
+        var countEl = document.getElementById(data.countEl);
+        if (countEl) countEl.textContent = data.bots.length;
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        if (!data.bots.length) {
+            listEl.innerHTML = '<div style="padding:8px;color:var(--text-muted);text-align:center;font-size:11px;">暂无 Bot，点击 +新建 创建</div>';
+            return;
+        }
+        data.bots.forEach(function (bot) {
             var item = document.createElement('div');
-            item.textContent = (r.name || r.id) + ' (' + (r.appId || '').substring(0, 6) + '...)';
-            item.style.cssText = 'padding:6px 10px;cursor:pointer;color:#ccc;font-size:12px;border-top:1px solid #2a2a4e;';
-            item.onmouseover = function() { this.style.background = '#2a2a4e'; };
-            item.onmouseout = function() { this.style.background = ''; };
-            (function(rid) { item.onclick = function() { selectQQBot(rid); }; })(r.id);
-            dd.appendChild(item);
+            item.style.cssText = 'padding:6px 10px;margin-bottom:3px;border-radius:4px;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:space-between;';
+            item.style.background = bot.id === data.selectedId ? 'color-mix(in srgb, var(--accent) 20%, transparent)' : 'transparent';
+            item.onmouseover = function () { if (bot.id !== data.selectedId) this.style.background = 'color-mix(in srgb, var(--bg-elevated) 50%, transparent)'; };
+            item.onmouseout = function () { this.style.background = bot.id === data.selectedId ? 'color-mix(in srgb, var(--accent) 20%, transparent)' : 'transparent'; };
+            var nameSpan = document.createElement('span');
+            nameSpan.textContent = bot.name || bot.id;
+            nameSpan.style.color = 'var(--text-primary)';
+            item.appendChild(nameSpan);
+            var badge = document.createElement('span');
+            badge.textContent = bot.id === data.selectedId ? '● 选中' : '';
+            badge.style.fontSize = '10px';
+            badge.style.color = 'var(--accent)';
+            item.appendChild(badge);
+            (function (bid) {
+                item.onclick = function () {
+                    data.selectedId = bid;
+                    loadBotList(platform);
+                };
+            })(bot.id);
+            listEl.appendChild(item);
         });
-        // 恢复选中
-        if (qqBotSelectedId) {
-            var text = document.getElementById('qqbot-robot-text');
-            if (text) text.textContent = (robots || []).filter(function(r) { return r.id === qqBotSelectedId; }).map(function(r) { return r.name; })[0] || '-- 选择已保存的 Bot --';
-        }
-        onQQBotSelectChange();
-    });
+    }).catch(function () {});
 }
 
-function selectQQBot(id) {
-    qqBotSelectedId = id;
-    document.getElementById('qqbot-robot-dropdown').style.display = 'none';
-    var text = document.getElementById('qqbot-robot-text');
-    if (id) {
-        window.electronAPI.qqbotListRobots().then(function(robots) {
-            var found = (robots || []).filter(function(r) { return r.id === id; });
-            text.textContent = found.length > 0 ? found[0].name : '-- 选择已保存的 Bot --';
-            onQQBotSelectChange();
-        });
-    } else {
-        text.textContent = '-- 选择已保存的 Bot --';
-        text.style.color = '#666';
-        onQQBotSelectChange();
-    }
-}
-
-function toggleQQBotDropdown() {
-    var dd = document.getElementById('qqbot-robot-dropdown');
-    if (!dd) return;
-    dd.style.display = dd.style.display === 'none' ? '' : 'none';
-}
-// 点击外部关闭 dropdown
-document.addEventListener('click', function(e) {
-    var dd = document.getElementById('qqbot-robot-dropdown');
-    var display = document.getElementById('qqbot-robot-display');
-    if (dd && display && !display.contains(e.target) && !dd.contains(e.target)) {
-        dd.style.display = 'none';
-    }
-});
-
-function getSelectedQQBotId() { return qqBotSelectedId; }
-function getSelectedQQBot() {
-    if (!qqBotSelectedId) return null;
-    for (var gi = 0; gi < qqBotRobotsList.length; gi++) {
-        if (qqBotRobotsList[gi].id === qqBotSelectedId) return qqBotRobotsList[gi];
-    }
-    return { id: qqBotSelectedId };
-}
-
-function onQQBotSelectChange() {
-    var hasSelection = !!qqBotSelectedId;
-    document.getElementById('qqbot-edit-btn').style.display = hasSelection ? '' : 'none';
-    document.getElementById('qqbot-del-btn').style.display = hasSelection ? '' : 'none';
-}
-
-function showQQBotEditModal(robot) {
-    var modal = document.getElementById('qqbot-edit-modal');
-    document.getElementById('qqbot-edit-title').textContent = robot ? '编辑 Bot' : '新建 Bot';
-    document.getElementById('qqbot-edit-name').value = robot ? (robot.name || '') : '';
-    document.getElementById('qqbot-edit-appid').value = robot ? (robot.appId || '') : '';
-    document.getElementById('qqbot-edit-secret').value = '';
-    modal._editId = robot ? robot.id : null;
-    modal.style.display = 'flex';
-}
-
-function doSaveQQBot() {
-    var modal = document.getElementById('qqbot-edit-modal');
-    var name = document.getElementById('qqbot-edit-name').value.trim();
-    var appId = document.getElementById('qqbot-edit-appid').value.trim();
-    var secret = document.getElementById('qqbot-edit-secret').value.trim();
-    var isEdit = !!modal._editId;
-    if (!name || !appId) { showQQBotAlert('请填写完整信息'); return; }
-    if (!isEdit && !secret) { showQQBotAlert('请填写 Secret'); return; }
-
-    var robot = {
-        id: modal._editId || 'robot_' + Date.now(),
-        name: name,
-        appId: appId,
-    };
-    if (secret) {
-        robot.clientSecret = secret;
-    } else if (isEdit) {
-        // 编辑时 secret 留空则保留原值，由 main.js 处理
-        robot.clientSecret = '';
-        robot._keepSecret = true;
-    } else {
-        robot.clientSecret = secret;
-    }
-    window.electronAPI.qqbotSaveRobot(robot).then(function(res) {
-        if (res.success) {
-            modal.style.display = 'none';
-            loadQQBotList();
-            // 自动选中新保存的
-            var sel = document.getElementById('qqbot-robot-select');
-            for (var oi = 0; oi < sel.options.length; oi++) {
-                if (sel.options[oi].value === robot.id) { sel.value = robot.id; break; }
+// 启动指定平台的 Bot
+function doStartQQBotById(platform) {
+    var data = botPlatformData[platform];
+    if (!data.selectedId) { showToast('请先在 ' + platform + ' 列表中选择一个 Bot', 'error'); return; }
+    var robot = data.bots.filter(function (r) { return r.id === data.selectedId; })[0];
+    if (!robot) { showToast('找不到所选 Bot', 'error'); return; }
+    _activeBotPlatform = platform;
+    qqBotEnabled = true;
+    var startApi, stopApi;
+    if (platform === 'wechat') { startApi = window.electronAPI.wechatbotStart; stopApi = window.electronAPI.wechatbotStop; }
+    else if (platform === 'feishu') { startApi = window.electronAPI.feishubotStart; stopApi = window.electronAPI.feishubotStop; }
+    else { startApi = function () { return window.electronAPI.qqbotStart({ appId: robot.appId, clientSecret: robot.clientSecret }); }; stopApi = window.electronAPI.qqbotStop; }
+    var startBtn = document.getElementById(data.startBtn);
+    if (startBtn) { startBtn.disabled = true; startBtn.textContent = '...'; }
+    startApi().then(function (res) {
+        if (startBtn) { startBtn.disabled = false; startBtn.textContent = '▶ 启动'; }
+        var statusEl = document.getElementById(data.statusEl);
+        if (res && res.success) {
+            data.running = true;
+            data.instance = stopApi;
+            if (statusEl) statusEl.textContent = '✅ 运行中';
+            document.getElementById(data.startBtn).style.display = 'none';
+            document.getElementById(data.stopBtn).style.display = '';
+            document.getElementById(data.stopBtn).onclick = function () { doStopQQBotById(platform); };
+            if (res.verifyCode) {
+                var verEl = document.getElementById(data.verifyEl);
+                if (verEl) verEl.style.display = '';
+                var vcEl = document.getElementById(data.verifyCodeEl);
+                if (vcEl) vcEl.textContent = res.verifyCode;
             }
-            onQQBotSelectChange();
+        } else {
+            data.running = false;
+            if (statusEl) statusEl.textContent = '❌ 启动失败: ' + ((res && res.error) || '未知错误');
         }
+    }).catch(function (e) {
+        var statusEl = document.getElementById(data.statusEl);
+        if (statusEl) statusEl.textContent = '❌ 启动失败: ' + e.message;
+        if (startBtn) { startBtn.disabled = false; startBtn.textContent = '▶ 启动'; }
     });
 }
 
-function doDeleteQQBot() {
-    if (!qqBotSelectedId) return;
-    showQQBotConfirm('确定删除此机器人配置？', function() {
-        window.electronAPI.qqbotDeleteRobot(qqBotSelectedId).then(function() {
-            selectQQBot('');
-            loadQQBotList();
+// 停止指定平台的 Bot
+function doStopQQBotById(platform) {
+    var data = botPlatformData[platform];
+    if (!data.instance) return;
+    data.instance().then(function () {
+        data.running = false;
+        data.instance = null;
+        document.getElementById(data.statusEl).textContent = '未启动';
+        document.getElementById(data.startBtn).style.display = '';
+        document.getElementById(data.stopBtn).style.display = 'none';
+        var verEl = document.getElementById(data.verifyEl); if (verEl) verEl.style.display = 'none';
+        var authEl = document.getElementById(data.authEl); if (authEl) authEl.style.display = 'none';
+        var queueEl = document.getElementById(data.queueEl); if (queueEl) queueEl.style.display = 'none';
+    });
+}
+
+// 删除指定平台选中的 Bot
+function doDeleteQQBotById(platform) {
+    var data = botPlatformData[platform];
+    if (!data.selectedId) { showToast('请先在列表中选择一个 Bot', 'error'); return; }
+    var delApi = platform === 'qq' ? window.electronAPI.qqbotDeleteRobot
+        : platform === 'wechat' ? window.electronAPI.wechatbotDeleteRobot
+        : window.electronAPI.feishubotDeleteRobot;
+    showQQBotConfirm('确定删除此机器人配置？', function () {
+        delApi(data.selectedId).then(function () {
+            data.selectedId = '';
+            loadBotList(platform);
         });
     });
 }
 
-function doStartQQBot() {
-    if (!qqBotSelectedId) { showQQBotAlert('请先选择或创建一个 Bot'); return; }
-
-    window.electronAPI.qqbotListRobots().then(function(robots) {
-        var robot = null;
-        for (var ri = 0; ri < robots.length; ri++) {
-            if (robots[ri].id === qqBotSelectedId) { robot = robots[ri]; break; }
-        }
-        if (!robot) { showQQBotAlert('找不到该 Bot 配置'); return; }
-
-        document.getElementById('qqbot-start-btn').disabled = true;
-        document.getElementById('qqbot-start-btn').textContent = '启动中...';
-
-        window.electronAPI.qqbotStart({
-            appId: robot.appId,
-            clientSecret: robot.clientSecret
-        }).then(function(res) {
-            document.getElementById('qqbot-start-btn').disabled = false;
-            document.getElementById('qqbot-start-btn').textContent = '启动';
-            if (res.success) {
-                document.getElementById('qqbot-status-text').textContent = '运行中';
-                document.getElementById('qqbot-start-btn').style.display = 'none';
-                document.getElementById('qqbot-stop-btn').style.display = '';
-                if (res.verifyCode) {
-                    document.getElementById('qqbot-verify-section').style.display = '';
-                    document.getElementById('qqbot-verify-code').textContent = res.verifyCode;
-                } else {
-                    document.getElementById('qqbot-verify-section').style.display = 'none';
-                }
-            } else {
-                showQQBotAlert('启动失败: ' + (res.error || '未知错误'));
-            }
-        });
-    });
+// Toast 提示
+function showToast(msg, type) {
+    var el = document.getElementById('bot-toast');
+    if (!el) { alert(msg); return; }
+    el.textContent = msg;
+    el.style.display = '';
+    el.style.borderColor = type === 'error' ? 'var(--danger)' : (type === 'success' ? 'var(--success)' : 'var(--border)');
+    el.style.color = type === 'error' ? 'var(--danger)' : (type === 'success' ? 'var(--success)' : 'var(--text-primary)');
+    if (_botToastTimer) clearTimeout(_botToastTimer);
+    _botToastTimer = setTimeout(function () { el.style.display = 'none'; }, 3500);
 }
-
-// DOM 弹窗替代 alert
-function showQQBotAlert(msg) {
-    var modal = document.getElementById('confirm-modal');
-    document.getElementById('confirm-modal-text').textContent = msg;
-    var okBtn = document.getElementById('confirm-modal-ok');
-    document.getElementById('confirm-modal-cancel').style.display = 'none';
-    okBtn.textContent = '确定';
-    okBtn.onclick = function() { modal.style.display = 'none'; okBtn.textContent = '确定'; okBtn.onclick = null; };
-    modal.style.display = 'flex';
-}
+function showQQBotAlert(msg) { showToast(msg, 'error'); }
 function showQQBotConfirm(msg, onOk) {
     var modal = document.getElementById('confirm-modal');
     document.getElementById('confirm-modal-text').textContent = msg;
@@ -4179,13 +4753,21 @@ window.electronAPI.onContinueConfirm(function(data) {
 });
 
 function doStopQQBot() {
+    // 停止当前活跃平台的 Bot
+    for (var pf in botPlatformData) {
+        if (botPlatformData[pf].running) { doStopQQBotById(pf); return; }
+    }
+}
+
+// 旧停止函数保留作为后备
+function doStopQQBotFallback() {
     window.electronAPI.qqbotStop().then(function() {
-        document.getElementById('qqbot-status-text').textContent = '未启动';
-        document.getElementById('qqbot-start-btn').style.display = '';
-        document.getElementById('qqbot-stop-btn').style.display = 'none';
-        document.getElementById('qqbot-verify-section').style.display = 'none';
-        document.getElementById('qqbot-authorized-section').style.display = 'none';
-        document.getElementById('qqbot-queue-info').style.display = 'none';
+        document.getElementById('qq-bot-status').textContent = '未启动';
+        document.getElementById('qq-bot-start-btn').style.display = '';
+        document.getElementById('qq-bot-stop-btn').style.display = 'none';
+        document.getElementById('qq-bot-verify').style.display = 'none';
+        document.getElementById('qq-bot-authorized').style.display = 'none';
+        document.getElementById('qq-bot-queue').style.display = 'none';
     });
 }
 
@@ -4211,10 +4793,49 @@ window.electronAPI.onQQBotMessage(function(msg) {
 
 // 接收授权成功通知
 window.electronAPI.onQQBotAuthorized(function(data) {
-    document.getElementById('qqbot-verify-section').style.display = 'none';
-    document.getElementById('qqbot-authorized-section').style.display = '';
-    document.getElementById('qqbot-authorized-openid').textContent = data.openid;
+    var d = botPlatformData['qq'];
+    document.getElementById(d.verifyEl).style.display = 'none';
+    document.getElementById(d.authEl).style.display = '';
+    document.getElementById(d.authOpenidEl).textContent = data.openid;
 });
+
+// 接收微信消息（与 QQ 同链路：填输入框 → sendPrompt）
+if (window.electronAPI.onWechatbotMessage) {
+    window.electronAPI.onWechatbotMessage(function (msg) {
+        var text = msg.content || msg.text || '';
+        var input = document.getElementById('prompt-input');
+        if (!input) return;
+        input.value = text;
+        sendPrompt();
+    });
+}
+if (window.electronAPI.onWechatbotAuthorized) {
+    window.electronAPI.onWechatbotAuthorized(function (data) {
+        var d = botPlatformData['wechat'];
+        document.getElementById(d.verifyEl).style.display = 'none';
+        document.getElementById(d.authEl).style.display = '';
+        document.getElementById(d.authOpenidEl).textContent = data.openid || '(微信)';
+    });
+}
+
+// 接收飞书消息
+if (window.electronAPI.onFeishubotMessage) {
+    window.electronAPI.onFeishubotMessage(function (msg) {
+        var text = msg.content || msg.text || '';
+        var input = document.getElementById('prompt-input');
+        if (!input) return;
+        input.value = text;
+        sendPrompt();
+    });
+}
+if (window.electronAPI.onFeishubotAuthorized) {
+    window.electronAPI.onFeishubotAuthorized(function (data) {
+        var d = botPlatformData['feishu'];
+        document.getElementById(d.verifyEl).style.display = 'none';
+        document.getElementById(d.authEl).style.display = '';
+        document.getElementById(d.authOpenidEl).textContent = data.openid || '(飞书)';
+    });
+}
 
 // 接收 QQ Bot 指令同步（来自手机远程控制）
 window.electronAPI.onQQBotCommand(function(data) {
@@ -4245,7 +4866,6 @@ window.electronAPI.onQQBotCommand(function(data) {
             // main.js 已调用 __dsagent_newChatAndSendInit 创建新对话
             // agentview 仅重置自身状态并开始轮询获取 URL
             closeCurrentConversation();
-            document.getElementById('pre-init-section').style.display = 'none';
             document.getElementById('post-init-section').style.display = 'block';
             initCompleted = true;
             // 同步 mode / deepthink（由 IPC 传入）
@@ -4256,7 +4876,11 @@ window.electronAPI.onQQBotCommand(function(data) {
             if (typeof data.deepthink === 'boolean') {
                 agentDeepThink = data.deepthink;
                 document.getElementById('deepthink-switch').classList.toggle('on', agentDeepThink);
+                var dtPill3 = document.getElementById('deepthink-pill');
+                if (dtPill3) dtPill3.classList.toggle('on', agentDeepThink);
             }
+            // 初始化 segmented slider 指示器位置
+            requestAnimationFrame(function() { if (window.setConfirmMode) setConfirmMode('smart', false); });
             // 创建新历史记录
             conversationId = Date.now();
             currentHistoryId = String(conversationId);
@@ -4271,7 +4895,7 @@ window.electronAPI.onQQBotCommand(function(data) {
             // 刷新侧边栏
             loadHistoryList();
             // 保存 DeepSeek URL（由 main.js 直接返回）
-            if (data.url && data.url.indexOf('/chat/') >= 0) {
+            if (data.url && /\/chat\/[^?#]+/.test(data.url)) {
                 currentHistoryDeepseekUrl = data.url;
                 if (currentHistoryId) {
                     window.electronAPI.historyLoadUrl(currentHistoryId, data.url);
@@ -4282,7 +4906,7 @@ window.electronAPI.onQQBotCommand(function(data) {
                 setTimeout(function pollUrl() {
                     window.electronAPI.agentGetDeepseekUrl().then(function(urlObj) {
                         var url = urlObj && urlObj.url;
-                        if (url && url.indexOf('/chat/') >= 0) {
+                        if (url && /\/chat\/[^?#]+/.test(url)) {
                             currentHistoryDeepseekUrl = url;
                             if (currentHistoryId) {
                                 window.electronAPI.historyLoadUrl(currentHistoryId, url);
@@ -4301,24 +4925,135 @@ window.electronAPI.onQQBotCommand(function(data) {
     }
 });
 
-// 轮询 QQ Bot 状态（更新队列信息）
+// 定位 segmented slider 指示器（带重试，确保首次启动 splash 移除后也能正确定位）
+function positionSegIndicator(seg, activeBtn, retries) {
+    retries = retries || 0;
+    if (!seg || !activeBtn) return;
+    var ind = seg.querySelector('.seg-indicator');
+    if (!ind) return;
+    var w = activeBtn.offsetWidth;
+    if (w > 0) {
+        ind.style.left = activeBtn.offsetLeft + 'px';
+        ind.style.width = w + 'px';
+    } else if (retries < 20) {
+        // 元素尚未布局（splash 遮罩 / display:none），延迟重试
+        setTimeout(function() { positionSegIndicator(seg, activeBtn, retries + 1); }, 80);
+    }
+}
+
+// 审核模式切换（高亮当前按钮 + 滑动指示器）
+window.setConfirmMode = function(mode, skipHighlight) {
+    if (!skipHighlight) {
+        var isCustom = mode.indexOf('custom:') === 0;
+        var bm = isCustom ? 'custom' : mode;
+        var seg = document.getElementById('cfm-segmented');
+        var activeBtn = null;
+        document.querySelectorAll('.cfm-btn').forEach(function(b) {
+            var isActive = b.getAttribute('data-mode') === bm;
+            b.classList.toggle('active', isActive);
+            if (isActive) activeBtn = b;
+        });
+        // 滑动指示器：移动到选中按钮的位置/宽度，并切换配色
+        // 用 offsetLeft/offsetWidth 而非 getBoundingClientRect，避免祖先 display:none 时返回 0
+        if (seg && activeBtn) {
+            seg.setAttribute('data-active', bm);
+            positionSegIndicator(seg, activeBtn);
+        }
+    }
+    // 自定义模式：弹窗让用户配置
+    if (mode === 'custom') {
+        showCustomConfirmMode();
+        return;
+    }
+    // 保存配置
+    window.electronAPI.agentConfigLoad().then(function(res) {
+        if (res.success) {
+            var cfg = res.config || {};
+            cfg.confirmMode = mode;
+            window.electronAPI.agentConfigSave(cfg).catch(function() {});
+        }
+    }).catch(function() {});
+    // 同步到主进程
+    if (window.electronAPI && window.electronAPI.sendToMain) {
+        window.electronAPI.sendToMain('ctrl-set-confirm-mode', mode);
+    }
+};
+
+// 自定义审核弹窗
+var _customConfirmFields = [
+    { key: 'exec', label: '执行命令' },
+    { key: 'delete', label: '删除文件' },
+    { key: 'write', label: '写入文件' },
+    { key: 'edit', label: '编辑文件' },
+    { key: 'mkdir', label: '创建目录' }
+];
+function showCustomConfirmMode() {
+    var container = document.getElementById('custom-confirm-items');
+    if (!container) return;
+    // 读取当前配置
+    window.electronAPI.agentConfigLoad().then(function(res) {
+        var curMode = (res && res.config && res.config.confirmMode) || '';
+        container.innerHTML = _customConfirmFields.map(function(f) {
+            var enabled = curMode.indexOf(f.key + '=0') === -1; // not explicitly disabled
+            return '<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;background:color-mix(in srgb, var(--bg-elevated) 40%, transparent);cursor:pointer;font-size:13px;">'
+                + '<input type="checkbox" ' + (enabled ? 'checked' : '') + ' data-key="' + f.key + '" style="accent-color:var(--accent);">'
+                + '<span style="color:var(--text-primary);">' + f.label + '</span></label>';
+        }).join('');
+        document.getElementById('custom-confirm-modal').style.display = 'flex';
+    });
+}
+function closeCustomConfirm() {
+    document.getElementById('custom-confirm-modal').style.display = 'none';
+}
+function saveCustomConfirm() {
+    var items = document.querySelectorAll('#custom-confirm-items input[type=checkbox]');
+    var parts = [];
+    items.forEach(function(cb) { parts.push(cb.dataset.key + '=' + (cb.checked ? '1' : '0')); });
+    var mode = 'custom:' + parts.join(',');
+    closeCustomConfirm();
+    setConfirmMode(mode, true);
+    // 保存配置
+    window.electronAPI.agentConfigLoad().then(function(res) {
+        if (res.success) {
+            var cfg = res.config || {};
+            cfg.confirmMode = mode;
+            window.electronAPI.agentConfigSave(cfg).catch(function() {});
+        }
+    }).catch(function() {});
+    if (window.electronAPI && window.electronAPI.sendToMain) {
+        window.electronAPI.sendToMain('ctrl-set-confirm-mode', mode);
+    }
+}
+
+// 轮询所有 Bot 状态（更新队列/授权信息）
 setInterval(function() {
     if (!qqBotEnabled) return;
-    window.electronAPI.qqbotStatus().then(function(status) {
-        if (status.running) {
-            document.getElementById('qqbot-status-text').textContent = '运行中';
-        }
-        if (status.authorized) {
-            document.getElementById('qqbot-authorized-section').style.display = '';
-            document.getElementById('qqbot-authorized-openid').textContent = status.openid || '';
-        }
-        if (status.queueLength > 0 || status.processing) {
-            document.getElementById('qqbot-queue-info').style.display = '';
-            document.getElementById('qqbot-queue-count').textContent = status.queueLength;
-        } else {
-            document.getElementById('qqbot-queue-info').style.display = 'none';
-        }
-    });
+    var pf;
+    for (pf in botPlatformData) {
+        if (!botPlatformData[pf].running) continue;
+        var d = botPlatformData[pf];
+        // 调用对应状态 API——所有平台通过同一方法获取状态
+        var statusApi = pf === 'qq' ? window.electronAPI.qqbotStatus
+            : pf === 'wechat' ? window.electronAPI.wechatbotStatus
+            : window.electronAPI.feishubotStatus;
+        if (!statusApi) continue;
+        statusApi().then(function(status) {
+            if (status.running) {
+                document.getElementById(d.statusEl).textContent = '✅ 运行中';
+            }
+            if (status.authorized) {
+                document.getElementById(d.authEl).style.display = '';
+                document.getElementById(d.authOpenidEl).textContent = status.openid || '';
+                document.getElementById(d.verifyEl).style.display = 'none';
+            }
+            if (status.queueLength > 0 || status.processing) {
+                document.getElementById(d.queueEl).style.display = '';
+                document.getElementById(d.queueCountEl).textContent = status.queueLength;
+            } else {
+                document.getElementById(d.queueEl).style.display = 'none';
+            }
+        }).catch(function() {});
+    }
 }, 3000);
 
 // ==================== MCP 配置管理 ====================
@@ -4329,6 +5064,7 @@ var mcpEditType = 'stdio';
 function toggleMcpPanel() {
     var panel = document.getElementById('mcp-panel');
     var arrow = document.getElementById('mcp-arrow');
+    if (!panel || !arrow) return;
     if (panel.style.display === 'none') {
         panel.style.display = 'block';
         arrow.textContent = '▼';
@@ -4828,6 +5564,8 @@ function startSplash() {
     var overlay = document.getElementById('splash-overlay');
     if (!bar || !overlay) { setTimeout(startSplash, 50); return; }
 
+    // 透明背景露出 deepseek/qwen
+    document.body.classList.add('startup');
 
     // 监听主进程发来的启动进度（DeepSeek→Qwen→Agent 顺序加载）
     if (window.electronAPI && window.electronAPI.onSplashProgress) {
@@ -4844,6 +5582,11 @@ function startSplash() {
             if (status) status.textContent = '启动完成！';
             setTimeout(function() {
                 if (overlay) overlay.classList.add('hidden');
+                document.body.classList.remove('startup');
+                // splash 移除后重新定位滑块指示器（首次启动关键修复）
+                var seg = document.getElementById('cfm-segmented');
+                var ab = seg && seg.querySelector('.cfm-btn.active');
+                if (seg && ab) positionSegIndicator(seg, ab);
             }, 500);
         });
     }
@@ -4860,6 +5603,10 @@ function startSplash() {
     function next() {
         if (i >= stages.length) {
             if (overlay) overlay.classList.add('hidden');
+            // splash 兜底移除后重新定位滑块指示器
+            var seg2 = document.getElementById('cfm-segmented');
+            var ab2 = seg2 && seg2.querySelector('.cfm-btn.active');
+            if (seg2 && ab2) positionSegIndicator(seg2, ab2);
             return;
         }
         var s = stages[i++];
@@ -4885,9 +5632,14 @@ addAssistantSegments = function(segments, skipSave) {
                 var name = p.replace(/\\/g, '/').split('/').pop().replace(/^\s+|\s+$/g, '');
                 return '`' + name + '`';
             });
-            // 兼容旧格式 path="..."
-            t = t.replace(/path\s*=\s*["'][^"']+["']/gi, function(m) {
-                var name = m.replace(/\\/g, '/').split('/').pop().replace(/^path\s*=\s*["']|["']$/gi, '');
+            // 兼容旧格式 path="..."  → 替换为 <file>路径</file> XML 格式
+            t = t.replace(/path\s*=\s*["']([^"']+)["']/gi, function(m, p) {
+                var fullPath = p.trim();
+                return '<file>' + fullPath + '</file>';
+            });
+            // 将 <file>path</file> 替换为 `文件名`（文本中保持简洁）
+            t = t.replace(/<file>([\s\S]*?)<\/file>/g, function(m, p) {
+                var name = p.replace(/\\/g, '/').split('/').pop().replace(/^\s+|\s+$/g, '');
                 return '`' + name + '`';
             });
             textParts.push(t);
@@ -4903,6 +5655,11 @@ addAssistantSegments = function(segments, skipSave) {
         while ((m = pathRegex.exec(s.content || '')) !== null) {
             filePaths.push(m[1]);
         }
+        // 提取 <file>path</file> XML 格式的路径（由 addAssistantSegments 转换或 AI 直接输出）
+        var fileXmlRegex = /<file>([\s\S]*?)<\/file>/gi;
+        while ((m = fileXmlRegex.exec(s.content || '')) !== null) {
+            filePaths.push(m[1].trim());
+        }
     });
     // 去重
     var seen = {};
@@ -4912,10 +5669,15 @@ addAssistantSegments = function(segments, skipSave) {
         return true;
     });
     if (textParts.length > 0 || filePaths.length > 0) {
-        window.electronAPI.qqbotSendResponse({
-            text: textParts.join('\n\n'),
-            files: filePaths
-        });
+        var replyData = { text: textParts.join('\n\n'), files: filePaths };
+        // 按当前活跃平台分发回复
+        if (_activeBotPlatform === 'wechat' && window.electronAPI.wechatbotSendResponse) {
+            window.electronAPI.wechatbotSendResponse(replyData);
+        } else if (_activeBotPlatform === 'feishu' && window.electronAPI.feishubotSendResponse) {
+            window.electronAPI.feishubotSendResponse(replyData);
+        } else if (window.electronAPI.qqbotSendResponse) {
+            window.electronAPI.qqbotSendResponse(replyData);
+        }
     }
 };
 
@@ -4948,13 +5710,14 @@ function closeCurrentConversation() {
     area.innerHTML = '';
     var empty = document.createElement('div');
     empty.className = 'empty-msg';
-    empty.textContent = '选择模式后点击「创建对话」开始';
-    area.appendChild(empty);
-    document.getElementById('pre-init-section').style.display = '';
-    document.getElementById('post-init-section').style.display = 'none';
+    empty.innerHTML = '<div style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">欢迎使用 DeepSeek Agent</div><div style="font-size:12px;color:var(--text-muted);">选择一个模型开始对话</div>';
+area.appendChild(empty);
     document.getElementById('newchat-modal').style.display = 'none';
     var input = document.getElementById('prompt-input');
     if (input) { input.disabled = false; input.value = ''; }
+
+    // 重置 token 计数面板显示（initCompleted=false → 隐藏）
+    updateTokenStats();
 }
 
 // 阻塞遮罩
@@ -4998,21 +5761,17 @@ function showPreInitPanel() {
     area.innerHTML = '';
     var empty = document.createElement('div');
     empty.className = 'empty-msg';
-    empty.textContent = '选择模式后点击「创建对话」开始';
-    area.appendChild(empty);
+    empty.innerHTML = '<div style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">欢迎使用 DeepSeek Agent</div><div style="font-size:12px;color:var(--text-muted);">选择一个模型开始对话</div>';
+area.appendChild(empty);
     // 显示预创建面板
-    document.getElementById('pre-init-section').style.display = '';
-    document.getElementById('post-init-section').style.display = 'none';
     document.getElementById('newchat-modal').style.display = 'none';
     document.getElementById('send-prompt-btn').disabled = false;
-    document.getElementById('send-prompt-btn').textContent = '发送';
+    document.getElementById('send-prompt-btn').innerHTML = _sendIconSvg;
     document.getElementById('send-prompt-btn').classList.remove('stop-btn');
     hideLoading();
-    // 同步模式选择器
-    document.querySelectorAll('#pre-init-mode-selector .mode-btn').forEach(function(b) {
-        b.classList.toggle('active', b.getAttribute('data-mode') === agentMode);
-    });
     loadHistoryList();
+    // 重置 token 计数面板显示（initCompleted=false → 隐藏）
+    updateTokenStats();
 }
 
 // 监听主进程的关闭对话指令（目录切换时触发）
@@ -5403,7 +6162,8 @@ function openToolbox(tab) {
         window.__toolbox_migrated = true;
         // MCP 面板（原底部已删除，直接在工具箱渲染）
         var mcpBody = document.getElementById('tb-mcp-body');
-        if (mcpBody) mcpBody.innerHTML = '<div style="margin-bottom:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+        if (mcpBody) mcpBody.innerHTML = '<div style="margin:0 0 4px;font-size:15px;color:var(--text-primary);font-weight:600;">MCP 管理</div>'
+            + '<div style="margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
             + '<span style="color:var(--text-secondary);font-size:12px;">全局配置</span>'
             + '<span id="mcp-global-count" style="font-size:11px;color:var(--text-muted);">0 个服务器</span>'
             + '<button onclick="document.getElementById(\'tb-mcp-import\').click()" style="margin-left:auto;padding:5px 12px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">📂 导入</button>'
@@ -5417,49 +6177,115 @@ function openToolbox(tab) {
             + '<button onclick="saveMcpInlineForm()" style="flex:1;padding:6px 0;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;font-weight:600;">保存</button>'
             + '<button onclick="toggleMcpInlineForm()" style="flex:1;padding:6px 0;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);cursor:pointer;font-size:11px;">取消</button></div></div>'
             + '<div id="mcp-server-list" style="max-height:180px;overflow-y:auto;margin-bottom:10px;font-size:12px;"></div>'
-            + '<div style="display:flex;gap:8px;margin-bottom:12px;"><button onclick="reloadMcpServers()" style="flex:1;padding:6px 0;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">🔄 重载</button></div>'
             + '<div style="font-size:13px;font-weight:500;color:var(--accent-2);margin-bottom:6px;">🛠️ 已注册工具</div>'
-            + '<div id="mcp-tools-list" style="max-height:200px;overflow-y:auto;font-size:12px;color:var(--text-muted);"></div>';
-        // QQ 面板（原底部已删除，直接在工具箱渲染，使用原 ID 以便 loadQQBotList 等函数正常工作）
+            + '<div id="mcp-tools-list" style="flex:1;min-height:100px;overflow-y:auto;font-size:12px;color:var(--text-muted);"></div>';
+        // QQ / 微信 / 飞书 分 Tab 面板
         var qqBody = document.getElementById('tb-qqbot-body');
-        if (qqBody) qqBody.innerHTML = '<div style="margin-bottom:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
-            + '<span style="color:var(--text-secondary);font-size:12px;">选择 Bot</span>'
-            + '<div style="position:relative;flex:1;min-width:120px;">'
-            + '<div id="qqbot-robot-display" onclick="toggleQQBotDropdown()" style="padding:5px 8px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;">'
-            + '<span id="qqbot-robot-text" style="color:var(--text-muted);">-- 选择已保存的 Bot --</span>'
-            + '<span style="font-size:10px;color:var(--text-muted);">▾</span></div>'
-            + '<div id="qqbot-robot-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;z-index:100;max-height:180px;overflow-y:auto;"></div></div>'
-            + '<button onclick="toggleQQInlineForm()" style="padding:5px 12px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">+新建</button>'
-            + '<button id="qqbot-edit-btn" style="display:none;padding:5px 12px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;" onclick="showQQBotEditModal(getSelectedQQBot())">编辑</button>'
-            + '<button id="qqbot-del-btn" style="display:none;padding:5px 12px;background:var(--danger);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;" onclick="doDeleteQQBot()">删除</button></div>'
-            + '<div id="qq-inline-form" style="display:none;padding:10px 12px;background:color-mix(in srgb, var(--bg-elevated) 50%, transparent);border-radius:8px;border:1px solid var(--border);margin-bottom:10px;">'
-            + '<input id="qq-form-name" placeholder="名称" style="width:100%;padding:6px 8px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:12px;box-sizing:border-box;">'
-            + '<input id="qq-form-appid" placeholder="AppID" style="width:100%;padding:6px 8px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:12px;box-sizing:border-box;">'
-            + '<input id="qq-form-secret" type="password" placeholder="ClientSecret" style="width:100%;padding:6px 8px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:12px;box-sizing:border-box;">'
-            + '<div style="display:flex;gap:6px;">'
-            + '<button onclick="saveQQInlineForm()" style="flex:1;padding:6px 0;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;font-weight:600;">保存</button>'
-            + '<button onclick="toggleQQInlineForm()" style="flex:1;padding:6px 0;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);cursor:pointer;font-size:11px;">取消</button></div></div>'
-            + '<div style="display:flex;gap:8px;margin-bottom:10px;">'
-            + '<button id="qqbot-start-btn" onclick="doStartQQBot()" style="flex:1;padding:6px 0;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:12px;">启动</button>'
-            + '<button id="qqbot-stop-btn" onclick="doStopQQBot()" style="display:none;flex:1;padding:6px 0;background:var(--danger);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:12px;">停止</button></div>'
-            + '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">'
+        if (qqBody) qqBody.innerHTML =
+            // Tab 导航 + 全局控制栏
+            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px;">'
+            // SVG 图标：QQ
+            + '<div class="bot-tab active" data-bot-tab="qq" onclick="switchBotTab(\'qq\')" style="display:flex;align-items:center;gap:4px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:500;border-bottom:2px solid var(--accent);color:var(--text-primary);">'
+            + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C8 2 4 5 4 9c0 2.5 1.5 4.5 3 6l-1 4 3-2c1 .5 2 1 3 1s2-.5 3-1l3 2-1-4c1.5-1.5 3-3.5 3-6 0-4-4-7-8-7z"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/><circle cx="15" cy="9" r="1.5" fill="currentColor"/></svg>'
+            + 'QQ</div>'
+            // SVG 图标：微信
+            + '<div class="bot-tab" data-bot-tab="wechat" onclick="switchBotTab(\'wechat\')" style="display:flex;align-items:center;gap:4px;padding:6px 14px;cursor:pointer;font-size:12px;color:var(--text-muted);border-bottom:2px solid transparent;">'
+            + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 12c-2.2 0-4 1.3-4 3s1.8 3 4 3h1l1.5 2L12 18h2c2.2 0 4-1.3 4-3s-1.8-3-4-3"/><path d="M16 6c-2.2 0-4 1.3-4 3s1.8 3 4 3h1l1.5 2L20 12h2c2.2 0 4-1.3 4-3s-1.8-3-4-3z" transform="translate(-4,-2) scale(0.85)"/></svg>'
+            + '微信</div>'
+            // SVG 图标：飞书
+            + '<div class="bot-tab" data-bot-tab="feishu" onclick="switchBotTab(\'feishu\')" style="display:flex;align-items:center;gap:4px;padding:6px 14px;cursor:pointer;font-size:12px;color:var(--text-muted);border-bottom:2px solid transparent;">'
+            + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M4 8h16"/><path d="M8 4v16"/><circle cx="12" cy="12" r="2"/><path d="M12 8v2m0 2v2"/></svg>'
+            + '飞书</div>'
+            + '<div style="flex:1;"></div>'
+            // 外网模式（全局，所有 Bot 共用）
             + '<div class="switch" onclick="toggleQQBotNetMode()" id="qqbot-netmode-switch" style="flex-shrink:0;"></div>'
-            + '<label onclick="toggleQQBotNetMode()" style="font-size:11px;color:var(--text-secondary);cursor:pointer;">🌐 外网模式</label></div>'
-            + '<div id="qqbot-status-text" style="font-size:11px;color:var(--text-muted);"></div>'
-            + '<div id="qqbot-verify-section" style="display:none;margin-top:6px;padding:8px;background:color-mix(in srgb, var(--success) 15%, transparent);border:1px solid var(--success);border-radius:6px;text-align:center;"><div style="font-size:11px;color:var(--success);margin-bottom:4px;">✅ 校验码</div><div id="qqbot-verify-code" style="font-size:20px;font-weight:bold;color:var(--accent);letter-spacing:4px;font-family:monospace;">0000</div></div>'
-            + '<div id="qqbot-authorized-section" style="display:none;margin-top:6px;padding:6px 8px;background:color-mix(in srgb, var(--success) 10%, transparent);border:1px solid var(--success);border-radius:6px;"><span style="color:var(--success);font-size:12px;">✅ 已授权 </span><span id="qqbot-authorized-openid" style="color:var(--accent);font-family:monospace;font-size:12px;"></span></div>'
-            + '<div id="qqbot-queue-info" style="display:none;margin-top:4px;font-size:11px;color:var(--text-muted);">等待队列: <span id="qqbot-queue-count">0</span></div>';
+            + '<label onclick="toggleQQBotNetMode()" style="font-size:11px;color:var(--text-secondary);cursor:pointer;user-select:none;">🌐 外网模式</label>'
+            + '</div>'
+            // QQ Tab
+            + '<div class="bot-panel" data-bot-panel="qq">'
+            + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;">'
+            + '<span style="font-size:12px;color:var(--text-secondary);">已保存的 QQ Bot：</span>'
+            + '<span id="qq-bot-count" style="font-size:11px;color:var(--text-muted);">0</span>'
+            + '<div style="flex:1;"></div>'
+            + '<button onclick="showQQBotEditModal(null)" style="padding:4px 10px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">+新建</button>'
+            + '</div>'
+            + '<div id="qq-bot-list" style="max-height:120px;overflow-y:auto;margin-bottom:10px;font-size:12px;"></div>'
+            + '<div style="display:flex;gap:6px;margin-bottom:10px;">'
+            + '<button id="qq-bot-start-btn" onclick="doStartQQBotById(\'qq\')" style="flex:1;padding:6px 0;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">▶ 启动</button>'
+            + '<button id="qq-bot-stop-btn" style="display:none;flex:1;padding:6px 0;background:var(--danger);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">■ 停止</button>'
+            + '<button onclick="doDeleteQQBotById(\'qq\')" style="padding:6px 10px;background:transparent;border:1px solid var(--danger);border-radius:6px;color:var(--danger);cursor:pointer;font-size:11px;">🗑 删除</button>'
+            + '</div>'
+            + '<div style="padding:8px 10px;background:color-mix(in srgb, var(--bg-elevated) 40%, transparent);border-radius:6px;margin-bottom:8px;">'
+            + '<span id="qq-bot-status" style="font-size:11px;color:var(--text-muted);">未启动</span>'
+            + '</div>'
+            + '<div id="qq-bot-verify" style="display:none;margin-bottom:6px;padding:8px;background:color-mix(in srgb, var(--success) 15%, transparent);border:1px solid var(--success);border-radius:6px;text-align:center;"><div style="font-size:11px;color:var(--success);margin-bottom:4px;">✅ 校验码</div><div id="qq-bot-verify-code" style="font-size:20px;font-weight:bold;color:var(--accent);letter-spacing:4px;font-family:monospace;">0000</div></div>'
+            + '<div id="qq-bot-authorized" style="display:none;margin-bottom:4px;padding:6px 8px;background:color-mix(in srgb, var(--success) 10%, transparent);border:1px solid var(--success);border-radius:6px;"><span style="color:var(--success);font-size:12px;">✅ 已授权 </span><span id="qq-bot-authorized-openid" style="color:var(--accent);font-family:monospace;font-size:12px;"></span></div>'
+            + '<div id="qq-bot-queue" style="display:none;font-size:11px;color:var(--text-muted);">排队: <span id="qq-bot-queue-count">0</span></div>'
+            + '</div>'
+            // 微信 Tab
+            + '<div class="bot-panel" data-bot-panel="wechat" style="display:none;">'
+            + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;">'
+            + '<span style="font-size:12px;color:var(--text-secondary);">已保存的微信 Bot：</span>'
+            + '<span id="wechat-bot-count" style="font-size:11px;color:var(--text-muted);">0</span>'
+            + '<div style="flex:1;"></div>'
+            + '<button onclick="showQQBotEditModal(null, \'wechat\')" style="padding:4px 10px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">+新建</button>'
+            + '</div>'
+            + '<div id="wechat-bot-list" style="max-height:120px;overflow-y:auto;margin-bottom:10px;font-size:12px;"></div>'
+            + '<div style="display:flex;gap:6px;margin-bottom:10px;">'
+            + '<button id="wechat-bot-start-btn" onclick="doStartQQBotById(\'wechat\')" style="flex:1;padding:6px 0;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">▶ 启动</button>'
+            + '<button id="wechat-bot-stop-btn" style="display:none;flex:1;padding:6px 0;background:var(--danger);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">■ 停止</button>'
+            + '<button onclick="doDeleteQQBotById(\'wechat\')" style="padding:6px 10px;background:transparent;border:1px solid var(--danger);border-radius:6px;color:var(--danger);cursor:pointer;font-size:11px;">🗑 删除</button>'
+            + '</div>'
+            + '<div style="padding:8px 10px;background:color-mix(in srgb, var(--bg-elevated) 40%, transparent);border-radius:6px;margin-bottom:8px;">'
+            + '<div id="wechat-bot-status" style="font-size:11px;color:var(--text-muted);">未启动</div>'
+            + '</div>'
+            + '<div id="wechat-bot-verify" style="display:none;margin-bottom:6px;padding:8px;background:color-mix(in srgb, var(--success) 15%, transparent);border:1px solid var(--success);border-radius:6px;text-align:center;"><div style="font-size:11px;color:var(--success);margin-bottom:4px;">✅ 校验码</div><div id="wechat-bot-verify-code" style="font-size:20px;font-weight:bold;color:var(--accent);letter-spacing:4px;font-family:monospace;">0000</div></div>'
+            + '<div id="wechat-bot-authorized" style="display:none;margin-bottom:4px;padding:6px 8px;background:color-mix(in srgb, var(--success) 10%, transparent);border:1px solid var(--success);border-radius:6px;"><span style="color:var(--success);font-size:12px;">✅ 已授权 </span><span id="wechat-bot-authorized-openid" style="color:var(--accent);font-family:monospace;font-size:12px;"></span></div>'
+            + '<div id="wechat-bot-queue" style="display:none;font-size:11px;color:var(--text-muted);">排队: <span id="wechat-bot-queue-count">0</span></div>'
+            + '</div>'
+            // 飞书 Tab
+            + '<div class="bot-panel" data-bot-panel="feishu" style="display:none;">'
+            + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;">'
+            + '<span style="font-size:12px;color:var(--text-secondary);">已保存的飞书 Bot：</span>'
+            + '<span id="feishu-bot-count" style="font-size:11px;color:var(--text-muted);">0</span>'
+            + '<div style="flex:1;"></div>'
+            + '<button onclick="showQQBotEditModal(null, \'feishu\')" style="padding:4px 10px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">+新建</button>'
+            + '</div>'
+            + '<div id="feishu-bot-list" style="max-height:120px;overflow-y:auto;margin-bottom:10px;font-size:12px;"></div>'
+            + '<div style="display:flex;gap:6px;margin-bottom:10px;">'
+            + '<button id="feishu-bot-start-btn" onclick="doStartQQBotById(\'feishu\')" style="flex:1;padding:6px 0;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">▶ 启动</button>'
+            + '<button id="feishu-bot-stop-btn" style="display:none;flex:1;padding:6px 0;background:var(--danger);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">■ 停止</button>'
+            + '<button onclick="doDeleteQQBotById(\'feishu\')" style="padding:6px 10px;background:transparent;border:1px solid var(--danger);border-radius:6px;color:var(--danger);cursor:pointer;font-size:11px;">🗑 删除</button>'
+            + '</div>'
+            + '<div style="padding:8px 10px;background:color-mix(in srgb, var(--bg-elevated) 40%, transparent);border-radius:6px;margin-bottom:8px;">'
+            + '<div id="feishu-bot-status" style="font-size:11px;color:var(--text-muted);">未启动</div>'
+            + '</div>'
+            + '<div id="feishu-bot-verify" style="display:none;margin-bottom:6px;padding:8px;background:color-mix(in srgb, var(--success) 15%, transparent);border:1px solid var(--success);border-radius:6px;text-align:center;"><div style="font-size:11px;color:var(--success);margin-bottom:4px;">✅ 校验码</div><div id="feishu-bot-verify-code" style="font-size:20px;font-weight:bold;color:var(--accent);letter-spacing:4px;font-family:monospace;">0000</div></div>'
+            + '<div id="feishu-bot-authorized" style="display:none;margin-bottom:4px;padding:6px 8px;background:color-mix(in srgb, var(--success) 10%, transparent);border:1px solid var(--success);border-radius:6px;"><span style="color:var(--success);font-size:12px;">✅ 已授权 </span><span id="feishu-bot-authorized-openid" style="color:var(--accent);font-family:monospace;font-size:12px;"></span></div>'
+            + '<div id="feishu-bot-queue" style="display:none;font-size:11px;color:var(--text-muted);">排队: <span id="feishu-bot-queue-count">0</span></div>'
+            + '</div>';
         // 后台任务面板（直接渲染，不再从底部 DOM 迁移）
         var tasksBody = document.getElementById('tb-tasks-body');
-        if (tasksBody) tasksBody.innerHTML = '<div style="margin-bottom:8px;display:flex;align-items:center;gap:6px;">'
+        if (tasksBody) tasksBody.innerHTML = '<div style="margin:0 0 4px;font-size:15px;color:var(--text-primary);font-weight:600;">任务管理</div>'
+            + '<div style="margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:10px;display:flex;align-items:center;gap:6px;">'
             + '<span style="font-size:12px;font-weight:500;color:var(--text-secondary);">🔄 定时任务</span>'
             + '<span id="tb-interval-count" style="font-size:10px;color:var(--text-muted);">0</span>'
-            + '<button onclick="showAddIntervalModal()" style="margin-left:auto;padding:3px 10px;background:var(--accent-gradient);border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:10px;">+添加</button></div>'
+            + '<button onclick="toggleTasksInlineForm()" style="margin-left:auto;padding:5px 12px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;">+添加</button></div>'
+            + '<div id="tb-tasks-inline-form" style="display:none;padding:10px 12px;background:color-mix(in srgb, var(--bg-elevated) 50%, transparent);border-radius:8px;border:1px solid var(--border);margin-bottom:10px;">'
+            + '<input id="tb-interval-name" placeholder="任务名称（如：监控CPU）" style="width:100%;padding:6px 8px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:12px;box-sizing:border-box;">'
+            + '<div style="display:flex;gap:6px;margin-bottom:6px;">'
+            + '<input id="tb-interval-ms" type="number" placeholder="间隔（秒，默认5）" value="5" step="1" min="0.1" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:12px;box-sizing:border-box;">'
+            + '<select id="tb-interval-mode" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:12px;">'
+            + '<option value="command">执行命令</option>'
+            + '<option value="trigger">定时提醒</option></select></div>'
+            + '<textarea id="tb-interval-content" placeholder="命令或提醒消息内容" rows="2" style="width:100%;padding:6px 8px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:12px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>'
+            + '<div style="display:flex;gap:6px;">'
+            + '<button onclick="doAddIntervalInline()" style="flex:1;padding:6px 0;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;font-weight:600;">保存</button>'
+            + '<button onclick="toggleTasksInlineForm()" style="flex:1;padding:6px 0;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);cursor:pointer;font-size:11px;">取消</button></div></div>'
             + '<div id="tb-interval-list" style="max-height:120px;overflow-y:auto;font-size:11px;color:var(--text-muted);margin-bottom:14px;">无活跃定时任务</div>'
-            + '<div style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">'
+            + '<div style="margin-bottom:6px;display:flex;align-items:center;gap:6px;border-top:1px solid var(--border);padding-top:10px;">'
             + '<span style="font-size:12px;font-weight:500;color:var(--text-secondary);">💻 活跃终端</span>'
-            + '<span id="tb-terminal-count" style="font-size:10px;color:var(--text-muted);">0</span>'
-            + '<button onclick="refreshTerminals()" style="margin-left:auto;padding:2px 8px;font-size:9px;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">刷新</button></div>'
+            + '<span id="tb-terminal-count" style="font-size:10px;color:var(--text-muted);">0</span></div>'
             + '<div id="tb-terminal-list" style="max-height:100px;overflow-y:auto;font-size:11px;color:var(--text-muted);">无活跃终端</div>';
     }
     switchToolboxTab(tab || 'memory');
@@ -5509,24 +6335,79 @@ function saveMcpInlineForm() {
         });
     });
 }
-function toggleQQInlineForm() {
-    var form = document.getElementById('qq-inline-form');
-    if (!form) return;
-    form.style.display = form.style.display === 'none' ? 'block' : 'none';
-    if (form.style.display === 'block') {
-        document.getElementById('qq-form-name').value = '';
-        document.getElementById('qq-form-appid').value = '';
-        document.getElementById('qq-form-secret').value = '';
+
+function saveScannedBot(platform, cred, name) {
+    if (!cred) return;
+    var robot = {
+        id: 'robot_' + platform + '_' + Date.now(),
+        name: name || (platform === 'wechat' ? '微信Bot' : '飞书Bot'),
+        platform: platform
+    };
+    if (platform === 'wechat') {
+        robot.token = cred.token; robot.accountId = cred.accountId; robot.baseUrl = cred.baseUrl; robot.userId = cred.userId;
+    } else {
+        robot.appId = cred.appId; robot.appSecret = cred.appSecret; robot.domain = cred.domain;
     }
+    var saveApi = platform === 'wechat' ? window.electronAPI.wechatbotSaveRobot : window.electronAPI.feishubotSaveRobot;
+    saveApi(robot).then(function () {
+        document.getElementById('qq-inline-form').style.display = 'none';
+        loadQQBotList();   // 重新聚合三平台列表并刷新下拉
+        showToast('已保存：' + robot.name, 'success');
+        // 复位扫码区按钮
+        var sb = document.getElementById('qq-qr-start-btn'); if (sb) sb.style.display = '';
+        var rb = document.getElementById('qq-qr-refresh-btn'); if (rb) rb.style.display = 'none';
+    });
 }
 function saveQQInlineForm() {
     var name = document.getElementById('qq-form-name').value.trim();
+    var platform = (document.getElementById('qq-form-platform') || {}).value || 'qq';
     var appId = document.getElementById('qq-form-appid').value.trim();
     var secret = document.getElementById('qq-form-secret').value.trim();
-    if (!name || !appId) { alert('请填写名称和 AppID'); return; }
-    window.electronAPI.qqbotSaveRobot({ name: name, appId: appId, clientSecret: secret }).then(function() {
+    // 微信/飞书走扫码流程，不在此保存（由 saveScannedBot 处理）
+    if (platform !== 'qq') {
+        if (!name) { showToast('请填写名称', 'error'); return; }
+        if (!_botQrSessionQrcode && !document.getElementById('qq-qr-img').querySelector('img')) {
+            showToast('请先点击「获取二维码」并扫码登录', 'error'); return;
+        }
+        showToast('扫码登录成功后会自动保存，无需点保存按钮', 'info'); return;
+    }
+    if (!name || !appId) { showToast('请填写名称和 AppID', 'error'); return; }
+    if (!secret) { showToast('请填写 ClientSecret', 'error'); return; }
+    window.electronAPI.qqbotSaveRobot({ id: 'robot_' + Date.now(), name: name, platform: platform, appId: appId, clientSecret: secret }).then(function(res) {
         document.getElementById('qq-inline-form').style.display = 'none';
-        loadQQBotList();
+        // 保存成功后重新加载列表并自动选中新建的 Bot
+        window.electronAPI.qqbotListRobots().then(function(robots) {
+            // 按 name+appId 匹配（ID 由 main 进程生成，这里不用依赖返回值）
+            var match = (robots || []).filter(function(r) { return r.name === name && r.appId === appId; });
+            // 如果没找到精确匹配，用新返回的 ID
+            if (match.length === 0 && res && res.robot && res.robot.id) {
+                match = (robots || []).filter(function(r) { return r.id === res.robot.id; });
+            }
+            // 更新缓存并刷新下拉列表
+            qqBotRobotsList = robots || [];
+            qqBotSelectedId = match.length > 0 ? match[0].id : (res && res.robot ? res.robot.id : '');
+            // 重建下拉列表
+            var dd = document.getElementById('qqbot-robot-dropdown');
+            if (dd) {
+                dd.innerHTML = '';
+                var emptyItem = document.createElement('div');
+                emptyItem.textContent = '-- 选择已保存的 Bot --';
+                emptyItem.style.cssText = 'padding:6px 10px;cursor:pointer;color:#666;font-size:12px;';
+                emptyItem.onclick = function() { selectQQBot(''); };
+                dd.appendChild(emptyItem);
+                (robots || []).forEach(function(r) {
+                    var item = document.createElement('div');
+                    item.textContent = (r.name || r.id) + ' (' + (r.appId || '').substring(0, 6) + '...)';
+                    item.style.cssText = 'padding:6px 10px;cursor:pointer;color:#ccc;font-size:12px;border-top:1px solid #2a2a4e;';
+                    item.onmouseover = function() { this.style.background = '#2a2a4e'; };
+                    item.onmouseout = function() { this.style.background = ''; };
+                    (function(rid) { item.onclick = function() { selectQQBot(rid); }; })(r.id);
+                    dd.appendChild(item);
+                });
+            }
+            // 选中新建的 Bot
+            selectQQBot(qqBotSelectedId);
+        });
     });
 }
 function switchToolboxTab(tab) {
@@ -5542,19 +6423,33 @@ function switchToolboxTab(tab) {
     // 初始化各面板数据
     if (tab === 'memory') loadRoleMemory();
     if (tab === 'mcp') {
-        var p = document.getElementById('mcp-panel');
-        if (p) p.style.display = 'block';
         refreshMcpServerList();
-        loadMcpTools();
+        // 如果已有缓存数据（onAgentShowMcpTools 推过来的），直接渲染
+        if (mcpToolsData && mcpToolsData.length > 0) {
+            renderMcpToolsPanel();
+        } else {
+            // 否则重新获取
+            window.electronAPI.mcpGetTools().then(function(res) {
+                if (res && res.success) {
+                    mcpToolsData = res.tools || [];
+                    return window.electronAPI.mcpGetToolStates();
+                }
+                return null;
+            }).then(function(res2) {
+                if (res2 && res2.success) {
+                    mcpToolStates = res2.states || {};
+                }
+                renderMcpToolsPanel();
+            }).catch(function(e) {
+                console.error('load mcp tools failed:', e);
+                renderMcpToolsPanel();
+            });
+        }
     }
     if (tab === 'qqbot') {
-        var q = document.getElementById('qqbot-panel');
-        if (q) q.style.display = 'block';
         loadQQBotList();
     }
     if (tab === 'tasks') {
-        var s = document.getElementById('status-panel-body');
-        if (s) s.style.display = 'block';
         refreshTerminals();
     }
     if (tab === 'skills') openToolboxSkills();
@@ -5610,86 +6505,6 @@ function useSkillFromToolbox(idx) {
     activeSkills.push({ name: skill.name, instructions: skill.instructions });
     renderFilePanel();
     document.getElementById('file-panel-bar').style.display = '';
-}
-function renderMcpToolbox() {
-    var body = document.getElementById('tb-mcp-body');
-    if (!body) return;
-    // MCP 服务器列表
-    body.innerHTML = '<div style="margin-bottom:12px;"><button onclick="reloadMcpServers()" style="padding:6px 14px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:12px;font-weight:500;">🔄 重载</button></div>'
-        + '<div id="tb-mcp-server-list" style="margin-bottom:16px;"></div>'
-        + '<h4 style="font-size:13px;color:var(--text-secondary);margin:0 0 8px;">已注册工具</h4>'
-        + '<div id="tb-mcp-tools-list" style="font-size:12px;color:var(--text-muted);"></div>';
-    // 加载数据
-    refreshMcpServerList();
-    // MCP 工具数据通过 IPC 获取
-    window.electronAPI.mcpGetTools().then(function(res) {
-        if (res && res.success && res.tools) {
-            var toolsEl = document.getElementById('tb-mcp-tools-list');
-            if (toolsEl) toolsEl.innerHTML = res.tools.map(function(t) {
-                return '<div style="padding:4px 8px;border-bottom:1px solid var(--border-light);color:var(--text-secondary);font-size:12px;">' + t.name + ' — <span style="color:var(--text-muted);font-size:11px;">' + (t.description || '') + '</span></div>';
-            }).join('') || '<span>无可用工具</span>';
-        }
-    });
-    // 重写 refreshMcpServerList 以渲染到工具箱
-    window.__tb_refreshMcp = function() {
-        window.electronAPI.agentConfigLoad().then(function(r) {
-            if (!r.success) return;
-            var servers = (r.config && r.config.mcpServers) || [];
-            var listEl = document.getElementById('tb-mcp-server-list');
-            if (!listEl) return;
-            listEl.innerHTML = servers.length === 0 ? '<span style="color:var(--text-muted);font-size:12px;">暂无配置</span>' :
-                servers.map(function(s, i) {
-                    return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:color-mix(in srgb, var(--bg-elevated) 50%, transparent);border-radius:6px;margin-bottom:4px;font-size:12px;">'
-                        + '<span style="flex:1;color:var(--text-primary);">' + (s.name || '未命名') + '</span>'
-                        + '<span style="color:var(--text-muted);font-size:10px;">' + (s.url ? 'SSE' : (s.command || '')) + '</span>'
-                        + '</div>';
-                }).join('');
-        });
-    };
-    window.__tb_refreshMcp();
-}
-function renderQQBotToolbox() {
-    var body = document.getElementById('tb-qqbot-body');
-    if (!body) return;
-    body.innerHTML = '<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
-        + '<span style="font-size:12px;color:var(--text-muted);">选择 Bot:</span>'
-        + '<select id="tb-qqbot-select" style="padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:12px;"></select>'
-        + '<button onclick="window.electronAPI.qqbotStart({appId:document.getElementById(\'tb-qqbot-select\').value})" style="padding:6px 14px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:12px;">启动</button>'
-        + '<span id="tb-qqbot-status" style="font-size:11px;color:var(--text-muted);">未启动</span>'
-        + '</div>';
-    window.electronAPI.qqbotListRobots().then(function(robots) {
-        var sel = document.getElementById('tb-qqbot-select');
-        if (sel) sel.innerHTML = (robots || []).map(function(r) {
-            return '<option value="' + r.id + '">' + (r.name || r.id) + '</option>';
-        }).join('') || '<option>-- 无配置 --</option>';
-    });
-}
-function renderTasksToolbox() {
-    var body = document.getElementById('tb-tasks-body');
-    if (!body) return;
-    body.innerHTML = '<div style="margin-bottom:12px;"><span style="font-size:13px;font-weight:500;color:var(--text-primary);">定时任务</span><span id="tb-task-count" style="font-size:11px;color:var(--text-muted);margin-left:8px;">0</span></div>'
-        + '<div id="tb-task-list" style="font-size:12px;color:var(--text-muted);margin-bottom:16px;"></div>'
-        + '<div style="margin-bottom:12px;"><span style="font-size:13px;font-weight:500;color:var(--text-primary);">活跃终端</span><span id="tb-term-count" style="font-size:11px;color:var(--text-muted);margin-left:8px;">0</span></div>'
-        + '<div id="tb-term-list" style="font-size:12px;color:var(--text-muted);"></div>';
-    refreshTerminals();
-}
-function renderSkillsToolbox() {
-    var body = document.getElementById('tb-skills-body');
-    if (!body) return;
-    body.innerHTML = '<div style="margin-bottom:12px;"><button onclick="window.electronAPI.agentSkillsLoad().then(function(r){renderSkillsToolbox();})" style="padding:6px 14px;background:var(--accent-gradient);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:12px;font-weight:500;">🔄 刷新</button></div>'
-        + '<div id="tb-skills-list" style="font-size:12px;"></div>';
-    window.electronAPI.agentSkillsLoad().then(function(r) {
-        var listEl = document.getElementById('tb-skills-list');
-        if (!listEl) return;
-        var skills = (r && r.skills) || [];
-        listEl.innerHTML = skills.length === 0 ? '<span style="color:var(--text-muted);">暂无技能</span>' :
-            skills.map(function(s) {
-                return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border-light);font-size:12px;">'
-                    + '<span style="flex:1;color:var(--text-primary);font-weight:500;">' + s.name + '</span>'
-                    + '<button onclick="window.electronAPI.agentSkillGetContent(\'' + s.name + '\').then(function(r){alert(r.content||\'无内容\');})" style="padding:2px 8px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-muted);cursor:pointer;font-size:10px;">查看</button>'
-                    + '</div>';
-            }).join('');
-    });
 }
 // 工具箱内记忆子标签切换
 function switchMemTab(mtab) {
@@ -5889,8 +6704,9 @@ window.electronAPI.onAgentShowMcpTools(function(data) {
     mcpToolsData = data.tools || [];
     mcpToolStates = data.states || {};
     renderMcpToolsPanel();
-    // 自动展开面板
-    if (document.getElementById('mcp-tools-panel').style.display === 'none') {
+    // 自动展开面板（仅当面板存在时）
+    var panel = document.getElementById('mcp-tools-panel');
+    if (panel && panel.style.display === 'none') {
         toggleMcpToolsPanel();
     }
 });
@@ -5898,6 +6714,7 @@ window.electronAPI.onAgentShowMcpTools(function(data) {
 function toggleMcpToolsPanel() {
     var panel = document.getElementById('mcp-tools-panel');
     var arrow = document.getElementById('mcp-tools-arrow');
+    if (!panel || !arrow) return;
     if (panel.style.display === 'none') {
         panel.style.display = 'block';
         arrow.style.transform = 'rotate(90deg)';
@@ -5951,6 +6768,7 @@ window.toggleMcpServerTools = async function(server, checkbox) {
 
 function updateMcpToolsBadge() {
     var badge = document.getElementById('mcp-tools-badge');
+    if (!badge) return;
     if (!mcpToolsData || mcpToolsData.length === 0) {
         badge.textContent = '未加载';
         return;
@@ -6295,52 +7113,237 @@ setTimeout(function() {
    </div>
 
 <script>
-// splash HTML 已就绪，直接启动动画
-(function(){
-    var bar = document.getElementById('splash-bar');
-    var status = document.getElementById('splash-status');
-    var overlay = document.getElementById('splash-overlay');
-    if (!bar || !overlay) return;
-    // 注册 IPC 监听
-    if (window.electronAPI && window.electronAPI.onSplashProgress) {
-        window.electronAPI.onSplashProgress(function(d) {
-            if (d && d.percent !== undefined && d.text) {
-                bar.style.width = d.percent + '%';
-                if (status) status.textContent = d.text;
-            }
+// splash HTML 已就绪 — 委托给 startSplash() 统一管理（避免与顶部重复）
+// startSplash() 已注册 IPC 监听 + 本地进度兜底
+// 这里只启动 startSplash 即可
+setTimeout(startSplash, 50);
+// 粘贴截断：>5行显示 [+x lines]；发送前自动还原
+document.getElementById('prompt-input').addEventListener('paste', function(e) {
+    setTimeout(function() {
+        var ta = document.getElementById('prompt-input');
+        var val = ta.value;
+        var lines = val.split('\n');
+        if (lines.length > 5) {
+            ta.value = '[Paste +' + (lines.length - 5) + ' lines]';
+            ta._pastedFull = val;
+        }
+    }, 10);
+});
+// 发送按钮点击时自动还原（sendPrompt 内已统一还原，此处保留兜底防止其他调用路径）
+document.getElementById('send-prompt-btn').addEventListener('click', function() {
+    var ta = document.getElementById('prompt-input');
+    if (ta._pastedFull) {
+        ta.value = ta._pastedFull;
+        delete ta._pastedFull;
+    }
+});
+
+/* Bot panel JS patch - QR login, toggleQrForm, showQQBotEditModal, doSaveQQBot */
+// ==================== QR 扫码建 Bot（微信/飞书 tab 内） ====================
+var _botQrSessionQrcode = '';
+var _botQrPolling = false;
+var _botQrLoginName = '';
+var _botQrPollTimer = null;
+
+function toggleQrForm(platform) {
+    var area = document.getElementById(platform + '-qr-area');
+    if (!area) return;
+    var show = area.style.display !== 'block';
+    area.style.display = show ? 'block' : 'none';
+    if (show) {
+        document.getElementById(platform + '-qr-name').value = '';
+        document.getElementById(platform + '-qr-img').innerHTML = '点击下方按钮获取二维码';
+        document.getElementById(platform + '-qr-status').textContent = '';
+        document.getElementById(platform + '-qr-start-btn').style.display = '';
+        document.getElementById(platform + '-qr-refresh-btn').style.display = 'none';
+    }
+}
+
+function startBotQrLogin(platform) {
+    if (platform === 'qq') { showToast('QQ 平台请直接填写凭据', 'error'); return; }
+    var nameEl = document.getElementById(platform + '-qr-name');
+    var name = nameEl ? nameEl.value.trim() : '';
+    if (!name) { showToast('请先填写 Bot 名称', 'error'); return; }
+    _botQrLoginName = name;
+    var api = platform === 'wechat' ? window.electronAPI.wechatbotStartLogin : window.electronAPI.feishubotStartLogin;
+    if (!api) { showToast(platform + ' 插件未加载', 'error'); return; }
+    var stEl = document.getElementById(platform + '-qr-status');
+    var imgEl = document.getElementById(platform + '-qr-img');
+    if (stEl) stEl.textContent = '正在获取二维码...';
+    if (imgEl) imgEl.innerHTML = '⏳ 获取中...';
+    api().then(function (res) {
+        if (!res || !res.success) {
+            if (stEl) stEl.textContent = '❌ ' + (res && res.error ? res.error : '获取失败');
+            return;
+        }
+        _botQrSessionQrcode = res.qrcode || '';
+        if (res.qrImg && imgEl) {
+            imgEl.innerHTML = '<img src="' + res.qrImg + '" style="max-width:100%;max-height:220px;border-radius:4px;background:#fff;padding:4px;" />';
+            if (stEl) stEl.textContent = '请扫码' + (res.userCode ? '（码: ' + res.userCode + '）' : '');
+            document.getElementById(platform + '-qr-start-btn').style.display = 'none';
+            document.getElementById(platform + '-qr-refresh-btn').style.display = '';
+            startBotQrPoll(platform);
+        } else {
+            if (stEl) stEl.textContent = '❌ 未返回二维码图片';
+        }
+    }).catch(function (e) {
+        if (stEl) stEl.textContent = '❌ ' + e.message;
+    });
+}
+
+function startBotQrPoll(platform) {
+    if (_botQrPolling) return;
+    _botQrPolling = true;
+    var stEl = document.getElementById(platform + '-qr-status');
+    var imgEl = document.getElementById(platform + '-qr-img');
+    var unsub = null;
+    if (platform === 'wechat' && window.electronAPI.wechatbotPollStatus) {
+        unsub = window.electronAPI.wechatbotPollStatus(function (data) {
+            if (!data) return;
+            if (data.status === 'scaned') { if (stEl) stEl.textContent = '👀 已扫码，请在手机确认...'; }
+            else if (data.status === 'wait') { if (!data.scanned && stEl) stEl.textContent = '⏳ 等待扫码...'; }
+            else if (data.status === 'refreshing') { if (stEl) stEl.textContent = data.msg || '正在刷新...'; }
+            else if (data.status === 'refreshed') {
+                if (data.qrImg && imgEl) imgEl.innerHTML = '<img src="' + data.qrImg + '" style="max-width:100%;max-height:220px;border-radius:4px;background:#fff;padding:4px;" />';
+                if (stEl) stEl.textContent = '已刷新，请扫码';
+            } else if (data.status === 'confirmed') {
+                if (data.account) { if (stEl) stEl.textContent = '✅ 扫码成功'; showToast('扫码成功', 'success'); saveScannedBot(platform, data.account, _botQrLoginName); }
+            } else if (data.status === 'error') { if (stEl) stEl.textContent = '❌ ' + (data.msg || '登录失败'); showToast(data.msg || '登录失败', 'error'); }
         });
     }
-    if (window.electronAPI && window.electronAPI.onSplashComplete) {
-        window.electronAPI.onSplashComplete(function() {
-            bar.style.width = '100%';
-            if (status) status.textContent = '启动完成！';
-            if (overlay) overlay.remove();
-        });
+    var pollFn = platform === 'wechat' ? window.electronAPI.wechatbotPollLogin(_botQrSessionQrcode) : window.electronAPI.feishubotPollLogin();
+    pollFn.then(function (r) {
+        if (unsub) { try { unsub(); } catch (_) {} }
+        _botQrPolling = false;
+        if (!r) return;
+        if (r.success && r.status === 'confirmed' && (r.account || r.app)) {
+            if (stEl) stEl.textContent = '✅ 扫码成功';
+            showToast('扫码成功', 'success');
+            saveScannedBot(platform, r.account || r.app, _botQrLoginName);
+        } else if (r.status === 'expired' || r.status === 'timeout') {
+            if (stEl) stEl.textContent = '⏳ 二维码过期，请点刷新重新获取';
+            showToast(r.error || '登录超时', 'error');
+            document.getElementById(platform + '-qr-start-btn').style.display = '';
+            document.getElementById(platform + '-qr-refresh-btn').style.display = 'none';
+        } else if (!r.success) {
+            if (stEl) stEl.textContent = '❌ ' + (r.error || '登录失败');
+            showToast(r.error || '登录失败', 'error');
+        }
+    }).catch(function (e) {
+        if (unsub) { try { unsub(); } catch (_) {} }
+        _botQrPolling = false;
+        if (stEl) stEl.textContent = '❌ ' + e.message;
+        showToast('登录失败: ' + e.message, 'error');
+    });
+}
+
+function saveScannedBot(platform, cred, name) {
+    if (!cred) return;
+    var api = platform === 'wechat' ? window.electronAPI.wechatbotSaveRobot : window.electronAPI.feishubotSaveRobot;
+    if (!api) return;
+    var robot = {
+        id: 'robot_' + platform + '_' + Date.now(),
+        name: name || (platform === 'wechat' ? '微信Bot' : '飞书Bot'),
+        platform: platform
+    };
+    if (platform === 'wechat') {
+        robot.accountId = cred.accountId || '';
+        robot.token = cred.token || '';
+        robot.baseUrl = cred.baseUrl || '';
+        robot.userId = cred.userId || '';
+    } else {
+        robot.appId = cred.appId || '';
+        robot.clientSecret = cred.appSecret || '';
+        robot.domain = cred.domain || 'feishu';
     }
-    // 本地进度动画
-    var stages = [
-        { pct: 15, text: '正在连接...', delay: 1000 },
-        { pct: 30, text: '加载 DeepSeek 中...', delay: 1200 },
-        { pct: 50, text: '注入 Agent 引擎...', delay: 1000 },
-        { pct: 70, text: '准备完成...', delay: 800 },
-        { pct: 85, text: '即将就绪', delay: 600 },
-        { pct: 100, text: '启动完成！', delay: 400 }
-    ];
-    var i = 0;
-    function next() {
-        if (i >= stages.length) { if (overlay) overlay.remove(); return; }
-        var s = stages[i++];
-        bar.style.width = s.pct + '%';
-        if (status) status.textContent = s.text;
-        setTimeout(next, s.delay);
+    api(robot).then(function (res) {
+        if (res && res.success) {
+            var data = botPlatformData[platform];
+            data.selectedId = robot.id;
+            // 关闭 QR 区
+            var area = document.getElementById(platform + '-qr-area');
+            if (area) area.style.display = 'none';
+            showToast('已保存：' + robot.name, 'success');
+            loadBotList(platform);
+        }
+    }).catch(function (e) { showToast('保存失败: ' + e.message, 'error'); });
+}
+
+// ==================== 编辑弹窗（用于 QQ Bot） ====================
+function showQQBotEditModal(robot, platform) {
+    var modal = document.getElementById('qqbot-edit-modal');
+    document.getElementById('qqbot-edit-title').textContent = robot ? '编辑 Bot' : '新建 Bot';
+    document.getElementById('qqbot-edit-name').value = robot ? (robot.name || '') : '';
+    var pf = document.getElementById('qqbot-edit-platform');
+    if (pf) pf.value = robot ? (robot.platform || platform || 'qq') : (platform || 'qq');
+    document.getElementById('qqbot-edit-appid').value = robot ? (robot.appId || '') : '';
+    document.getElementById('qqbot-edit-secret').value = '';
+    modal._editId = robot ? robot.id : null;
+    modal._platform = platform || (robot ? robot.platform : 'qq');
+    modal.style.display = 'flex';
+}
+
+function doSaveQQBot() {
+    var modal = document.getElementById('qqbot-edit-modal');
+    var name = document.getElementById('qqbot-edit-name').value.trim();
+    var platform = (document.getElementById('qqbot-edit-platform') || {}).value || modal._platform || 'qq';
+    var appId = document.getElementById('qqbot-edit-appid').value.trim();
+    var secret = document.getElementById('qqbot-edit-secret').value.trim();
+    var isEdit = !!modal._editId;
+    if (!name) { showToast('请填写名称', 'error'); return; }
+    var saveApi = platform === 'qq' ? window.electronAPI.qqbotSaveRobot
+        : platform === 'wechat' ? window.electronAPI.wechatbotSaveRobot
+        : window.electronAPI.feishubotSaveRobot;
+    if (!saveApi) { showToast('保存接口不可用', 'error'); return; }
+    // QQ Bot 需要 appId + secret
+    if (platform === 'qq' && !isEdit && !appId) { showToast('请填写 AppID', 'error'); return; }
+    if (platform === 'qq' && !secret) { showToast('请填写 Secret', 'error'); return; }
+    var robot = {
+        id: modal._editId || 'robot_' + Date.now(),
+        name: name,
+        platform: platform
+    };
+    if (platform === 'qq') {
+        robot.appId = appId;
+        robot.clientSecret = secret;
+    } else {
+        // 微信和飞书通过扫码保存，这里只保存基本信息
+        robot.appId = appId;
+        if (secret) robot.clientSecret = secret;
     }
-    next();
-    // 核武器：每 500ms 检查一次，确保 splash 最终被移除
-    var killTimer = setInterval(function() {
-        var o = document.getElementById('splash-overlay');
-        if (o) { o.remove(); clearInterval(killTimer); }
-    }, 500);
-    setTimeout(function() { clearInterval(killTimer); }, 10000);
-})();
+    saveApi(robot).then(function (res) {
+        if (res && res.success) {
+            modal.style.display = 'none';
+            var data = botPlatformData[platform];
+            data.selectedId = robot.id;
+            loadBotList(platform);
+            showToast('已保存', 'success');
+        } else {
+            showToast('保存失败: ' + ((res && res.error) || '未知错误'), 'error');
+        }
+    }).catch(function (e) { showToast('保存失败: ' + e.message, 'error'); });
+}
+
+// ==================== 外网模式（全局 Bot 通用） ====================
+var qqBotNetMode = 'lan';
+async function loadQQBotNetMode() {
+    try {
+        var res = await window.electronAPI.qqbotGetNetMode();
+        qqBotNetMode = res.mode || 'lan';
+        updateQQBotNetModeUI();
+    } catch(e) {}
+}
+function updateQQBotNetModeUI() {
+    var sw = document.getElementById('qqbot-netmode-switch');
+    if (sw) sw.classList.toggle('on', qqBotNetMode === 'wan');
+}
+async function toggleQQBotNetMode() {
+    qqBotNetMode = qqBotNetMode === 'wan' ? 'lan' : 'wan';
+    updateQQBotNetModeUI();
+    try {
+        await window.electronAPI.qqbotSetNetMode(qqBotNetMode);
+    } catch(e) {}
+}
+
 </script>
 </body>

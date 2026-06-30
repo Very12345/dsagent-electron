@@ -109,6 +109,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
     qqbotSaveRobot: (robot) => ipcRenderer.invoke('qqbot-save-robot', robot),
     qqbotDeleteRobot: (robotId) => ipcRenderer.invoke('qqbot-delete-robot', robotId),
 
+    // 微信机器人（iLink Bot API）
+    wechatbotStartLogin: () => ipcRenderer.invoke('wechatbot-start-login'),
+    wechatbotPollLogin: (event, qrcode) => ipcRenderer.invoke('wechatbot-poll-login', qrcode),
+    wechatbotPollStatus: (callback) => {
+        const handler = (event, data) => callback(data);
+        ipcRenderer.on('wechatbot-poll-status', handler);
+        return () => ipcRenderer.removeListener('wechatbot-poll-status', handler);
+    },
+    wechatbotStart: () => ipcRenderer.invoke('wechatbot-start'),
+    wechatbotStop: () => ipcRenderer.invoke('wechatbot-stop'),
+    wechatbotStatus: () => ipcRenderer.invoke('wechatbot-status'),
+    wechatbotSendResponse: (data) => ipcRenderer.send('wechatbot-send-response', data),
+    onWechatbotMessage: (cb) => ipcRenderer.on('wechatbot-message', (e, d) => cb(d)),
+    onWechatbotAuthorized: (cb) => ipcRenderer.on('wechatbot-authorized', (e, d) => cb(d)),
+    wechatbotListRobots: () => ipcRenderer.invoke('wechatbot-list-robots'),
+    wechatbotSaveRobot: (r) => ipcRenderer.invoke('wechatbot-save-robot', r),
+    wechatbotDeleteRobot: (id) => ipcRenderer.invoke('wechatbot-delete-robot', id),
+
+    // 飞书机器人（Device Auth + IM API）
+    feishubotStartLogin: () => ipcRenderer.invoke('feishubot-start-login'),
+    feishubotPollLogin: () => ipcRenderer.invoke('feishubot-poll-login'),
+    feishubotStart: () => ipcRenderer.invoke('feishubot-start'),
+    feishubotStop: () => ipcRenderer.invoke('feishubot-stop'),
+    feishubotStatus: () => ipcRenderer.invoke('feishubot-status'),
+    feishubotSendResponse: (data) => ipcRenderer.send('feishubot-send-response', data),
+    onFeishubotMessage: (cb) => ipcRenderer.on('feishubot-message', (e, d) => cb(d)),
+    onFeishubotAuthorized: (cb) => ipcRenderer.on('feishubot-authorized', (e, d) => cb(d)),
+    feishubotListRobots: () => ipcRenderer.invoke('feishubot-list-robots'),
+    feishubotSaveRobot: (r) => ipcRenderer.invoke('feishubot-save-robot', r),
+    feishubotDeleteRobot: (id) => ipcRenderer.invoke('feishubot-delete-robot', id),
+
     // 多终端管理
     terminalCreate: (name, cwd) => ipcRenderer.invoke('terminal-create', name, cwd),
     terminalWrite: (name, command) => ipcRenderer.invoke('terminal-write', name, command),

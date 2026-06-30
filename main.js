@@ -16,6 +16,15 @@ const CONFIG = {
 };
 
 const DEEPSEEK_URL = 'https://chat.deepseek.com/';
+const DEEPSEEK_FAST_URL = 'https://chat.deepseek.com/';
+const DEEPSEEK_IMAGE_URL = 'https://chat.deepseek.com/';
+
+// 模型配置
+const MODELS = {
+    expert: { name: 'DeepSeek-Expert', url: DEEPSEEK_URL, mode: 'expert' },
+    fast: { name: 'Fast', url: DEEPSEEK_FAST_URL, mode: 'quick' },
+    imagesupport: { name: 'ImageSupport', url: DEEPSEEK_IMAGE_URL, mode: 'quick' }
+};
 
 const VIEWBAR_WIDTH = 60;  // 左侧视图选择栏宽度
 const SIDEBAR_WIDTH = 350;
@@ -31,15 +40,10 @@ let mainWindow = null;
 let currentRootDir = null;  // null = 未打开文件夹
 var _startupComplete = false;  // 启动动画是否完成（期间禁止 shell 显示）
 
-// QQ Bot 托管
-const QQBotClient = require('./qqbot.js');
-let qqBotInstance = null;
-let qqBotPowerSaveId = null;
-let qqBotAuthorizedUser = null;   // 校验通过的用户 openid
-let qqBotVerifyCode = '';
-let qqBotPendingMessages = [];     // 等待队列
-let qqBotProcessing = false;       // 是否正在处理
-let qqBotAwaitingConfirm = false;  // 是否正在等待用户确认
+// 机器人插件宿主：QQ / 微信 / 飞书 三个平台以插件形式接入，
+// 各自逻辑在 plugins/*/index.js，宿主统一装配。botQQ 为 QQ 插件导出引用。
+const pluginHost = require('./plugins/plugin-host.js');
+let botQQ = null;          // QQ 插件导出（getInstance/getAuthorizedUser/notifyPlanSync/shutdown/setAwaitingConfirm）
 let deepseekView = null;
 let qwenView = null;
 let qwenVisible = false;    // Qwen 视图是否可见
@@ -1206,27 +1210,25 @@ function setupAgentIPC() {
 
     ipcMain.handle('agent-plan-save', async (event, plan) => {
         var result = agent.planSave(plan);
-        // 同步计划到 QQ Bot
-        if (qqBotInstance && qqBotAuthorizedUser && result.success && result.plan) {
-            try {
-                var p = result.plan;
-                var doneCount = (p.steps || []).filter(function(s) { return s.status === 'done'; }).length;
-                var planText = '📋 **' + p.title + '** (' + doneCount + '/' + (p.steps || []).length + ')\n\n';
-                for (var si = 0; si < (p.steps || []).length; si++) {
-                    var s = p.steps[si];
-                    var icon = s.status === 'done' ? '✅' : s.status === 'in_progress' ? '🔄' : '⬜';
-                    planText += icon + ' ' + s.id + '. ' + s.description;
-                    if (s.result) planText += ' — ' + s.result;
-                    planText += '\n';
-                }
-                await qqBotInstance.sendText(qqBotAuthorizedUser, planText);
-            } catch (e) {
-                console.warn('[QQBot] 计划同步失败:', e.message);
-            }
-        }
         // 通知 Agent 视图
         if (agentView && agentView.webContents && !agentView.webContents.isDestroyed() && result.success && result.plan) {
             agentView.webContents.send('agent-plan-update', result.plan);
+            // 同步计划到 QQ Bot（若已授权）
+            if (botQQ && botQQ.getInstance() && botQQ.getAuthorizedUser()) {
+                try {
+                    var p = result.plan;
+                    var doneCount = (p.steps || []).filter(function(s) { return s.status === 'done'; }).length;
+                    var planText = '📋 计划已更新（' + doneCount + '/' + (p.steps || []).length + ' 完成）\n';
+                    (p.steps || []).forEach(function(s, i) {
+                        var mark = s.status === 'done' ? '✅' : (s.status === 'running' ? '🔄' : '⬜');
+                        planText += mark + ' ' + (i + 1) + '. ' + (s.title || s.task || '') + '\n';
+                        if (s.result) planText += '   — ' + s.result + '\n';
+                    });
+                    botQQ.notifyPlanSync(planText);
+                } catch (e) {
+                    console.warn('[QQBot] 计划同步失败:', e.message);
+                }
+            }
         }
         return result;
     });
@@ -1338,12 +1340,6 @@ function setupControlBarIPC() {
         }
     });
 
-    // 显示 QQ 托管弹窗
-    ipcMain.on('ctrl-show-qqbot', () => {
-        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
-            agentView.webContents.send('agent-message', { _toolbarModal: 'qqbot' });
-        }
-    });
 
     // 显示后台任务弹窗
     ipcMain.on('ctrl-show-tasks', () => {
@@ -1491,35 +1487,37 @@ function setupControlBarIPC() {
     });
 
     // Agent 发送消息：控制 DeepSeek 页面完成模式选择、深度思考、关闭联网、发送消息
+    // 由 agentview 决定是否新建对话（data.createNew），main.js 不检查 DeepSeek URL
     ipcMain.handle('agent-send-message', async (event, data) => {
         if (!deepseekView) return { success: false, error: 'DeepSeek view not ready' };
         try {
-            // executeJavaScript 在后台也可正常工作，无需切换视图
-
-            // 1. 设置模式（expert/quick）
-            await deepseekView.webContents.executeJavaScript(
-                'window.__dsagent_setModelMode && window.__dsagent_setModelMode(' + JSON.stringify(data.mode) + ')'
-            );
-
-            // 2. 设置深度思考
-            await deepseekView.webContents.executeJavaScript(
-                'window.__dsagent_setDeepThink && window.__dsagent_setDeepThink(' + (!!data.deepthink) + ')'
-            );
-
-            // 3. 确保关闭联网搜索
-            await deepseekView.webContents.executeJavaScript(
-                'window.__dsagent_disableWebSearch && window.__dsagent_disableWebSearch()'
-            );
-
-            // 等待设置生效
-            await new Promise(r => setTimeout(r, 500));
-
-            // 4. 发送消息（填充并点击发送按钮）
-            await deepseekView.webContents.executeJavaScript(
-                'window.__dsagent_sendMessage && window.__dsagent_sendMessage(' + JSON.stringify(data.text) + ')'
-            );
-
-            return { success: true };
+            if (data.createNew) {
+                // 无活跃对话：创建新对话，把用户消息合并到初始化里一起发（避免两条消息互相干扰）
+                var initResult = await deepseekView.webContents.executeJavaScript(
+                    'window.__dsagent_newChatAndSendInit && window.__dsagent_newChatAndSendInit('
+                    + JSON.stringify(data.mode) + ', ' + (!!data.deepthink)
+                    + ', ' + JSON.stringify(data.text) + ')'
+                );
+                // 返回新对话 URL 给 agentview（用于历史追踪）
+                var newUrl = (initResult && initResult.deepseekUrl) || '';
+                return { success: true, deepseekUrl: newUrl };
+            } else {
+                // 有活跃对话：仅设置模式和深度思考，直接发消息
+                await deepseekView.webContents.executeJavaScript(
+                    'window.__dsagent_setModelMode && window.__dsagent_setModelMode(' + JSON.stringify(data.mode) + ')'
+                );
+                await deepseekView.webContents.executeJavaScript(
+                    'window.__dsagent_setDeepThink && window.__dsagent_setDeepThink(' + (!!data.deepthink) + ')'
+                );
+                await deepseekView.webContents.executeJavaScript(
+                    'window.__dsagent_disableWebSearch && window.__dsagent_disableWebSearch()'
+                );
+                await new Promise(r => setTimeout(r, 500));
+                await deepseekView.webContents.executeJavaScript(
+                    'window.__dsagent_sendMessage && window.__dsagent_sendMessage(' + JSON.stringify(data.text) + ')'
+                );
+                return { success: true };
+            }
         } catch (e) {
             return { success: false, error: e.message };
         }
@@ -1550,14 +1548,20 @@ function setupControlBarIPC() {
         try {
             // executeJavaScript 在后台也可正常工作，无需切换视图
 
-            // 调用 inject.js 的新建对话+发送初始化流程
-            await deepseekView.webContents.executeJavaScript(
+            // 调用 inject.js 的新建对话+发送初始化流程（带用户消息合并）
+            var initResult = await deepseekView.webContents.executeJavaScript(
                 'window.__dsagent_newChatAndSendInit && window.__dsagent_newChatAndSendInit('
-                + JSON.stringify(data.mode) + ', ' + (!!data.deepthink) + ')'
+                + JSON.stringify(data.mode) + ', ' + (!!data.deepthink)
+                + ', ' + (data.userText ? JSON.stringify(data.userText) : 'null') + ')'
             );
 
-            // 返回当前 DeepSeek 页面 URL
-            var deepseekUrl = await deepseekView.webContents.executeJavaScript('window.location.href');
+            // 优先使用 __dsagent_newChatAndSendInit 内部返回的 URL，避免额外查询产生竞态
+            var deepseekUrl = (initResult && initResult.deepseekUrl) || '';
+            if (!deepseekUrl || !/\/chat\/[^?#]+/.test(deepseekUrl)) {
+                try {
+                    deepseekUrl = await deepseekView.webContents.executeJavaScript('window.location.href');
+                } catch(e) {}
+            }
 
             return { success: true, deepseekUrl: deepseekUrl };
         } catch (e) {
@@ -1571,6 +1575,45 @@ function setupControlBarIPC() {
         try {
             const url = await deepseekView.webContents.executeJavaScript('window.location.href');
             return { success: true, url: url };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    // 获取模型列表
+    ipcMain.handle('agent-get-models', () => {
+        return { success: true, models: Object.keys(MODELS).map(function(k) { return { id: k, name: MODELS[k].name, url: MODELS[k].url, mode: MODELS[k].mode }; }) };
+    });
+
+    // 切换到指定模型的 URL
+    ipcMain.handle('agent-navigate-model', async (event, modelId) => {
+        if (!deepseekView) return { success: false, error: 'DeepSeek view not ready' };
+        var model = MODELS[modelId];
+        if (!model) return { success: false, error: 'Unknown model: ' + modelId };
+        try {
+            try { mainWindow.removeBrowserView(deepseekView); } catch(e) {}
+            deepseekView.webContents.loadURL(model.url);
+            await new Promise(function(r) { setTimeout(r, 3000); });
+            try { mainWindow.addBrowserView(deepseekView); } catch(e) {}
+            var ob = deepseekView.getBounds();
+            if (ob.x > -1000) deepseekView.setBounds({ x: -10000, y: ob.y, width: ob.width, height: ob.height });
+            if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
+                mainWindow.setTopBrowserView(agentView);
+            }
+            return { success: true, url: model.url };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    // 获取 DeepSeek 页面对话历史用于迁移
+    ipcMain.handle('agent-get-conversation-history', async () => {
+        if (!deepseekView) return { success: false, error: 'DeepSeek view not ready' };
+        try {
+            var history = await deepseekView.webContents.executeJavaScript(
+                'window.__dsagent_getConversationHistory && window.__dsagent_getConversationHistory()'
+            );
+            return { success: true, history: history || [] };
         } catch (e) {
             return { success: false, error: e.message };
         }
@@ -1694,764 +1737,6 @@ function setupControlBarIPC() {
         });
     });
 
-    // ==================== QQ Bot 托管 IPC ====================
-
-    // 生成校验码（4位数字）
-    function generateVerifyCode() {
-        return String(Math.floor(1000 + Math.random() * 9000));
-    }
-
-    // 转发消息到 agentView（从 QQ 收到的消息）
-    function forwardQQMessageToAgent(data) {
-        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
-            agentView.webContents.send('qqbot-message', data);
-        }
-    }
-
-    // 启动 QQ Bot
-    ipcMain.handle('qqbot-start', async (event, config) => {
-        try {
-            if (qqBotInstance) {
-                qqBotInstance.removeAllListeners();
-                qqBotInstance.ws && qqBotInstance.ws.close();
-                qqBotInstance = null;
-            }
-
-            // 强制不熄屏
-            if (qqBotPowerSaveId === null) {
-                const { powerSaveBlocker } = require('electron');
-                qqBotPowerSaveId = powerSaveBlocker.start('prevent-display-sleep');
-                console.log('[QQBot] 已阻止屏幕休眠, id:', qqBotPowerSaveId);
-            }
-
-            qqBotInstance = new QQBotClient({
-                appId: config.appId,
-                clientSecret: config.clientSecret,
-                gatewayUrl: config.gatewayUrl || 'wss://sandbox.api.sgroup.qq.com/websocket',
-                intents: (1 << 1) | (1 << 25) | (1 << 26),
-                apiBase: 'https://api.sgroup.qq.com',
-                imagePath: config.imagePath || './1.png',
-                tempDir: config.tempDir || path.join(currentRootDir || '.', '.dsa', 'temp')
-            });
-
-            // 生成校验码
-            var savedState = loadAppState();
-            if (savedState.qqBotSavedUser) {
-                qqBotAuthorizedUser = savedState.qqBotSavedUser;
-                qqBotVerifyCode = '';
-                console.log('[QQBot] 已恢复保存的用户:', qqBotAuthorizedUser);
-            } else {
-                qqBotVerifyCode = generateVerifyCode();
-                qqBotAuthorizedUser = null;
-            }
-
-            // 监听消息
-            qqBotInstance.on('message', async (msg) => {
-                console.log('[QQBot] 收到消息 from:', msg.openid, 'content:', msg.content);
-                var text = (msg.content || '').trim();
-
-                // 校验阶段
-                if (!qqBotAuthorizedUser) {
-                    if (text === qqBotVerifyCode) {
-                        qqBotAuthorizedUser = msg.openid;
-                        console.log('[QQBot] 用户验证通过:', msg.openid);
-                        // 持久化保存，下次启动不再需要校验码
-                        saveAppState({ qqBotSavedUser: msg.openid });
-                        var statusStr = getQQBotStatusString();
-                        qqBotInstance.sendText(msg.openid, '✅ 验证通过，已建立远程连接。\n\n' + statusStr, msg.msgId);
-                        if (agentView && agentView.webContents) {
-                            agentView.webContents.send('qqbot-authorized', { openid: msg.openid });
-                        }
-                    } else {
-                        qqBotInstance.sendText(msg.openid, '❌ 校验码错误，请重新发送。', msg.msgId);
-                    }
-                    return;
-                }
-
-                // 只处理已授权用户
-                if (msg.openid !== qqBotAuthorizedUser) return;
-
-                // ========== 基础指令处理（不转发 AI） ==========
-                if (text.startsWith('/')) {
-                    var handled = await handleQQBotCommand(text, msg);
-                    if (handled) return;
-                }
-
-                // 非指令消息 → 转发 AI
-                if (qqBotAwaitingConfirm) {
-                    console.log('[QQBot] 跳过确认回复，不转发 AI');
-                    return;
-                }
-                if (qqBotProcessing) {
-                    qqBotPendingMessages.push(msg);
-                    qqBotInstance.sendText(msg.openid, '⏳ 正在处理上一条消息，已加入等待队列（位置 ' + qqBotPendingMessages.length + '）', msg.msgId);
-                    return;
-                }
-
-                // 检查是否有活跃对话（DeepSeek 页面是否在当前对话中）
-                try {
-                    if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
-                        var dsUrl = await deepseekView.webContents.executeJavaScript('window.location.href');
-                        var dsBody = await deepseekView.webContents.executeJavaScript('document.body ? document.body.textContent.length > 100 : false');
-                        if (!dsUrl || !dsUrl.includes('/chat/')) {
-                            // 无活跃对话，发送告警而非自动转发
-                            if (text) {
-                                qqBotInstance.sendText(msg.openid, '⚠️ 当前没有活跃的对话。请先发送 /new 开始新对话，或使用 /list 查看已有对话后用 /switch <编号> 切换。', msg.msgId);
-                            }
-                            return;
-                        }
-                    }
-                } catch(e) {
-                    console.log('[QQBot] 检查对话状态失败:', e.message);
-                }
-
-                qqBotProcessing = true;
-                forwardQQMessageToAgent(msg);
-            });
-
-            // 按钮交互处理
-            qqBotInstance.on('interaction', async (intData) => {
-                console.log('[QQBot] 按钮交互:', intData.buttonData);
-                var data = intData.buttonData || '';
-                // 帮助面板按钮：直接执行对应指令
-                if (data === '/n') {
-                    await handleQQBotCommand('/n', { openid: intData.userOpenid, msgId: null });
-                } else if (data === '/d') {
-                    await handleQQBotCommand('/d', { openid: intData.userOpenid, msgId: null });
-                } else if (data === '/s') {
-                    await handleQQBotCommand('/s', { openid: intData.userOpenid, msgId: null });
-                } else if (data === '/l') {
-                    await handleQQBotCommand('/l', { openid: intData.userOpenid, msgId: null });
-                } else if (data === '/stop') {
-                    await handleQQBotCommand('/stop', { openid: intData.userOpenid, msgId: null });
-                } else if (data === '/sc') {
-                    await handleQQBotCommand('/sc', { openid: intData.userOpenid, msgId: null });
-                }
-                // 确认/取消按钮由 agent-request-confirm 的 Promise 处理，这里不处理
-            });
-
-            qqBotInstance.on('error', (err) => {
-                console.error('[QQBot] 错误:', err);
-            });
-
-            await qqBotInstance.start();
-
-            return { success: true, verifyCode: qqBotVerifyCode };
-        } catch (err) {
-            console.error('[QQBot] 启动失败:', err);
-            return { success: false, error: err.message };
-        }
-    });
-
-    // 获取当前状态字符串（供 /status 和验证成功时用）
-    function getQQBotStatusString() {
-        var state = loadAppState();
-        var deepthink = state.qqBotDeepThink !== false;
-        var mode = state.qqBotMode || 'expert';
-        var confirmMode = state.qqBotConfirmMode || 'smart';
-        var dir = state.qqBotDir || currentRootDir || '.';
-        var parts = [];
-        parts.push('📋 当前状态：');
-        parts.push('├ 🧠 深度思考: ' + (deepthink ? '开' : '关'));
-        parts.push('├ ⚡ 模式: ' + (mode === 'expert' ? '专家' : '快速'));
-        parts.push('├ 🔒 信任模式: ' + (confirmMode === 'smart' ? '智能' : confirmMode === 'strict' ? '严格' : '宽松'));
-        parts.push('└ 📂 目录: ' + dir);
-        parts.push('');
-        parts.push('📖 可用指令：');
-        parts.push('/h               - 显示此帮助');
-        parts.push('/n [expert|quick] - 新对话');
-        parts.push('/d               - 切换深度思考');
-        parts.push('/m [smart|strict|loose] - 查看/切换信任模式');
-        parts.push('/cd <路径>        - 切换工作目录');
-        parts.push('/s               - 显示当前状态');
-        parts.push('/sc               - 全屏截图');
-        parts.push('/sct              - 截取当前视图窗口');
-        parts.push('/stop            - 停止正在执行的任务');
-        parts.push('/l               - 列出所有对话');
-        parts.push('/sw <编号>        - 切换到指定对话（用 /l 查看编号）');
-        return parts.join('\n');
-    }
-
-    // 处理 QQ Bot 指令（返回 true=已处理，false=需要转发 AI）
-    async function handleQQBotCommand(text, msg) {
-        var cmd = text.split(/\s+/);
-        var main = cmd[0].toLowerCase();
-
-        if (main === '/help' || main === '/h' || main === '帮助') {
-            var s = getQQBotStatusString();
-            await qqBotInstance.sendKeyboard(msg.openid, s, [
-                { id: 'help_new', label: '🔄 新对话', data: '/n', style: 1 },
-                { id: 'help_deepthink', label: '🧠 切换深度思考', data: '/d', style: 0 },
-                { id: 'help_status', label: '📋 状态', data: '/s', style: 0 },
-                { id: 'help_list', label: '📜 对话列表', data: '/l', style: 0 },
-                { id: 'help_stop', label: '⏹️ 停止', data: '/stop', style: 0 },
-                { id: 'help_screenshot', label: '📸 截图', data: '/sc', style: 0 }
-            ], msg.msgId);
-            return true;
-        }
-
-        if (main === '/status' || main === '/s') {
-            var s = getQQBotStatusString();
-            await qqBotInstance.sendText(msg.openid, s, msg.msgId);
-            return true;
-        }
-
-        if (main === '/deep' || main === '/d' || main === '/deepthink') {
-            var state = loadAppState();
-            var current = state.qqBotDeepThink !== false;
-            state.qqBotDeepThink = !current;
-            saveAppState({ qqBotDeepThink: !current });
-            // 实际触发深度思考切换
-            try {
-                if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
-                    deepseekView.webContents.executeJavaScript(
-                        'if (window.__dsagent_toggleDeepThink) window.__dsagent_toggleDeepThink(' + (!current) + ')'
-                    );
-                }
-            } catch (e) { /* ignore */ }
-            // 同步到 agentview
-            if (agentView && agentView.webContents) {
-                agentView.webContents.send('qqbot-command', { action: 'toggleDeepThink', value: !current });
-            }
-            await qqBotInstance.sendText(msg.openid, '🧠 深度思考已' + (!current ? '开启' : '关闭'), msg.msgId);
-            return true;
-        }
-
-        if (main === '/mode' || main === '/m') {
-            var state2 = loadAppState();
-            var modes = ['smart', 'strict', 'loose', 'readonly', 'custom'];
-            var labels = { smart: '智能', strict: '严格', loose: '宽松', readonly: '只读', custom: '自定义' };
-            if (cmd.length >= 2 && modes.indexOf(cmd[1]) >= 0) {
-                var newMode = cmd[1];
-                saveAppState({ qqBotConfirmMode: newMode });
-                // 更新 config 中的 confirmMode，保持主配置与 QQ 状态一致
-                try {
-                    var cfgRes = agent.loadConfig();
-                    var cfg = cfgRes.config || {};
-                    cfg.confirmMode = newMode;
-                    agent.saveConfig(cfg);
-                } catch (e) { console.warn('[QQBot] save confirm mode to config failed:', e.message); }
-
-                // 同步到 DeepSeek（配置已保存，跳过重复保存）
-                if (deepseekView) {
-                    deepseekView.webContents.executeJavaScript(
-                        `window.__dsagent_setConfirmMode && window.__dsagent_setConfirmMode(${JSON.stringify(newMode)}, true);`
-                    ).catch(() => {});
-                }
-                // 同步到 Agent 视图
-                if (agentView && agentView.webContents) {
-                    agentView.webContents.send('qqbot-command', { action: 'setConfirmMode', value: newMode });
-                }
-                // 同步到 viewbar
-                shellSend('ctrl-viewbar-status', {
-                        currentView: currentView,
-                        dsState: 'idle',
-                        qwenState: 'idle',
-                        confirmMode: newMode,
-                        theme: currentAppTheme
-                    });
-                await qqBotInstance.sendText(msg.openid, '🔒 信任模式已设为: ' + labels[newMode], msg.msgId);
-            } else {
-                var curMode = state2.qqBotConfirmMode || 'smart';
-                var msg2 = '🔒 当前信任模式: ' + (labels[curMode] || curMode) + ' (' + curMode + ')\n可切换: /mode smart（智能）/ strict（严格）/ loose（宽松）/ readonly（只读）/ custom（自定义）';
-                await qqBotInstance.sendText(msg.openid, msg2, msg.msgId);
-            }
-            return true;
-        }
-
-        if (main === '/cd' || main === '/chdir') {
-            if (cmd.length >= 2) {
-                var newDir = cmd.slice(1).join(' ');
-                try {
-                    if (fs.existsSync(newDir) && fs.statSync(newDir).isDirectory()) {
-                        saveAppState({ qqBotDir: newDir });
-                        if (agentView && agentView.webContents) {
-                            agentView.webContents.send('qqbot-command', { action: 'changeDir', value: newDir });
-                        }
-                        // 也同步到文件浏览器的根目录
-                        shellSend('root-changed', newDir);
-                        await qqBotInstance.sendText(msg.openid, '📂 工作目录已切换至: ' + newDir, msg.msgId);
-                    } else {
-                        await qqBotInstance.sendText(msg.openid, '❌ 目录不存在: ' + newDir, msg.msgId);
-                    }
-                } catch (e) {
-                    await qqBotInstance.sendText(msg.openid, '❌ 切换失败: ' + e.message, msg.msgId);
-                }
-            } else {
-                var curDir = loadAppState().qqBotDir || currentRootDir || '.';
-                await qqBotInstance.sendText(msg.openid, '📂 当前工作目录: ' + curDir + '\n使用 /cd <路径> 切换', msg.msgId);
-            }
-            return true;
-        }
-
-        if (main === '/new' || main === '/n') {
-            var mode3 = 'expert';
-            if (cmd.length >= 2 && (cmd[1] === 'quick' || cmd[1] === 'expert')) mode3 = cmd[1];
-            var deepVal = cmd.indexOf('nodeep') >= 0 ? false : (cmd.indexOf('deep') >= 0 ? true : null);
-            var state3 = loadAppState();
-            if (deepVal !== null) { saveAppState({ qqBotDeepThink: deepVal }); }
-            saveAppState({ qqBotMode: mode3 });
-            // 实际执行新建对话
-            var newUrl = '';
-            try {
-                if (deepseekView && deepseekView.webContents && !deepseekView.webContents.isDestroyed()) {
-                    var execCode = 'if (window.__dsagent_newChatAndSendInit) window.__dsagent_newChatAndSendInit("' + mode3 + '", ' + (deepVal !== null ? deepVal : state3.qqBotDeepThink !== false) + ')';
-                    await deepseekView.webContents.executeJavaScript(execCode);
-                    // 等待页面 URL 更新（SPA 导航可能需要时间）
-                    await new Promise(function(r) { setTimeout(r, 500); });
-                    newUrl = await deepseekView.webContents.executeJavaScript('window.location.href');
-                }
-            } catch (e) { /* ignore */ }
-            if (agentView && agentView.webContents) {
-                agentView.webContents.send('qqbot-command', { action: 'newChat', mode: mode3, deepthink: deepVal !== null ? deepVal : state3.qqBotDeepThink !== false, url: newUrl });
-            }
-            await qqBotInstance.sendText(msg.openid, '🔄 已开始新对话（模式: ' + (mode3 === 'expert' ? '专家' : '快速') + '）', msg.msgId);
-            return true;
-        }
-
-        if (main === '/list' || main === '/l') {
-            try {
-                var listDir = currentRootDir || app.getPath('userData');
-                var histories = historyManager.listHistories(listDir);
-                if (!histories || histories.length === 0) {
-                    await qqBotInstance.sendText(msg.openid, '📋 没有找到任何历史对话。发送 /new 开始一个新对话。', msg.msgId);
-                } else {
-                    var lines = ['📋 历史对话列表：'];
-                    var limit = Math.min(histories.length, 30);
-                    for (var li = 0; li < limit; li++) {
-                        var h = histories[li];
-                        var prefix = (li + 1) < 10 ? ' ' : '';
-                        var title = (h.title || '(无标题)').substring(0, 40);
-                        var modeInfo = (h.mode || 'expert') + (h.deepthink ? '+深' : '');
-                        var msgCount = h.messageCount || 0;
-                        lines.push(prefix + (li + 1) + '. ' + title + ' [' + modeInfo + ' ' + msgCount + '条]');
-                    }
-                    if (histories.length > 30) lines.push('... 还有 ' + (histories.length - 30) + ' 个');
-                    lines.push('');
-                    lines.push('发送 /sw <编号>（或 /switch <编号>）切换对话');
-                    await qqBotInstance.sendText(msg.openid, lines.join('\n'), msg.msgId);
-                }
-            } catch (e) {
-                await qqBotInstance.sendText(msg.openid, '❌ 获取对话列表失败: ' + e.message, msg.msgId);
-            }
-            return true;
-        }
-
-        if (main === '/switch' || main === '/sw') {
-            var swIdx = parseInt(cmd[1], 10);
-            if (isNaN(swIdx) || swIdx < 1) {
-                await qqBotInstance.sendText(msg.openid, '❌ 请指定有效的对话编号。使用 /l 查看所有对话。', msg.msgId);
-                return true;
-            }
-            try {
-                var listDir = currentRootDir || app.getPath('userData');
-                var histories = historyManager.listHistories(listDir);
-                if (!histories || swIdx > histories.length) {
-                    await qqBotInstance.sendText(msg.openid, '❌ 对话编号超出范围（1-' + (histories.length || 0) + '）', msg.msgId);
-                    return true;
-                }
-                var target = histories[swIdx - 1];
-                // 验证对话记录是否仍然存在（可能在列表后刚被删除）
-                var fullHistory = historyManager.loadHistory(listDir, target.id);
-                if (!fullHistory) {
-                    await qqBotInstance.sendText(msg.openid, '❌ 该对话记录已不存在（可能已被删除）', msg.msgId);
-                    return true;
-                }
-                // 通过 agentView 恢复历史对话
-                if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
-                    agentView.webContents.send('restore-history-conversation', target.id);
-                    await qqBotInstance.sendText(msg.openid, '✅ 已切换到: ' + (target.title || '(未命名对话)'), msg.msgId);
-                } else {
-                    await qqBotInstance.sendText(msg.openid, '❌ Agent 页面未加载', msg.msgId);
-                }
-            } catch (e) {
-                await qqBotInstance.sendText(msg.openid, '❌ 切换对话失败: ' + e.message, msg.msgId);
-            }
-            return true;
-        }
-
-        if (main === '/screenshot' || main === '/sc') {
-            try {
-                var ssTempDir = path.join(currentRootDir || app.getPath('userData'), '.dsa', 'temp');
-                if (!fs.existsSync(ssTempDir)) fs.mkdirSync(ssTempDir, { recursive: true });
-                var ssFilename = 'screenshot_' + Date.now() + '.png';
-                var ssPath = path.join(ssTempDir, ssFilename);
-
-                // 方法1: desktopCapturer screen capture + crop
-                var captured = false;
-                try {
-                    var sources = await desktopCapturer.getSources({
-                        types: ['screen'],
-                        thumbnailSize: { width: 3840, height: 2160 } // 明确尺寸更可靠
-                    });
-
-                    var electronScreen = require('electron').screen;
-                    var winBounds = mainWindow.getBounds();
-                    var targetDisplay = electronScreen.getDisplayMatching(winBounds);
-                    var source = null;
-                    for (var si = 0; si < sources.length; si++) {
-                        if (String(sources[si].display_id) === String(targetDisplay.id)) {
-                            source = sources[si];
-                            break;
-                        }
-                    }
-                    if (!source && sources.length > 0) source = sources[0];
-
-                    if (source && source.thumbnail && !source.thumbnail.isEmpty()) {
-                        var img = source.thumbnail;
-
-                        fs.writeFileSync(ssPath, img.toPNG());
-                        captured = true;
-                        console.log('[QQBot] 截图方式: desktopCapturer');
-                    }
-                } catch (e) {
-                    console.log('[QQBot] desktopCapturer 异常:', e.message);
-                }
-
-                // 方法2: PowerShell .NET 截图兜底（写入临时 .ps1 脚本避免转义问题）
-                if (!captured) {
-                    console.log('[QQBot] 截图回退到 PowerShell');
-                    try {
-                        var psTempPath = ssPath.replace('.png', '_raw.png');
-                        // 生成临时 PowerShell 脚本
-                        var psScriptContent =
-                            'Add-Type -AssemblyName System.Drawing, System.Windows.Forms\r\n' +
-                            '$s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds\r\n' +
-                            '$b = New-Object System.Drawing.Bitmap $s.Width, $s.Height\r\n' +
-                            '$g = [System.Drawing.Graphics]::FromImage($b)\r\n' +
-                            '$g.CopyFromScreen($s.X, $s.Y, 0, 0, $s.Size)\r\n' +
-                            '$b.Save("' + psTempPath.replace(/\\/g, '\\\\') + '")\r\n' +
-                            '$g.Dispose(); $b.Dispose()';
-                        var psFile = path.join(ssTempDir, '_capture.ps1');
-                        fs.writeFileSync(psFile, psScriptContent, 'utf-8');
-                        await new Promise(function(resolve, reject) {
-                            exec('powershell -NoProfile -ExecutionPolicy Bypass -File "' + psFile + '"', { timeout: 15000 }, function(err, stdout) {
-                                if (err) { reject(err); return; }
-                                resolve(stdout);
-                            });
-                        });
-                        // 清理临时脚本
-                        try { fs.unlinkSync(psFile); } catch(e) {}
-
-                        if (fs.existsSync(psTempPath)) {
-                            var psBuffer = fs.readFileSync(psTempPath);
-                            var psImg = nativeImage.createFromBuffer(psBuffer);
-                            if (!psImg.isEmpty()) {
-                                fs.writeFileSync(ssPath, psImg.toPNG());
-                                captured = true;
-                                console.log('[QQBot] 截图方式: PowerShell');
-                            }
-                            // 删除临时原始截图
-                            try { fs.unlinkSync(psTempPath); } catch(e) {}
-                        }
-                    } catch (e) {
-                        console.log('[QQBot] PowerShell 截图也失败:', e.message);
-                    }
-                }
-
-                // 方法3: 终极兜底 - capturePage
-                if (!captured) {
-                    console.log('[QQBot] 截图回退到 capturePage');
-                    try {
-                        var capImg = await mainWindow.webContents.capturePage();
-                        if (capImg && !capImg.isEmpty()) {
-                            fs.writeFileSync(ssPath, capImg.toPNG());
-                            captured = true;
-                        }
-                    } catch (e) {
-                        console.log('[QQBot] capturePage 也失败:', e.message);
-                    }
-                }
-
-                if (fs.existsSync(ssPath)) {
-                    var stats = fs.statSync(ssPath);
-                    await qqBotInstance.sendImage(msg.openid, ssPath, msg.msgId);
-                    console.log('[QQBot] 截图已发送:', ssPath, '(' + Math.round(stats.size / 1024) + 'KB)');
-                } else {
-                    await qqBotInstance.sendText(msg.openid, '❌ 截图保存失败（窗口截图可能被系统阻止）', msg.msgId);
-                }
-            } catch (e) {
-                console.error('[QQBot] 截图失败:', e);
-                await qqBotInstance.sendText(msg.openid, '❌ 截图失败: ' + e.message, msg.msgId);
-            }
-            return true;
-        }
-
-        if (main === '/sct' || main === '/sct:' || (main === '/sct' && cmd.length === 1)) {
-            try {
-                // 确定当前活跃的视图
-                var targetView = null;
-                var viewName = '';
-                if (agentViewVisible) {
-                    targetView = agentView;
-                    viewName = 'Agent';
-                } else if (qwenVisible) {
-                    targetView = qwenView;
-                    viewName = 'Qwen';
-                } else {
-                    targetView = deepseekView;
-                    viewName = 'DeepSeek';
-                }
-
-                if (!targetView || targetView.webContents.isDestroyed()) {
-                    await qqBotInstance.sendText(msg.openid, '❌ 当前视图不可用', msg.msgId);
-                    return true;
-                }
-
-                console.log('[QQBot] /sct 截取窗口: ' + viewName);
-
-                var sctTempDir = path.join(currentRootDir || app.getPath('userData'), '.dsa', 'temp');
-                if (!fs.existsSync(sctTempDir)) fs.mkdirSync(sctTempDir, { recursive: true });
-                var sctFilename = 'screenshot_win_' + Date.now() + '.png';
-                var sctPath = path.join(sctTempDir, sctFilename);
-
-                // 计算内容区域 bounds（与 updateBounds 一致）
-                var winSize = mainWindow.getContentBounds();
-                var contentX = VIEWBAR_WIDTH;
-                var contentWidth = winSize.width - VIEWBAR_WIDTH - SIDEBAR_WIDTH;
-                var contentHeight = winSize.height - CTRL_BAR_HEIGHT;
-
-                // 保存原始 bounds，临时设为可见区域
-                var origBounds = targetView.getBounds();
-                var wasOffscreen = origBounds.width < 10 || origBounds.x < 0;
-
-                if (wasOffscreen) {
-                    targetView.setBounds({
-                        x: contentX, y: 0,
-                        width: contentWidth, height: contentHeight
-                    });
-                    // 等待一帧确保渲染
-                    await new Promise(function(r) { setTimeout(r, 300); });
-                }
-
-                // capturePage 捕获视图内容
-                var captured = false;
-                try {
-                    var capImg = await targetView.webContents.capturePage();
-                    if (capImg && !capImg.isEmpty()) {
-                        fs.writeFileSync(sctPath, capImg.toPNG());
-                        captured = true;
-                        console.log('[QQBot] /sct 截图方式: capturePage, 视图: ' + viewName);
-                    }
-                } catch (e) {
-                    console.log('[QQBot] /sct capturePage 失败:', e.message);
-                }
-
-                // 恢复原始 bounds
-                if (wasOffscreen) {
-                    targetView.setBounds(origBounds);
-                }
-
-                if (captured && fs.existsSync(sctPath)) {
-                    var sctStats = fs.statSync(sctPath);
-                    await qqBotInstance.sendImage(msg.openid, sctPath, msg.msgId);
-                    console.log('[QQBot] /sct 截图已发送:', sctPath, '(' + Math.round(sctStats.size / 1024) + 'KB) 视图: ' + viewName);
-                } else {
-                    await qqBotInstance.sendText(msg.openid, '❌ 截图失败（' + viewName + ' 视图不可用）', msg.msgId);
-                }
-            } catch (e) {
-                console.error('[QQBot] /sct 截图失败:', e);
-                await qqBotInstance.sendText(msg.openid, '❌ 截图失败: ' + e.message, msg.msgId);
-            }
-            return true;
-        }
-
-        if (main === '/stop') {
-            try {
-                await stopAll();
-            } catch (e) { /* ignore */ }
-            if (agentView && agentView.webContents) {
-                agentView.webContents.send('qqbot-command', { action: 'stop' });
-            }
-            await qqBotInstance.sendText(msg.openid, '⏹️ 已停止', msg.msgId);
-            return true;
-        }
-
-        return false; // 不认识的指令，转发 AI
-    }
-
-    // 停止 QQ Bot
-    ipcMain.handle('qqbot-stop', async () => {
-        try {
-            if (qqBotInstance) {
-                qqBotInstance.removeAllListeners();
-                qqBotInstance.ws && qqBotInstance.ws.close();
-                qqBotInstance = null;
-            }
-            if (qqBotPowerSaveId !== null) {
-                const { powerSaveBlocker } = require('electron');
-                powerSaveBlocker.stop(qqBotPowerSaveId);
-                qqBotPowerSaveId = null;
-                console.log('[QQBot] 已恢复屏幕休眠');
-            }
-            qqBotAuthorizedUser = null;
-            qqBotVerifyCode = '';
-            qqBotPendingMessages = [];
-            qqBotProcessing = false;
-            return { success: true };
-        } catch (err) {
-            return { success: false, error: err.message };
-        }
-    });
-
-    // 查询 QQ Bot 状态
-    ipcMain.handle('qqbot-status', () => {
-        return {
-            running: !!qqBotInstance,
-            authorized: !!qqBotAuthorizedUser,
-            openid: qqBotAuthorizedUser || null,
-            verifyCode: qqBotVerifyCode,
-            queueLength: qqBotPendingMessages.length,
-            processing: qqBotProcessing
-        };
-    });
-
-    ipcMain.handle('qqbot-get-net-mode', () => {
-        return { mode: getQQBotNetMode() };
-    });
-
-    ipcMain.handle('qqbot-set-net-mode', (event, mode) => {
-        saveAppState({ qqBotNetMode: mode });
-        // 关闭所有已有的隧道（模式切换时清理）
-        for (var port in tunnelCache) {
-            try {
-                tunnelCache[port].tunnel.close();
-            } catch (e) {}
-        }
-        tunnelCache = {};
-        return { success: true, mode: mode };
-    });
-
-    // ==================== QQ Bot 外网模式 URL 转换 ====================
-    var tunnelCache = {};  // port -> { url, tunnel }
-
-    // 获取本机局域网 IP
-    function getLanIP() {
-        var interfaces = os.networkInterfaces();
-        for (var name in interfaces) {
-            var iface = interfaces[name];
-            if (!iface) continue;
-            for (var i = 0; i < iface.length; i++) {
-                var addr = iface[i];
-                if (addr.family === 'IPv4' && !addr.internal) {
-                    return addr.address;
-                }
-            }
-        }
-        return '127.0.0.1';
-    }
-
-    // 提取 URL 中的端口号
-    function extractPort(url) {
-        var m = url.match(/:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/);
-        return m ? parseInt(m[1]) : null;
-    }
-
-    // 替换文本中的 localhost URL（同步：LAN 模式直接替换，外网模式标记待异步处理）
-    // 标记格式: __DSAGENT_TUNNEL_port__path  保留路径，避免 502
-    function replaceLocalhostUrls(text, netMode) {
-        var urlRegex = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/[^\s]*)?/gi;
-        return text.replace(urlRegex, function(matched) {
-            var port = extractPort(matched);
-            if (netMode === 'wan' && port) {
-                var path = matched.replace(/^https?:\/\/[^\/]+/, '') || '/';
-                return '__DSAGENT_TUNNEL_' + port + '__' + path;
-            }
-            var lanIP = getLanIP();
-            return matched.replace(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)/i, lanIP);
-        });
-    }
-
-    // 异步替换 __DSAGENT_TUNNEL_port__path 标记为 localtunnel URL
-    async function replaceWithTunnels(text) {
-        var tunnelMarkers = text.match(/__DSAGENT_TUNNEL_\d+__[^\s]*/g);
-        if (!tunnelMarkers) return text;
-
-        for (var i = 0; i < tunnelMarkers.length; i++) {
-            var marker = tunnelMarkers[i];
-            var portMatch = marker.match(/__DSAGENT_TUNNEL_(\d+)__(\/[^\s]*)?/);
-            if (!portMatch) continue;
-            var port = parseInt(portMatch[1]);
-            var path = portMatch[2] || '/';
-
-            try {
-                var tunnelUrl;
-                if (tunnelCache[port] && tunnelCache[port].url) {
-                    tunnelUrl = tunnelCache[port].url;
-                } else {
-                    console.log('[Tunnel] Creating tunnel for port', port);
-                    var tunnel = await localtunnel({ port: port, local_host: '127.0.0.1' });
-                    tunnelUrl = tunnel.url;
-                    tunnelCache[port] = { url: tunnelUrl, tunnel: tunnel };
-                    console.log('[Tunnel] Created:', tunnelUrl);
-                    tunnel.on('close', function() {
-                        console.log('[Tunnel] Closed for port', port);
-                        delete tunnelCache[port];
-                    });
-                    tunnel.on('error', function(err) {
-                        console.error('[Tunnel] Error for port', port, err.message);
-                        delete tunnelCache[port];
-                    });
-                }
-                text = text.replace(marker, tunnelUrl + path);
-            } catch (e) {
-                console.error('[Tunnel] Failed to create tunnel for port', port, e.message);
-                var lanIP = getLanIP();
-                text = text.replace(marker, 'http://' + lanIP + ':' + port + path);
-            }
-        }
-        return text;
-    }
-
-    // 获取当前外网模式
-    function getQQBotNetMode() {
-        var state = loadAppState();
-        return state.qqBotNetMode || 'lan';
-    }
-
-    // Agent 发送 QQ 回复（由 agentview 在 AI 完成处理后调用）
-    ipcMain.on('qqbot-send-response', async (event, data) => {
-        if (!qqBotInstance || !qqBotAuthorizedUser) return;
-        var openid = qqBotAuthorizedUser;
-        var msgId = data.msgId || null;
-
-        try {
-            // 发送文字回复（自动转换 localhost URL 为 LAN/外网 地址）
-            if (data.text) {
-                var netMode = getQQBotNetMode();
-                var text = replaceLocalhostUrls(data.text, netMode);
-                text = await replaceWithTunnels(text);
-                await qqBotInstance.sendText(openid, text, msgId);
-            }
-            // 发送图片/文件
-            if (data.files && data.files.length > 0) {
-                for (var fi = 0; fi < data.files.length; fi++) {
-                    var fp = data.files[fi];
-                    try {
-                        var ext = path.extname(fp).toLowerCase();
-                        if (ext.match(/\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i)) {
-                            await qqBotInstance.sendImage(openid, fp, msgId);
-                        } else {
-                            await qqBotInstance.sendFile(openid, fp, msgId);
-                        }
-                    } catch (e) {
-                        console.error('[QQBot] 发送文件失败:', fp, e.message);
-                    }
-                }
-            }
-        } catch (err) {
-            console.error('[QQBot] 发送回复失败:', err);
-        }
-
-        // 处理下一个排队消息
-        qqBotProcessing = false;
-        if (qqBotPendingMessages.length > 0) {
-            var next = qqBotPendingMessages.shift();
-            qqBotProcessing = true;
-            forwardQQMessageToAgent(next);
-        }
-    });
-
     // ==================== Robot 配置管理 ====================
 
     // 保存大文本到临时文件（粘贴 >5KB 内容时自动保存）
@@ -2468,39 +1753,6 @@ function setupControlBarIPC() {
         }
     });
 
-    ipcMain.handle('qqbot-list-robots', () => {
-        var state = loadAppState();
-        return state.qqRobots || [];
-    });
-
-    ipcMain.handle('qqbot-save-robot', (event, robot) => {
-        var state = loadAppState();
-        var robots = state.qqRobots || [];
-        var idx = -1;
-        for (var ri = 0; ri < robots.length; ri++) {
-            if (robots[ri].id === robot.id) { idx = ri; break; }
-        }
-        if (idx >= 0) {
-            // 编辑时 secret 留空且标记 _keepSecret，保留旧值
-            if (robot._keepSecret && !robot.clientSecret) {
-                robot.clientSecret = robots[idx].clientSecret;
-            }
-            delete robot._keepSecret;
-            robots[idx] = robot;
-        } else {
-            delete robot._keepSecret;
-            robots.push(robot);
-        }
-        saveAppState({ qqRobots: robots });
-        return { success: true, robots: robots };
-    });
-
-    ipcMain.handle('qqbot-delete-robot', (event, robotId) => {
-        var state = loadAppState();
-        var robots = (state.qqRobots || []).filter(function(r) { return r.id !== robotId; });
-        saveAppState({ qqRobots: robots });
-        return { success: true, robots: robots };
-    });
 
     // Agent 获取/设置 readTools
     ipcMain.handle('agent-get-read-tools', async () => {
@@ -2574,6 +1826,8 @@ function setupControlBarIPC() {
 
     // 危险命令确认：从 inject.js 转发到 Agent 视图
     ipcMain.handle('agent-request-confirm', async (event, data) => {
+        var qqBotInstance = botQQ ? botQQ.getInstance() : null;
+        var qqBotAuthorizedUser = botQQ ? botQQ.getAuthorizedUser() : null;
         // 如果 QQ Bot 已授权，通过 QQ 按钮询问
         if (qqBotInstance && qqBotAuthorizedUser && agentView && agentView.webContents) {
             var cmdDesc = data.cmdDisplay || data.cmd || data.lang || '未知命令';
@@ -2593,10 +1847,10 @@ function setupControlBarIPC() {
                         { id: 'confirm_no', label: '❌ 取消', data: 'confirm_no', style: 0 }
                     ]);
 
-                qqBotAwaitingConfirm = true;
+                if (botQQ) botQQ.setAwaitingConfirm(true);
                 var qqConfirmed = await new Promise(function(resolve) {
                     var qqTimeout = setTimeout(function() {
-                        qqBotAwaitingConfirm = false;
+                        if (botQQ) botQQ.setAwaitingConfirm(false);
                         qqBotInstance.removeListener('interaction', interactionHandler);
                         qqBotInstance.removeListener('message', msgHandler);
                         resolve(false);
@@ -2604,7 +1858,7 @@ function setupControlBarIPC() {
                     var interactionHandler = function(intData) {
                         if (intData.userOpenid !== qqBotAuthorizedUser) return;
                         clearTimeout(qqTimeout);
-                        qqBotAwaitingConfirm = false;
+                        if (botQQ) botQQ.setAwaitingConfirm(false);
                         qqBotInstance.removeListener('interaction', interactionHandler);
                         qqBotInstance.removeListener('message', msgHandler);
                         if (intData.buttonData === 'confirm_yes') {
@@ -2618,13 +1872,13 @@ function setupControlBarIPC() {
                         var reply = (msg.content || '').trim().toUpperCase();
                         if (reply === 'Y' || reply === 'YES' || reply === '确认') {
                             clearTimeout(qqTimeout);
-                            qqBotAwaitingConfirm = false;
+                            if (botQQ) botQQ.setAwaitingConfirm(false);
                             qqBotInstance.removeListener('interaction', interactionHandler);
                             qqBotInstance.removeListener('message', msgHandler);
                             resolve(true);
                         } else if (reply === 'N' || reply === 'NO' || reply === '取消') {
                             clearTimeout(qqTimeout);
-                            qqBotAwaitingConfirm = false;
+                            if (botQQ) botQQ.setAwaitingConfirm(false);
                             qqBotInstance.removeListener('interaction', interactionHandler);
                             qqBotInstance.removeListener('message', msgHandler);
                             resolve(false);
@@ -2711,12 +1965,12 @@ function setupControlBarIPC() {
         }
 
         // 技能步骤同步转发到 QQ Bot（单行精简格式，适配手机屏幕）
-        if (data.type === 'skill-step' && qqBotInstance && qqBotAuthorizedUser) {
+        if (data.type === 'skill-step' && botQQ && botQQ.getInstance() && botQQ.getAuthorizedUser()) {
             try {
                 var statusEmoji = { running: '🔄', completed: '✅', failed: '❌', info: 'ℹ️' };
                 var emoji = statusEmoji[data.status] || '📌';
                 var msgText = emoji + ' ' + data.skill + ': ' + data.step;
-                qqBotInstance.sendText(qqBotAuthorizedUser, msgText);
+                botQQ.getInstance().sendText(botQQ.getAuthorizedUser(), msgText);
             } catch (e) {
                 console.warn('[QQBot] skill-step forward failed:', e.message);
             }
@@ -2830,6 +2084,8 @@ function setupControlBarIPC() {
         userStoppedGeneration = false;
         try {
             // QQ Bot 优先
+            var qqBotInstance = botQQ ? botQQ.getInstance() : null;
+            var qqBotAuthorizedUser = botQQ ? botQQ.getAuthorizedUser() : null;
             if (qqBotInstance && qqBotAuthorizedUser && agentView && agentView.webContents) {
                 try {
                     await qqBotInstance.sendKeyboard(qqBotAuthorizedUser,
@@ -3212,17 +2468,27 @@ function setupIpcHandlers() {
     ipcMain.handle('get-init-prompt', async (event, mode) => {
         try {
             var text = '';
+            // mode → 文件名映射（agentMode 值跟文件后缀名不一致）
+            var agentFileMap = { 'expert': 'pro', 'fast': 'quick', 'image': 'image' };
+            var agentSuffix = agentFileMap[mode] || 'quick';
+            var strategyModeMap = { 'expert': 'professional', 'fast': 'quick', 'image': 'image' };
+            var strategyMode = strategyModeMap[mode] || 'quick';
+
             const promptDir = path.join(__dirname, 'prompt');
             if (fs.existsSync(promptDir)) {
-                const files = fs.readdirSync(promptDir)
-                    .filter(f => f.endsWith('.md'))
-                    .sort();  // 按文件名排序，保证 01- 03- 顺序
+                const allFiles = fs.readdirSync(promptDir)
+                    .filter(f => f.endsWith('.md'));
+                // AGENT_*.md 是模式策略文件，只加载匹配当前模式的（避免发送全部 3 个策略）
+                var modeAgentFile = 'AGENT_' + agentSuffix + '.md';
+                var files = allFiles.filter(function(f) {
+                    if (!f.startsWith('AGENT_')) return true;          // 非策略文件全部加载
+                    return f.toLowerCase() === modeAgentFile.toLowerCase(); // 策略文件只加载匹配模式的
+                }).sort();
                 for (const f of files) {
                     text += fs.readFileSync(path.join(promptDir, f), 'utf-8') + '\n\n';
                 }
             }
             // 加载模式专用策略（common.md + {mode}.md）
-            var strategyMode = mode || 'quick';
             const strategyDir = path.join(__dirname, 'prompt', 'strategy');
             if (fs.existsSync(strategyDir)) {
                 // 先加载公用策略
@@ -3822,37 +3088,31 @@ function updateBounds() {
     if (shellView && _startupComplete) {
         shellView.setBounds({ x: 0, y: 0, width: width, height: height });
     }
-    // 内容区视图（DeepSeek / Qwen / Agent）覆盖在 shellView 的 content-spacer 区域上方
-    // 关键：先隐藏不需要的视图（移到屏幕外），再显示需要的视图，避免闪烁
-    var offBounds = { x: -10000, y: titlebarH, width: contentBounds.width, height: contentBounds.height };
-    // 1. 先隐藏非活跃视图
-    if (agentViewVisible || qwenVisible) {
-        deepseekView.setBounds(offBounds);
-    }
-    if (qwenView && (agentViewVisible || !qwenVisible)) {
-        qwenView.setBounds(offBounds);
-    }
-    if (agentView && !agentViewVisible) {
-        agentView.setBounds(offBounds);
-    }
-    // 2. 再显示活跃视图
-    if (!agentViewVisible && !qwenVisible) {
-        deepseekView.setBounds(contentBounds);
-    } else if (qwenView && !agentViewVisible && qwenVisible) {
-        qwenView.setBounds(contentBounds);
-    } else if (agentView && agentViewVisible) {
-        agentView.setBounds(contentBounds);
-    }
-    // 当 Qwen / Agent 从隐藏变为可见时，强制触发一次重绘，修复 Chromium 帧缓冲丢失导致的白屏
-    if (!prevAgentViewVisible && agentViewVisible) forceRepaint(agentView);
-    if (!prevQwenVisible && qwenVisible) forceRepaint(qwenView);
-    prevAgentViewVisible = agentViewVisible;
-    prevQwenVisible = qwenVisible;
+    // 内容区视图 — 启动完成前保持手动位置（避免 viewbar 偏移打乱 splash 居中）
+    if (_startupComplete) {
+        var offBounds = { x: -10000, y: titlebarH, width: contentBounds.width, height: contentBounds.height };
+        if (agentViewVisible || qwenVisible) {
+            deepseekView.setBounds(offBounds);
+        }
+        if (qwenView && (agentViewVisible || !qwenVisible)) {
+            qwenView.setBounds(offBounds);
+        }
+        if (agentView && !agentViewVisible) {
+            agentView.setBounds(offBounds);
+        }
+        if (!agentViewVisible && !qwenVisible) {
+            deepseekView.setBounds(contentBounds);
+        } else if (qwenView && !agentViewVisible && qwenVisible) {
+            qwenView.setBounds(contentBounds);
+        } else if (agentView && agentViewVisible) {
+            agentView.setBounds(contentBounds);
+        }
+        if (!prevAgentViewVisible && agentViewVisible) forceRepaint(agentView);
+        if (!prevQwenVisible && qwenVisible) forceRepaint(qwenView);
+        prevAgentViewVisible = agentViewVisible;
+        prevQwenVisible = qwenVisible;
 
-    // z-order：确保可见的内容视图在 shellView 之上
-    // BrowserView 后添加的在最上层，所以 shellView 必须先添加，内容视图后添加
-    // 这里用 setTopBrowserView 把当前可见的内容视图提到最顶层
-    try {
+        try {
         if (agentViewVisible && agentView) {
             mainWindow.setTopBrowserView(agentView);
         } else if (qwenVisible && qwenView) {
@@ -3861,6 +3121,7 @@ function updateBounds() {
             mainWindow.setTopBrowserView(deepseekView);
         }
     } catch (e) {}
+    }
 }
 
 // 强制 BrowserView 重绘：通过微调尺寸触发 Chromium 重新合成帧
@@ -3920,10 +3181,15 @@ function createWindow() {
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
-            preload: path.join(__dirname, 'preload.js')
+            preload: path.join(__dirname, 'preload.js'),
+            devTools: true
         }
     });
     // 启动时缩小窗口居中（类似 Office 开场动画），启动完成后恢复
+    // 使用 did-finish-load 事件确保 DevTools 在页面就绪后打开
+    mainWindow.webContents.once('did-finish-load', function() {
+        mainWindow.webContents.openDevTools();
+    });
     var winBounds = mainWindow.getBounds();
     var startupWidth = Math.min(520, winBounds.width);
     var startupHeight = Math.min(360, winBounds.height);
@@ -3932,6 +3198,8 @@ function createWindow() {
         y: winBounds.y + Math.round((winBounds.height - startupHeight) / 2),
         width: startupWidth, height: startupHeight
     });
+
+    // 创建浏览器窗口
 
     // 创建浏览器窗口
 
@@ -4074,8 +3342,6 @@ function createWindow() {
     agentView.webContents.on('did-finish-load', function() {
         // 延迟同步，让 viewBar 先完成其初始化
         setTimeout(syncSkillsCount, 800);
-        // 打开开发者工具以便调试
-        agentView.webContents.openDevTools();
     });
     agentView.webContents.on('render-process-gone', (event, details) => {
         console.error('[Agent] Renderer gone:', details.reason);
@@ -4085,25 +3351,27 @@ function createWindow() {
     agentView.webContents.on('unresponsive', () => {
         console.error('[Agent] Page unresponsive');
     });
+
     // 立即加入 Agent 视图到主窗口，置于屏幕外保持 JS 全速运行
     mainWindow.addBrowserView(agentView);
     agentView.webContents.setBackgroundThrottling(false);
+    // 设置透明背景，让 deepseek/qwen 从背后透出
+    agentView.setBackgroundColor('#00000000');
     // 初始尺寸保持正常窗口大小，避免 1x1 导致 Chromium 丢弃帧缓冲；updateBounds 会立即修正精确坐标
     agentView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
 
     // 设置布局
     mainWindow.on('resize', updateBounds);
 
-    // ========== 简化启动流程：Agent 视图直接可见，DeepSeek 后台加载 ==========
-    // 不显示 DeepSeek 页面，避免闪烁
+    // ========== 启动流程：Agent 透明，DeepSeek/Qwen 在背后可见 ==========
     agentViewVisible = true;
     qwenVisible = false;
-    // Agent 在正常位置
-    if (qwenView) qwenView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
-    // DeepSeek 也置于屏幕外（后台加载）
-    deepseekView.setBounds({ x: -10000, y: 38, width: 800, height: 600 });
-    agentView.setBounds({ x: 0, y: 38, width: 800, height: 600 });
-    updateBounds();
+    // DeepSeek 填满整个窗口（包括标题栏区域，shell 未显示前避免白条）
+    var startupContent = { x: 0, y: 0, width: startupWidth, height: startupHeight };
+    deepseekView.setBounds(startupContent);
+    agentView.setBounds({ x: 0, y: 0, width: startupWidth, height: startupHeight });
+    // 确保 agentView 在最上层
+    try { mainWindow.setTopBrowserView(agentView); } catch(e) {}
 
     // 加载 DeepSeek 网页
     setupSession();
@@ -4136,70 +3404,63 @@ function createWindow() {
                     theme: currentAppTheme
                 });
         }, 800);
-        // 强制渲染 DeepSeek 页面的 SVG 图标（屏幕外时 Chromium 会跳过 SVG 渲染）
-        // 旧方案把 view 移到 (0,0) 200ms 会导致闪现；改用 JS 强制 SVG 重绘，无需移动 view
-        setTimeout(() => {
-            if (!deepseekView || deepseekView.webContents.isDestroyed()) return;
-            try {
-                deepseekView.webContents.executeJavaScript(
-                    '(function(){'
-                    + 'var svgs=document.querySelectorAll("svg");'
-                    + 'for(var i=0;i<svgs.length;i++){'
-                    + 'var s=svgs[i];var d=s.style.display;s.style.display="none";'
-                    + 's.getBoundingClientRect();'
-                    + 's.style.display=d?s.style.display="":null;'
-                    + '}'
-                    + '})()'
-                ).catch(function(){});
-            } catch(e) {
-                console.warn('[DeepSeek] SVG warmup failed:', e);
-            }
-        }, 100);
 
-        // ========== 后台加载 Qwen，完成后通知 splash ==========
+        // ========== 顺序加载：DeepSeek 2s → Qwen 2s → 启动完成 ==========
         if (global.__ds_startup_done) return;
         global.__ds_startup_done = true;
 
         console.log('[Main] DeepSeek loaded, background init...');
+        var startupContent = { x: 0, y: 0, width: startupWidth, height: startupHeight };
         function sendSplashProgress(msg, pct) {
             if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
                 agentView.webContents.send('splash-progress', { text: msg, percent: pct });
             }
         }
-        sendSplashProgress('DeepSeek 已就绪', 40);
+        sendSplashProgress('DeepSeek 已就绪', 20);
 
-        // 异步加载 Qwen
+        // DeepSeek 在背后可见 2s
         setTimeout(() => {
+            // DeepSeek 加载完毕，移出屏幕
+            deepseekView.setBounds({ x: -10000, y: 38, width: 800, height: 600 });
+            sendSplashProgress('正在加载 Qwen...', 50);
             console.log('[Main] Loading Qwen...');
-            sendSplashProgress('正在加载 Qwen...', 55);
-            createQwenView();
-        }, 500);
 
-        // 启动完成后恢复窗口 + 显示 shell
-        setTimeout(() => {
-            sendSplashProgress('启动完成', 100);
-            _startupComplete = true;
-            if (shellView) {
-                var winSize = mainWindow ? mainWindow.getContentBounds() : { width: 800, height: 600 };
-                shellView.setBounds({ x: 0, y: 0, width: winSize.width, height: winSize.height });
+            // 创建 Qwen 并填满窗口，透过透明 agentView 可见
+            if (!qwenView) createQwenView();
+            if (qwenView) {
+                qwenView.setBounds(startupContent);
+                try { mainWindow.setTopBrowserView(agentView); } catch(e) {}
             }
-            // 恢复窗口到正常大小（居中）
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                var disp = require('electron').screen.getPrimaryDisplay().workAreaSize;
-                var targetW = Math.min(CONFIG.WINDOW_WIDTH, disp.width);
-                var targetH = Math.min(CONFIG.WINDOW_HEIGHT, disp.height);
-                mainWindow.setBounds({
-                    width: targetW, height: targetH,
-                    x: Math.round((disp.width - targetW) / 2),
-                    y: Math.round((disp.height - targetH) / 2)
-                });
-                setTimeout(updateBounds, 100);
-            }
+
+            // Qwen 在背后可见 2s
             setTimeout(() => {
-                if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
-                    agentView.webContents.send('splash-complete');
+                sendSplashProgress('启动完成', 100);
+                if (qwenView) {
+                    qwenView.setBounds({ x: -10000, y: 0, width: 1280, height: 720 });
                 }
-            }, 300);
+                _startupComplete = true;
+                if (shellView) {
+                    var winSize = mainWindow ? mainWindow.getContentBounds() : { width: 800, height: 600 };
+                    shellView.setBounds({ x: 0, y: 0, width: winSize.width, height: winSize.height });
+                }
+                // 恢复窗口到正常大小（居中）
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    var disp = require('electron').screen.getPrimaryDisplay().workAreaSize;
+                    var targetW = Math.min(CONFIG.WINDOW_WIDTH, disp.width);
+                    var targetH = Math.min(CONFIG.WINDOW_HEIGHT, disp.height);
+                    mainWindow.setBounds({
+                        width: targetW, height: targetH,
+                        x: Math.round((disp.width - targetW) / 2),
+                        y: Math.round((disp.height - targetH) / 2)
+                    });
+                    setTimeout(updateBounds, 100);
+                }
+                setTimeout(() => {
+                    if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+                        agentView.webContents.send('splash-complete');
+                    }
+                }, 300);
+            }, 2000);
         }, 2000);
     });
 
@@ -4399,6 +3660,37 @@ function restoreAppState() {
 app.whenReady().then(() => {
     createWindow();
 
+    // ── 初始化机器人插件宿主（QQ / 微信 / 飞书） ──
+    // 各插件在 plugins/*/index.js，通过 ctx 访问宿主上下文，自行注册 IPC。
+    const { powerSaveBlocker } = require('electron');
+    const pluginCtx = {
+        ipcMain, path, fs, os, app, exec,
+        powerSaveBlocker, desktopCapturer, nativeImage,
+        loadAppState, saveAppState,
+        getAgentView:        () => agentView,
+        getDeepseekView:     () => deepseekView,
+        getQwenView:         () => qwenView,
+        getMainWindow:       () => mainWindow,
+        getAgentViewVisible: () => agentViewVisible,
+        getQwenVisible:      () => qwenVisible,
+        getCurrentView:      () => currentView,
+        getCurrentAppTheme:  () => currentAppTheme,
+        getCurrentRootDir:   () => currentRootDir,
+        shellSend,
+        stopAll,
+        agent,                       // { loadConfig(), saveConfig(cfg), ... }
+        historyManager,              // { listHistories(dir), loadHistory(dir, id) }
+        VIEWBAR_WIDTH, SIDEBAR_WIDTH, CTRL_BAR_HEIGHT
+    };
+    try {
+        const loaded = pluginHost.init(pluginCtx);
+        // 拿到 QQ 插件导出，供宿主做计划同步、退出等零散调用
+        botQQ = loaded && loaded.length ? require('./plugins/bot-qq/index.js') : null;
+        console.log('[Plugins] 已加载:', loaded.map(m => m.id).join(', '));
+    } catch (e) {
+        console.error('[Plugins] 宿主初始化失败:', e.message);
+    }
+
     // ── 初始化 MCP 服务器 ──
     setTimeout(() => {
         agent.initMcp().then(function(result) {
@@ -4508,16 +3800,10 @@ app.on('before-quit', async () => {
     } catch (e) {
         console.log('[MCP] Shutdown error:', e.message);
     }
-    // 关闭所有 localtunnel 隧道
-    if (typeof tunnelCache !== 'undefined' && tunnelCache) {
-        for (var port in tunnelCache) {
-            try {
-                tunnelCache[port].tunnel.close();
-                console.log('[Tunnel] Closed for port', port);
-            } catch (e) {}
-        }
-    }
-    tunnelCache = {};
+    // 关闭所有 localtunnel 隧道（QQ 插件托管）
+    try {
+        if (botQQ && typeof botQQ.shutdown === 'function') botQQ.shutdown();
+    } catch (e) {}
 });
 
 app.on('window-all-closed', () => {

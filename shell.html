@@ -450,19 +450,8 @@ html, body {
             <div class="vb-sep"></div>
             <div class="vb-group-label">工具</div>
             <button class="vb-tool-btn" id="intro-btn" onclick="ipcRenderer.send('ctrl-show-intro')" title="查看使用说明">💡</button>
-            <button class="vb-tool-btn" style="margin-top:4px;width:48px;height:32px;border:none;border-radius:6px;background:var(--accent-gradient);color:#fff;cursor:pointer;font-size:10px;font-weight:600;" onclick="ipcRenderer.send('ctrl-open-toolbox')" title="工具箱">箱</button>
+            <button class="vb-tool-btn" id="toolbox-btn" style="margin-top:4px;" onclick="ipcRenderer.send('ctrl-open-toolbox')" title="工具箱">🧰</button>
             <div class="vb-sep"></div>
-            <div class="vb-group-label">审核</div>
-            <div class="vb-confirm-group">
-                <button class="vb-confirm-btn on" id="confirm-current" data-mode="smart" onclick="toggleConfirmMenu()">智能</button>
-                <div id="confirm-menu" class="vb-confirm-menu">
-                    <button class="vb-confirm-btn" data-mode="smart" onclick="setConfirmMode('smart')">智能</button>
-                    <button class="vb-confirm-btn" data-mode="strict" onclick="setConfirmMode('strict')">严格</button>
-                    <button class="vb-confirm-btn" data-mode="loose" onclick="setConfirmMode('loose')">宽松</button>
-                    <button class="vb-confirm-btn" data-mode="readonly" onclick="setConfirmMode('readonly')">只读</button>
-                    <button class="vb-confirm-btn chevron" data-mode="custom" onclick="showCustomConfirmMode()">自定义</button>
-                </div>
-            </div>
             <button class="vb-theme-btn" id="theme-btn" onclick="toggleTheme()" title="切换主题">🌙</button>
         </div>
 

@@ -232,39 +232,81 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
     }
 
     function setModelMode(mode) {
-        // mode: 'quick' 或 'professional' 或 'image'（识图模式 = quick 模型 + 无深度思考）
+        // mode: 'quick' 或 'professional' 或 'image'
+        // targetType 对应 DeepSeek 页面上的 data-model-type 值
         var targetType = mode === 'professional' ? 'expert' : (mode === 'image' ? 'image' : 'quick');
-        var radios = document.querySelectorAll('[data-model-type]');
-        for (var ri = 0; ri < radios.length; ri++) {
-            var r = radios[ri];
+        var labelMap = {
+            'professional': { zh: '专家模式', en: ['DeepSeek-Expert', 'DeepSeek', 'Expert'] },
+            'quick': { zh: '快速模式', en: ['DeepSeek-Fast', 'Fast', 'Quick'] },
+            'image': { zh: '识图模式', en: ['DeepSeek-ImageSupport', 'Image'] }
+        };
+        var info = labelMap[mode] || labelMap['quick'];
+        var labels = [info.zh].concat(info.en);
+
+        // 方法1: data-model-type 属性
+        var allRadios = document.querySelectorAll('[data-model-type]');
+        for (var ri = 0; ri < allRadios.length; ri++) {
+            var r = allRadios[ri];
             if (r.getAttribute('data-model-type') === targetType) {
                 if (r.getAttribute('aria-checked') !== 'true') {
-                    r.click();
+                    r.dispatchEvent(new Event('click', { bubbles: true }));
                     return true;
                 }
-                return false; // already selected
+                return false;
             }
         }
-        // fallback: 按文字搜索
-        var label = mode === 'professional' ? '专家模式' : (mode === 'image' ? '识图模式' : '快速模式');
-        var allEls = document.querySelectorAll('span, div, button');
-        for (var ei = 0; ei < allEls.length; ei++) {
-            var el = allEls[ei];
-            if (el.textContent && el.textContent.trim() === label) {
-                var parent = el;
-                for (var pj = 0; pj < 5; pj++) {
-                    if (parent.hasAttribute('data-model-type') || parent.getAttribute('role') === 'radio') {
-                        if (parent.getAttribute('aria-checked') !== 'true') {
-                            parent.click();
+
+        // 方法2: 按文字搜索（中英文）
+        for (var li = 0; li < labels.length; li++) {
+            var searchText = labels[li];
+            var allEls = document.querySelectorAll('span, div, button, a, [role="tab"], [role="radio"]');
+            for (var ei = 0; ei < allEls.length; ei++) {
+                var el = allEls[ei];
+                if (el.textContent && el.textContent.trim() === searchText) {
+                    // 检查是否已有 role=tab / radio 的父元素
+                    var parent = el;
+                    for (var pj = 0; pj < 5; pj++) {
+                        if (parent.hasAttribute('data-model-type') || parent.getAttribute('role') === 'tab' || parent.getAttribute('role') === 'radio' || parent.tagName === 'BUTTON' || parent.hasAttribute('aria-selected')) {
+                            if (parent.getAttribute('aria-selected') !== 'true' && parent.getAttribute('aria-checked') !== 'true') {
+                                parent.dispatchEvent(new Event('click', { bubbles: true }));
+                                return true;
+                            }
+                            return false;
+                        }
+                        if (parent === document.body) break;
+                        parent = parent.parentElement;
+                    }
+                    // 如果没找到可点击父元素，直接点文本元素本身
+                    el.dispatchEvent(new Event('click', { bubbles: true }));
+                    return true;
+                }
+            }
+        }
+
+        // 方法3: 通过通用选择器查找模型切换按钮群
+        var modelSelectors = [
+            '[class*="model-select"]', '[class*="model-tab"]', '[class*="model-btn"]',
+            '[class*="ModelSelect"]', '[class*="ModelTab"]',
+            '[aria-label*="model" i]', '[aria-label*="切换模型"]'
+        ];
+        for (var si = 0; si < modelSelectors.length; si++) {
+            var container = document.querySelector(modelSelectors[si]);
+            if (container) {
+                var children = container.querySelectorAll('button, [role="tab"], [role="radio"], [tabindex]');
+                for (var ci = 0; ci < children.length; ci++) {
+                    var txt = (children[ci].textContent || '').trim().toLowerCase();
+                    var matches = labels.some(function(l) { return txt.indexOf(l.toLowerCase()) >= 0; });
+                    if (matches) {
+                        if (children[ci].getAttribute('aria-selected') !== 'true') {
+                            children[ci].dispatchEvent(new Event('click', { bubbles: true }));
                             return true;
                         }
                         return false;
                     }
-                    if (parent === document.body) break;
-                    parent = parent.parentElement;
                 }
             }
         }
+
         return false;
     }
     /** 后台定时任务系统（非阻塞） */
@@ -1683,20 +1725,35 @@ async function deleteCurrentConversation() {
             }
 
             // 3.5. 尝试从 DOM 提取深度思考/推理内容（如果开启了深度思考）
+            // 策略：先在本轮 AI 容器内查找；找不到则全局取最后一个 think 元素（避免取到上一轮）
             var thinkContent = '';
             try {
-                // DeepSeek 的深度思考内容通常在一个折叠面板中，尝试多种选择器
-                var thinkEl = document.querySelector('[class*="think-content"], [class*="reasoning"], [class*="thought"], .ds-think, [class*="ThinkContent"]');
-                if (!thinkEl) {
-                    // 尝试查找包含"深度思考"或"Thinking"标题的相邻容器
-                    var allDivs = document.querySelectorAll('div');
-                    for (var ti = 0; ti < allDivs.length; ti++) {
-                        var txt = allDivs[ti].textContent || '';
-                        if ((txt.indexOf('深度思考') >= 0 || txt.indexOf('Thinking') >= 0) && txt.length > 20 && txt.length < 50000) {
-                            thinkEl = allDivs[ti];
-                            break;
+                var thinkEl = null;
+                // 先定位本轮最后一个 AI 消息容器
+                var allMsgs = document.querySelectorAll(SELECTORS.messageContainer);
+                var lastAiMsgForThink = null;
+                for (var mi = allMsgs.length - 1; mi >= 0; mi--) {
+                    var tEls = allMsgs[mi].querySelectorAll('.ds-message-content, [class*="markdown"], p');
+                    if (tEls.length > 0) { lastAiMsgForThink = allMsgs[mi]; break; }
+                }
+                // 优先：在本轮 AI 容器内查找 think 元素
+                if (lastAiMsgForThink) {
+                    thinkEl = lastAiMsgForThink.querySelector('[class*="think-content"], [class*="reasoning"], [class*="thought"], .ds-think, [class*="ThinkContent"], [class*="think"]');
+                    if (!thinkEl) {
+                        var allDivs = lastAiMsgForThink.querySelectorAll('div');
+                        for (var ti = 0; ti < allDivs.length; ti++) {
+                            var txt = allDivs[ti].textContent || '';
+                            if ((txt.indexOf('深度思考') >= 0 || txt.indexOf('Thinking') >= 0 || txt.indexOf('已深度思考') >= 0) && txt.length > 20) {
+                                thinkEl = allDivs[ti];
+                                break;
+                            }
                         }
                     }
+                }
+                // 兜底：全局查找所有 think 元素，取最后一个（本轮的）
+                if (!thinkEl) {
+                    var allThinkEls = document.querySelectorAll('[class*="think-content"], [class*="reasoning"], [class*="thought"], .ds-think, [class*="ThinkContent"], [class*="think"]');
+                    if (allThinkEls.length > 0) thinkEl = allThinkEls[allThinkEls.length - 1];
                 }
                 if (thinkEl) {
                     thinkContent = thinkEl.textContent || '';
@@ -2477,7 +2534,11 @@ async function deleteCurrentConversation() {
             await fillAndSend(feedback);
         };
         // Agent 视图控制函数
-        window.__dsagent_setModelMode = function(mode) { setModelMode(mode); };
+        window.__dsagent_setModelMode = function(mode) {
+            // agentview mode 值 (expert/fast/image) → setModelMode 期望的值 (professional/quick/image)
+            var dsMode = mode === 'expert' ? 'professional' : (mode === 'image' ? 'image' : 'quick');
+            setModelMode(dsMode);
+        };
         window.__dsagent_setDeepThink = async function(enable) { return await setDeepThink(!!enable); };
         window.__dsagent_disableWebSearch = function() { tryToggleWebSearch(false); };
         window.__dsagent_sendMessage = async function(text) {
@@ -2588,13 +2649,15 @@ async function deleteCurrentConversation() {
             }
             return baseText;
         };
-        window.__dsagent_newChatAndSendInit = async function(mode, deepthink) {
+        window.__dsagent_newChatAndSendInit = async function(mode, deepthink, userText) {
             // 新对话：清空上下文相关状态
             resetContextState();
             // 新对话：清空工具文档阅读记录
             if (window.__dsagent_tools && window.__dsagent_tools.clearReadHistory) {
                 window.__dsagent_tools.clearReadHistory();
             }
+
+            // 先创建新对话再设模式（原顺序：在对话页面上设模式才生效）
             var newChatBtn = await findNewChatButton();
             if (!newChatBtn) throw new Error('找不到新建对话按钮');
             newChatBtn.click();
@@ -2610,13 +2673,12 @@ async function deleteCurrentConversation() {
             ta.focus();
             await sleep(600);
 
-            // 设置模式
+            // 设置模式（在对话页面上操作）
             setModelMode(mode === 'expert' ? 'professional' : (mode === 'image' ? 'image' : 'quick'));
             await sleep(800);
 
             // 设置深度思考
             if (mode === 'image') {
-                // 识图模式：强制关闭深度思考
                 await setDeepThink(false);
             } else {
                 await setDeepThink(!!deepthink);
@@ -2628,19 +2690,34 @@ async function deleteCurrentConversation() {
             await sleep(400);
 
             // 发送初始化提示词
-            var initText = await window.__dsagent_getInitPromptText();
+            var initText = await window.__dsagent_getInitPromptText(mode);
 
-            // 首轮附加明确指令：要求 AI 先输出就绪消息，避免无目的自动发挥
-            initText += '\n\n## 首次启动指令\n\n';
-            initText += '你现在已加载所有工具和指令。**请先不要执行任何操作**，只需输出一个就绪确认：\n\n';
-            initText += '<message>✅ 就绪，请输入你的需求</message>\n\n';
-            initText += '等待用户输入具体需求后，再按照上述指令格式执行。';
+            // 是否有用户消息（带附件/技能/INSTRUCTION.md 的完整文本）
+            if (userText && userText.trim()) {
+                // 有用户消息：直接追加到初始化消息后面（userText 已包含【基本指令】【用户消息】结构）
+                initText += '\n\n' + userText.trim() + '\n\n';
+                initText += '以上是用户发送的消息。请基于已加载的策略和工具，直接处理用户请求，无需等待。';
+            } else {
+                // 无用户消息（纯初始化）：要求 AI 先输出就绪消息
+                initText += '\n\n## 首次启动指令\n\n';
+                initText += '你现在已加载所有工具和指令。**请先不要执行任何操作**，只需输出一个就绪确认：\n\n';
+                initText += '<message>✅ 就绪，请输入你的需求</message>\n\n';
+                initText += '等待用户输入具体需求后，再按照上述指令格式执行。';
+            }
 
             sendTimestamp = Date.now();  // 标记发送时间，启用兜底轮询保底
             await fillAndSend(initText);
-            startPollingFallback();  // 启动兜底轮询，防止主检测错过 stop-square 状态
 
-            return { success: true };
+            // 获取新对话的 URL（用于历史追踪）
+            var newUrl = '';
+            try { newUrl = window.location.href; } catch(e) {}
+            // 等待一小段时间确保 URL 更新（SPA 导航可能有延迟）
+            if (!newUrl || !/\/chat\/[^?#]+/.test(newUrl)) {
+                await sleep(1500);
+                try { newUrl = window.location.href; } catch(e) {}
+            }
+
+            return { success: true, messageIncluded: !!(userText && userText.trim()), deepseekUrl: newUrl || '' };
         };
 
         // ==================== 主题检测 ====================
