@@ -953,9 +953,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
 
     // Ctrl+Shift+C: 复制选中内容到剪贴板
     function copySelectedToClipboard() {
-        // 尝试通过 electronAPI 写入剪贴板（取最后一段回复内容）
-        var textToCopy = '';
         // 从 body 中提取最后一段 AI 回复（不含工具行和 spinner）
+        var textToCopy = '';
         for (var ci = state.body.length - 1; ci >= 0; ci--) {
             var line = state.body[ci];
             if (typeof line !== 'string') continue;
@@ -967,22 +966,16 @@ async function runInteractive(token, timeout, raw, continueSession) {
             // 回退：复制整个 body 的最后 20 行
             textToCopy = state.body.slice(-20).map(function(l) { return stripAnsi(l); }).join('\n');
         }
-        if (window.electronAPI && window.electronAPI.clipboardWriteText) {
-            window.electronAPI.clipboardWriteText(textToCopy).then(function() {
-                echoSystem('已复制到剪贴板 (' + textToCopy.length + ' 字符)');
-                redraw();
-            }).catch(function() {});
-        } else {
-            // OSC 52 回退（兼容 SSH）
-            try {
-                var b64 = Buffer.from(textToCopy, 'utf-8').toString('base64');
-                process.stdout.write('\x1b]52;;' + b64 + '\x07');
-                echoSystem('已复制到剪贴板 (OSC 52)');
-                redraw();
-            } catch(e) {
-                echoSystem('复制失败: 剪贴板不可用');
-                redraw();
-            }
+        // OSC 52 终端剪贴板协议（兼容 SSH，需终端支持）
+        try {
+            var b64 = Buffer.from(textToCopy, 'utf-8').toString('base64');
+            process.stdout.write('\x1b]52;;' + b64 + '\x07');
+            process.stdout.write('\x1b[?2026h');
+            echoSystem(C.green + '✓' + C.reset + ' 已复制 (' + textToCopy.length + ' 字符)');
+            redraw();
+        } catch(e) {
+            echoSystem(C.red + '✗' + C.reset + ' 复制失败: 终端不支持 OSC 52');
+            redraw();
         }
     }
 
