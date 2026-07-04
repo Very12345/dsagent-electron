@@ -672,6 +672,19 @@ async function runInteractive(token, timeout, raw, continueSession) {
         // 组装输出
         var out = '';
         parsed.forEach(function(p) {
+            // 检测分隔行 |---|---| → 画横线
+            var joined = p.join(' ');
+            if (/^[-:|\s]+$/.test(joined)) {
+                for (var ci = 0; ci < maxCols; ci++) {
+                    var w = colWidths[ci];
+                    var line = '';
+                    for (var li = 0; li < w; li++) line += '─';
+                    if (!cells) var cells = [];
+                    cells.push(line);
+                }
+                out += (out ? '\n' : '') + C.gray + '├─' + cells.join('─┼─') + '─┤' + C.reset;
+                return;
+            }
             var cells = [];
             for (var ci = 0; ci < maxCols; ci++) {
                 var txt = ci < p.length ? renderMdInline(p[ci]) : '';
@@ -1625,14 +1638,9 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 setStatus(state.status.model, '/help 查看命令', '');
                 redrawFooter(); return;
             }
-            // 空输入：第1次提示再按退出，第2次退出
-            if (state._exitWarned) {
-                cleanupExit('再见！');
-                return;
-            }
-            state._exitWarned = true;
-            setStatus(state.status.model, '再按 Ctrl+C 退出', '');
-            redrawFooter(); return;
+            // 空输入：Ctrl+C 复制最后一条回复到剪贴板（退出请用 /quit 或 Ctrl+D）
+            copySelectedToClipboard();
+            return;
         }
         // Ctrl+D
         if (ch === '\x04') {
