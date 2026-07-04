@@ -425,6 +425,49 @@
         });
     };
 
+    // Shell 绕过检测：cat/head/tail/ls/cp/mv/tee 等文件操作命令可能绕过工具审批
+    E.isShellFileCommand = function(cmd) {
+        var lowerCmd = cmd.trim().toLowerCase();
+        return (/\b(cat|head|tail|less|more|nl|tac)\b/.test(lowerCmd) && /\S/.test(lowerCmd)) ||
+               (/\b(ls|dir|find|locate)\b/.test(lowerCmd)) ||
+               (/\b(cp|copy|mv|move|tee)\b/.test(lowerCmd));
+    };
+
+    // 敏感路径检测（读这些路径需要确认）
+    E.SENSITIVE_PATTERNS = [
+        /[\\\/]\.env\b/,                       // .env / .env.local / .env.production
+        /[\\\/]\.ssh[\\\/]/,                   // .ssh/*
+        /[\\\/]id_rsa\b/,                      // id_rsa
+        /[\\\/]id_ed25519\b/,                  // id_ed25519
+        /[\\\/]credentials\b/,                  // credentials
+        /[\\\/]secrets?\b/,                    // secret / secrets
+        /[\\\/]\w*[-_]?(cert|key|pem|pfx)\b/i, // *cert* / *key* / *.pem / *.pfx
+        /[\\\/]\.gitconfig\b/,                 // .gitconfig
+        /[\\\/]\.aws[\\\/]/,                   // .aws/*
+        /[\\\/]\.gcloud[\\\/]/,                // .gcloud/*
+        /[\\\/]config\.json\b.*api.?key/i,     // config.json 含 api key（近似）
+    ];
+    E.isSensitivePath = function(cmd) {
+        if (!cmd) return false;
+        var lower = cmd.toLowerCase();
+        return E.SENSITIVE_PATTERNS.some(function(p) { return p.test(lower); });
+    };
+
+    // 源码文件扩展名
+    E.SOURCE_CODE_EXTS = [
+        '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs',
+        '.rs', '.py', '.java', '.go', '.c', '.cpp', '.h', '.hpp', '.cs',
+        '.rb', '.php', '.vue', '.svelte', '.swift', '.kt', '.scala',
+        '.sh', '.bash', '.ps1', '.bat', '.cmd',
+        '.json', '.yaml', '.yml', '.toml', '.xml',
+        '.md', '.css', '.scss', '.less', '.html'
+    ];
+    E.isSourceCodeFile = function(path) {
+        if (!path) return false;
+        var lower = path.toLowerCase();
+        return E.SOURCE_CODE_EXTS.some(function(ext) { return lower.endsWith(ext); });
+    };
+
     // 解析自定义确认模式
     E.parseCustomMode = function(modeStr) {
         var rules = { delete: true, exec: false, write: false, edit: false, mkdir: false };
@@ -455,6 +498,17 @@
             if (lang === 'edit') return rules.edit;
             if (lang === 'mkdir') return rules.mkdir;
             return false;
+        }
+        // Shell 绕过防护：exec/cmd 中的 cat/head/cp/mv 等文件操作继承路径审批
+        if (lang === 'exec' || lang === 'cmd') {
+            if (E.isShellFileCommand(cmd)) {
+                // 对源码文件的写操作（cp/mv/tee）始终需要确认
+                if ((/\b(cp|copy|mv|move|tee)\b/.test(cmd) || /\b(>|>>)\s*/.test(cmd)) && mode !== 'loose') {
+                    return true;
+                }
+                // 读操作（cat/head/tail/ls）在 smart 模式下需要确认敏感路径
+                if (E.isSensitivePath(cmd)) return true;
+            }
         }
         // delete 总是需要确认（除非宽松模式）
         if (lang === 'delete') return mode !== 'loose';

@@ -290,9 +290,16 @@ function createDeepseekServer(deepseekViewRef) {
                 const js = `(async function(){
                     if (!window.__dsagent_sendMessage) return {success:false, error:'inject not ready'};
                     var r = await window.__dsagent_sendMessage(${JSON.stringify(args.text || '')});
+                    // 检测频率限制/服务器繁忙
+                    if (r && (typeof r === 'object') && (r.rateLimited || (r.error && (String(r.error).indexOf('429') >= 0)))) {
+                        return {success:false, rateLimited:true, retryAfter: (r.retryAfter || 60)};
+                    }
                     return r && typeof r === 'object' ? r : {success:true};
                 })();`;
                 const r = await execJs(js);
+                if (r && r.rateLimited) {
+                    return { success: false, error: 'rate_limited', retryAfter: r.retryAfter || 60 };
+                }
                 // 确保返回对象（inject 脚本可能返回原始值 true）
                 return r && typeof r === 'object' ? r : { success: true };
             }

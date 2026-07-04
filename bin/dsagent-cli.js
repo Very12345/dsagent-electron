@@ -814,6 +814,14 @@ async function runInteractive(token, timeout, raw, continueSession) {
     // 获取终端尺寸
     try { state.cols = process.stdout.columns || 80; state.rows = process.stdout.rows || 24; } catch(e) {}
 
+    function updateTerminalTitle() {
+        // 终端标题状态点 🟢/🟡/🔴（AtomCode 等效）
+        var glyph = state.spinning ? '🟡' : (state.goalActive ? '🟢' : '🟢');
+        var model = state.modelId || 'ds';
+        var title = glyph + ' DSAgent [' + model + ']';
+        try { process.stdout.write('\x1b]0;' + title + '\x07'); } catch(e) {}
+    }
+
     // ── 菜单过滤 ──
     // 可用模型列表（DeepSeek + Qwen）
     var MODEL_ITEMS = [
@@ -995,6 +1003,7 @@ async function runInteractive(token, timeout, raw, continueSession) {
     // 当 body+footer >= h 时，overflow 循环让 body 向上滚入 scrollback，
     // footer 自然保持在屏幕底部。
     function redraw() {
+        updateTerminalTitle();
         var w = state.cols, h = state.rows;
         var visibleBodyLen = state.body.length - _scrolledOff;
 

@@ -503,6 +503,49 @@ function setupAgentIPC() {
         return agent.saveConfig(config);
     });
 
+    // 记忆系统 IPC（供 memory-read/memory-append 工具调用）
+    var memoryStore = require('./memory-store.js');
+    ipcMain.handle('agent-memory-read', async (event, scope) => {
+        var rootDir = agent.getBaseDir();
+        return memoryStore.handleMemoryRead(rootDir);
+    });
+    ipcMain.handle('agent-memory-append', async (event, content, scope) => {
+        var rootDir = agent.getBaseDir();
+        var ok = memoryStore.handleMemoryAppend(rootDir, scope, content);
+        return { success: ok };
+    });
+
+    // Askpass IPC（启动 socket server + 注入环境变量）
+    function injectAskpass(deepseekView) {
+        try {
+            var askpass = require('./askpass-server.js');
+            var askpassServer = askpass.createAskpassServer(function(prompt) {
+                return new Promise(function(resolve) {
+                    if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+                        agentView.webContents.send('askpass-prompt', { prompt: prompt });
+                        ipcMain.handleOnce('askpass-response-' + Date.now(), function(ev, pwd) { resolve(pwd); });
+                        // 超时 60 秒
+                        setTimeout(function() { resolve(''); }, 60000);
+                    } else { resolve(''); }
+                });
+            });
+            askpassServer.start().then(function(socketPath) {
+                // 注入 SSH_ASKPASS / SUDO_ASKPASS 环境变量给子进程
+                var binPath = path.join(__dirname, 'bin', 'dsagent-cli.bat');
+                if (!fs.existsSync(binPath)) {
+                    binPath = path.join(__dirname, 'askpass-helper.cmd');
+                    // 创建 helper 脚本
+                    var helperContent = '@echo off\nnode "' + __dirname.replace(/\\/g, '/') + '/askpass-server.js" askpass\n';
+                    fs.writeFileSync(binPath, helperContent, 'utf-8');
+                }
+                process.env.SSH_ASKPASS = binPath;
+                process.env.SUDO_ASKPASS = binPath;
+                process.env.DSAGENT_ASKPASS_SOCKET = socketPath;
+                console.log('[Askpass] Server ready at', socketPath);
+            });
+        } catch(e) { console.warn('[Askpass] Failed to init:', e.message); }
+    }
+
     // 记忆管理
     ipcMain.handle('memory-get', async (event, type) => {
         var filePath = path.join(app.getPath('userData'), '.dsa-memory-' + type + '.json');

@@ -185,7 +185,20 @@ function createOrchestrator(deps) {
                     timeout: payload.timeout || 180000,
                     _conversationUrl: ctx && ctx.conversationUrl
                 };
-                const sendRes = await registry.invoke(modelId, 'sendMessage', sendArgs);
+                // Rate-Limit 自动重试（最多 2 次）
+                let sendRes = await registry.invoke(modelId, 'sendMessage', sendArgs);
+                if (!sendRes.success && sendRes.error === 'rate_limited') {
+                    var retryAfter = sendRes.retryAfter || 60;
+                    console.log('[Orch] Rate limited, retrying after ' + retryAfter + 's');
+                    await new Promise(function(r) { setTimeout(r, retryAfter * 1000); });
+                    sendRes = await registry.invoke(modelId, 'sendMessage', sendArgs);
+                    if (!sendRes.success && sendRes.error === 'rate_limited') {
+                        retryAfter = sendRes.retryAfter || 120;
+                        console.log('[Orch] Rate limited again, retrying after ' + retryAfter + 's');
+                        await new Promise(function(r) { setTimeout(r, retryAfter * 1000); });
+                        sendRes = await registry.invoke(modelId, 'sendMessage', sendArgs);
+                    }
+                }
                 if (!sendRes.success) return sendRes;
             }
 
@@ -288,8 +301,15 @@ function createOrchestrator(deps) {
             const goalCondition = payload.goal;
             if (goalCondition && typeof goalCondition === 'string') {
                 let goalRounds = 0;
-                const maxGoalRounds = 15;
+                const maxGoalRounds = parseInt(process.env.DSAGENT_GOAL_MAX_ROUNDS || '15', 10);
+                const maxGoalDurationSecs = parseInt(process.env.DSAGENT_GOAL_MAX_DURATION_SECS || '300', 10);
+                const goalStartTime = Date.now();
                 while (goalRounds < maxGoalRounds) {
+                    // 检查超时
+                    if ((Date.now() - goalStartTime) / 1000 > maxGoalDurationSecs) {
+                        console.log('[Goal] Duration limit reached (' + maxGoalDurationSecs + 's)');
+                        break;
+                    }
                     goalRounds++;
                     // 检查是否包含完成标记
                     if (ctx.lastResponse && ctx.lastResponse.indexOf('<goal_met/>') >= 0) {
@@ -319,12 +339,29 @@ function createOrchestrator(deps) {
                 }
             }
 
-            // 8. 缓存到 history-manager（剥离 system-reminder）
+            // 8b. Git 自动提交（启用 DSAGENT_GIT_AUTOCOMMIT=1 后每次文件编辑后自动 checkpoint）
+            if (process.env.DSAGENT_GIT_AUTOCOMMIT === '1' && ctx.lastResponse) {
+                try {
+                    var checkpointMsg = 'auto: checkpoint - ' + (payload.message && payload.message.text || '').substring(0, 40);
+                    await registry.invoke(modelId, 'sendMessage', {
+                        text: '{"tool":"git_checkpoint","params":{"message":' + JSON.stringify(checkpointMsg) + '}}',
+                        timeout: 30000
+                    });
+                } catch(e) { /* non-critical */ }
+            }
+
+            // 9. 缓存到 history-manager（剥离 system-reminder）
             if (historyManager && payload.history && payload.history.id) {
                 try {
+                    // AI 会话命名：如果是首次对话且标题为空，自动生成标题
+                    var sessTitle = payload.history.title || '';
+                    if (!sessTitle && ctx._exchangeCount === 0 && ctx.lastResponse) {
+                        var firstUserMsg = (payload.message && payload.message.text || '').trim();
+                        sessTitle = firstUserMsg.substring(0, 20) || '对话 ' + new Date().toISOString().slice(0, 10);
+                    }
                     historyManager.saveHistory({
                         id: payload.history.id,
-                        title: payload.history.title || '对话',
+                        title: sessTitle || payload.history.title || '对话',
                         modelId: modelId,
                         conversationUrl: ctx.conversationUrl,
                         messages: (payload.history.messages || []).concat([
@@ -355,6 +392,8 @@ function createOrchestrator(deps) {
 
     // ===== 历史注入：分段发送 =====
     async function injectHistory(modelId, messages, inputMaxLen, conversationUrl) {
+        // Compaction UX: 标记开始
+        console.log('[Compaction] Starting history compaction...');
         // 把 messages 拼成文本
         const text = messages.map((m) => {
             const role = m.role === 'assistant' ? '【AI 回复】' : '【用户】';
@@ -364,12 +403,35 @@ function createOrchestrator(deps) {
         // P4: 上下文压缩（参考 atomcode 冷区设计）
         // 当文本超过 70% inputMaxLen 时，压缩旧轮次为摘要，保留最近 5 轮全量
         const COMPRESS_THRESHOLD = Math.floor(inputMaxLen * 0.7);
+        const OVERFLOW_THRESHOLD = Math.floor(inputMaxLen * 0.85);
         const KEEP_LATEST = 5;
         let finalText = text;
+        let compressed = false;
 
-        if (text.length > COMPRESS_THRESHOLD && messages.length > KEEP_LATEST * 2) {
-            // 压缩：保留最近 KEEP_LATEST 轮，前面的合并为摘要
-            const keepCount = KEEP_LATEST * 2; // 每条消息算一轮（user + assistant）
+        if (text.length > OVERFLOW_THRESHOLD && messages.length > KEEP_LATEST * 2) {
+            // OverflowCompaction：超过 85% 阈值时用 LLM 摘要
+            const keepCount = KEEP_LATEST * 2;
+            const keepMessages = messages.slice(-keepCount);
+            const compressMessages = messages.slice(0, -keepCount);
+            // 生成简单摘要（行数过多时截断，避免 LLM 摘要调用的开销）
+            const summaryLines = compressMessages.map(function(m) {
+                var role = m.role === 'assistant' ? 'AI' : '用户';
+                var content = (m.content || '');
+                var preview = content.replace(/<[^>]*>/g, '').substring(0, 200);
+                return role + ': ' + preview + (content.length > 200 ? '...' : '');
+            }).join('\n');
+            finalText = '【历史摘要（已压缩 ' + compressMessages.length + ' 条旧消息）】\n'
+                + summaryLines + '\n\n'
+                + '【最近 ' + keepCount + ' 条消息】\n'
+                + keepMessages.map(function(m) {
+                    var role = m.role === 'assistant' ? '【AI 回复】' : '【用户】';
+                    return role + '\n' + (m.content || '');
+                }).join('\n\n---\n\n')
+                + '\n\n请基于以上历史继续对话。';
+            compressed = true;
+        } else if (text.length > COMPRESS_THRESHOLD && messages.length > KEEP_LATEST * 2) {
+            // 中等阈值压缩（70%）
+            const keepCount = KEEP_LATEST * 2;
             const keepMessages = messages.slice(-keepCount);
             const compressMessages = messages.slice(0, -keepCount);
 
@@ -408,7 +470,8 @@ function createOrchestrator(deps) {
 
         const res = await registry.invoke(modelId, 'injectHistory', { segments: segments, discardIntermediate: true, _conversationUrl: conversationUrl });
         if (!res.success) return { success: false, error: res.error };
-        return { success: true, segments: segments.length };
+        console.log('[Compaction] Done — ' + segments.length + ' segment(s), ' + (compressed ? 'compressed' : 'full'));
+        return { success: true, segments: segments.length, compressed: compressed };
     }
 
     // 按长度切分文本，尽量在段落/句子边界切

@@ -100,7 +100,12 @@ function executeCommandHook(hookConfig, contextJson) {
 
         try {
             // 通过 stdin 传入 JSON 上下文
-            var child = spawn(process.env.COMSPEC || 'cmd.exe', ['/c', cmd], {
+            var shell = process.env.COMSPEC || 'cmd.exe';
+            // 如果环境变量 BASH/MSYSTEM 存在，说明是 Git Bash
+            if (process.env.BASH || process.env.MSYSTEM || process.env.MINGW_PREFIX) {
+                shell = process.env.BASH || 'bash';
+            }
+            var child = spawn(shell, ['/c', cmd], {
                 stdio: ['pipe', 'pipe', 'pipe'],
                 timeout: timeout,
                 windowsHide: true

@@ -118,7 +118,9 @@ function saveHistory(rootDir, historyData) {
     if (!dir || !ensureDir(dir)) return { success: false, error: 'No root directory' };
     try {
         const filePath = path.join(dir, historyData.id + '.json');
-        fs.writeFileSync(filePath, JSON.stringify(historyData, null, 2), 'utf-8');
+        const tmpPath = filePath + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(historyData, null, 2), 'utf-8');
+        fs.renameSync(tmpPath, filePath);
         return { success: true };
     } catch (e) {
         console.warn('[History] Failed to save history:', e.message);

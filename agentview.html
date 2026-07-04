@@ -1633,6 +1633,7 @@ body.startup #menu-bar { display: none !important; }
         <div id="history-list">
             <div class="history-empty">没有历史对话</div>
         </div>
+        <input id="history-search-input" type="text" placeholder="搜索会话..." oninput="filterHistoryList()" style="width:calc(100% - 16px);margin:4px 8px 8px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text-primary);font-size:11px;box-sizing:border-box;display:none;">
 
         <!-- 计划面板（侧边栏内） -->
         <div id="plan-panel" style="display:none;margin:4px 8px;padding:6px 8px;background:#1a1a30;border:1px solid #3a3a6a;border-radius:6px;font-size:11px;flex-shrink:0;">
@@ -1659,6 +1660,7 @@ body.startup #menu-bar { display: none !important; }
         <div id="chat-area">
             <div class="empty-msg"><div style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">欢迎使用 DeepSeek Agent</div><div style="font-size:12px;color:var(--text-muted);">选择一个模型，输入消息即可开始对话</div></div>
         </div>
+        <button id="export-chat-btn" onclick="exportChatAsMarkdown()" title="导出对话为 Markdown" style="display:none;position:absolute;top:8px;right:8px;width:32px;height:32px;border-radius:8px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;font-size:14px;z-index:50;align-items:center;justify-content:center;">📥</button>
         <button id="scroll-to-bottom-btn" onclick="scrollToBottom(true)" title="回到最新消息" style="display:none;position:absolute;left:50%;bottom:16px;width:40px;height:40px;border-radius:50%;background:#2a2a4a;border:1px solid #3a3a6a;color:#aaa;cursor:pointer;font-size:18px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.4);align-items:center;justify-content:center;transform:translateX(-50%);">↓</button>
     </div>
 </div>
@@ -4371,6 +4373,12 @@ function markUnreadBelow() {
 function scrollToBottom(force) {
     var area = document.getElementById('chat-area');
     if (!area) return;
+    // Show export button when there are messages
+    var exportBtn = document.getElementById('export-chat-btn');
+    if (exportBtn) {
+        var hasMessages = area.querySelectorAll('.msg-bubble').length > 0;
+        exportBtn.style.display = hasMessages ? 'flex' : 'none';
+    }
     // 条件：force（发消息/点箭头）|| 在底部 || 生成中且用户未主动翻离底部
     if (force || isChatScrolledToBottom() || (isGenerating && !userScrolledAway)) {
         scrollToBottomRAF(area, 0);
@@ -6494,6 +6502,49 @@ function confirmModal(msg) {
         text.textContent = '下载完成，正在准备安装...';
     });
 })();
+
+// ========== 导出对话为 Markdown ==========
+function exportChatAsMarkdown() {
+    var area = document.getElementById('chat-area');
+    if (!area) return;
+    var bubbles = area.querySelectorAll('.msg-bubble');
+    if (bubbles.length === 0) return;
+    var lines = ['# 对话记录', '', '---', ''];
+    bubbles.forEach(function(b) {
+        var isUser = b.classList.contains('user');
+        var role = isUser ? '## 🧑 用户' : '## 🤖 AI';
+        var content = b.textContent || '';
+        lines.push(role, '', content, '', '---', '');
+    });
+    var md = lines.join('\n');
+    var blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = '对话_' + new Date().toISOString().slice(0, 10) + '.md';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// ========== 会话搜索过滤 ==========
+var _allHistoryItems = [];
+function filterHistoryList() {
+    var input = document.getElementById('history-search-input');
+    var query = input ? input.value.trim().toLowerCase() : '';
+    var items = document.querySelectorAll('#history-list .history-item');
+    items.forEach(function(item) {
+        var text = item.textContent.toLowerCase();
+        item.style.display = (!query || text.indexOf(query) >= 0) ? '' : 'none';
+    });
+}
+function updateHistorySearchVisibility() {
+    var input = document.getElementById('history-search-input');
+    if (!input) return;
+    var items = document.querySelectorAll('#history-list .history-item');
+    input.style.display = items.length > 3 ? 'block' : 'none';
+}
 
 // ========== 技能弹窗 ==========
 var skillsModalData = [];

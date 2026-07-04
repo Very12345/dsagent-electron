@@ -51,6 +51,8 @@ function log(type, msg) {
 function safeResolve(filePath) {
     // 清理路径中的非法字符
     let p = filePath.replace(/\\/g, '/');
+    // 剥离 Windows \\?\ 长路径前缀
+    p = p.replace(/^\\\\\?\\/i, '');
     if (/[<>|]/.test(p)) {
         throw new Error('Invalid path characters: < > |');
     }
@@ -118,6 +120,10 @@ function runCmd(command, timeoutMs) {
                 .replace(/\bmkdir\b(?=\s|$|"|'|&|\|)/g, 'md')
                 .replace(/\btouch\b(?=\s|$|"|'|&|\|)/g, 'type nul >')
                 // 以上正则已限制为完整单词，可安全用于常见命令
+            // Git Bash 下 `> nul` 会创建名为 nul 的文件而非丢弃输出，替换为 /dev/null
+            if (process.env.BASH || process.env.MSYSTEM || process.env.MINGW_PREFIX) {
+                singleLine = singleLine.replace(/>\s*nul\b/gi, '>/dev/null').replace(/2>nul\b/gi, '2>/dev/null');
+            }
         }
         var execOptions = {
             shell: 'cmd.exe',

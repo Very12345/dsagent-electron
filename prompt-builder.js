@@ -54,7 +54,8 @@ function toolsSection() {
         + '- 技能系统（skill）\n'
         + '- MCP 外部工具（mcp）\n'
         + '- 定时任务（interval）\n'
-        + '- 表单交互（form）\n';
+        + '- 表单交互（form）\n'
+        + '- 持久化记忆（memory_read/memory_append）\n';
 }
 
 // 4. 分层指令（global → project → user）
