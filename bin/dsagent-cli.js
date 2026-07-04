@@ -953,13 +953,14 @@ async function runInteractive(token, timeout, raw, continueSession) {
 
     // Ctrl+Shift+C: 复制选中内容到剪贴板
     function copySelectedToClipboard() {
-        // 从 body 中提取最后一段 AI 回复（不含工具行和 spinner）
+        // 从 body 中提取最后一段 AI 回复（不含工具行、spinner、复制提示）
         var textToCopy = '';
         for (var ci = state.body.length - 1; ci >= 0; ci--) {
             var line = state.body[ci];
             if (typeof line !== 'string') continue;
-            var plain = stripAnsi(line);
-            if (plain.match(/^\s*[◎◐▸╰>\[]/) || plain.match(/^\s*$/) || plain.match(/^───/)) continue;
+            var plain = stripAnsi(line).trim();
+            if (plain.match(/^\s*$/) || plain.match(/^───/) || plain.match(/^[✓✗]/)) continue;
+            if (plain.match(/^[◎◐▸╰>\[]/) || plain.match(/^[⚙●↻]/)) continue;
             textToCopy = (textToCopy ? plain + '\n' + textToCopy : plain);
         }
         if (!textToCopy) {
