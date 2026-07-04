@@ -916,6 +916,41 @@ async function runInteractive(token, timeout, raw, continueSession) {
         try { process.stdout.write('\x1b]0;' + title + '\x07'); } catch(e) {}
     }
 
+    // Ctrl+Shift+C: 复制选中内容到剪贴板
+    function copySelectedToClipboard() {
+        // 尝试通过 electronAPI 写入剪贴板（取最后一段回复内容）
+        var textToCopy = '';
+        // 从 body 中提取最后一段 AI 回复（不含工具行和 spinner）
+        for (var ci = state.body.length - 1; ci >= 0; ci--) {
+            var line = state.body[ci];
+            if (typeof line !== 'string') continue;
+            var plain = stripAnsi(line);
+            if (plain.match(/^\s*[◎◐▸╰>\[]/) || plain.match(/^\s*$/) || plain.match(/^───/)) continue;
+            textToCopy = (textToCopy ? plain + '\n' + textToCopy : plain);
+        }
+        if (!textToCopy) {
+            // 回退：复制整个 body 的最后 20 行
+            textToCopy = state.body.slice(-20).map(function(l) { return stripAnsi(l); }).join('\n');
+        }
+        if (window.electronAPI && window.electronAPI.clipboardWriteText) {
+            window.electronAPI.clipboardWriteText(textToCopy).then(function() {
+                echoSystem('已复制到剪贴板 (' + textToCopy.length + ' 字符)');
+                redraw();
+            }).catch(function() {});
+        } else {
+            // OSC 52 回退（兼容 SSH）
+            try {
+                var b64 = Buffer.from(textToCopy, 'utf-8').toString('base64');
+                process.stdout.write('\x1b]52;;' + b64 + '\x07');
+                echoSystem('已复制到剪贴板 (OSC 52)');
+                redraw();
+            } catch(e) {
+                echoSystem('复制失败: 剪贴板不可用');
+                redraw();
+            }
+        }
+    }
+
     // ── 菜单过滤 ──
     // 可用模型列表（DeepSeek + Qwen）
     var MODEL_ITEMS = [
@@ -1455,6 +1490,11 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 state.scrollOffset = Math.max(0, (state.scrollOffset || 0) - 3);
                 redraw(); return;
             }
+            // Ctrl+Shift+C (keyCode=67, modifier=6) → 复制选中文本/代码块到剪贴板
+            if (keyCode === 67 && modifier === 6) {
+                copySelectedToClipboard();
+                return;
+            }
             return;
         }
 
@@ -1559,22 +1599,13 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 state.input = '';
                 state.cursor = 0;
                 state.menu = null;
-                if (!state._exitWarned) {
-                    state._exitWarned = true;
-                    setStatus(state.status.model, '再按 Ctrl+C 退出', '');
-                } else {
-                    cleanupExit('再见！');
-                    return;
-                }
+                state._exitWarned = false;
+                setStatus(state.status.model, '/help 查看命令', '');
                 redrawFooter(); return;
             }
-            if (state._exitWarned) {
-                cleanupExit('再见！');
-                return;
-            }
-            state._exitWarned = true;
-            setStatus(state.status.model, '再按 Ctrl+C 退出', '');
-            redrawFooter(); return;
+            // 空输入时 Ctrl+C 直接退出（去除双击警告，避免干扰终端选中复制）
+            cleanupExit('再见！');
+            return;
         }
         // Ctrl+D
         if (ch === '\x04') {
@@ -2274,6 +2305,7 @@ async function runInteractive(token, timeout, raw, continueSession) {
             echoSystem('  Ctrl+U           清空输入行');
             echoSystem('  Ctrl+K           删除到行尾');
             echoSystem('  Ctrl+C           取消/清空/退出');
+            echoSystem('  Ctrl+Shift+C     复制选中文本');
             echoSystem('  Tab              命令补全');
             echoSystem('  Esc              关闭菜单');
             echoSystem(C.cyan + '──' + C.reset);
