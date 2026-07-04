@@ -671,29 +671,55 @@ async function runInteractive(token, timeout, raw, continueSession) {
         }
         // 组装输出
         var out = '';
+        var topBorder = function() {
+            var parts = [];
+            for (var ci = 0; ci < maxCols; ci++) {
+                var w = colWidths[ci];
+                var line = '';
+                for (var li = 0; li < w + 2; li++) line += '─';
+                parts.push(line);
+            }
+            return C.gray + '┌' + parts.join('┬') + '┐' + C.reset;
+        };
+        var botBorder = function() {
+            var parts = [];
+            for (var ci = 0; ci < maxCols; ci++) {
+                var w = colWidths[ci];
+                var line = '';
+                for (var li = 0; li < w + 2; li++) line += '─';
+                parts.push(line);
+            }
+            return C.gray + '└' + parts.join('┴') + '┘' + C.reset;
+        };
+        var hasData = false;
         parsed.forEach(function(p) {
             // 检测分隔行 |---|---| → 画横线
             var joined = p.join(' ');
             if (/^[-:|\s]+$/.test(joined)) {
+                var sepParts = [];
                 for (var ci = 0; ci < maxCols; ci++) {
                     var w = colWidths[ci];
                     var line = '';
-                    for (var li = 0; li < w; li++) line += '─';
-                    if (!cells) var cells = [];
-                    cells.push(line);
+                    for (var li = 0; li < w + 2; li++) line += '─';
+                    sepParts.push(line);
                 }
-                out += (out ? '\n' : '') + C.gray + '├─' + cells.join('─┼─') + '─┤' + C.reset;
+                out += (out ? '\n' : '') + C.gray + '├' + sepParts.join('┼') + '┤' + C.reset;
                 return;
+            }
+            if (!hasData) {
+                out = topBorder();
+                hasData = true;
             }
             var cells = [];
             for (var ci = 0; ci < maxCols; ci++) {
                 var txt = ci < p.length ? renderMdInline(p[ci]) : '';
                 var vis = displayWidth(stripAnsi(txt));
                 var pad = Math.max(0, colWidths[ci] - vis);
-                cells.push(txt + ' '.repeat(pad));
+                cells.push(' ' + txt + ' '.repeat(pad) + ' ');
             }
-            out += (out ? '\n' : '') + C.gray + '│ ' + C.reset + cells.join(C.gray + ' │ ' + C.reset) + C.gray + ' │' + C.reset;
+            out += (out ? '\n' : '') + C.gray + '│' + C.reset + cells.join(C.gray + '│' + C.reset) + C.gray + '│' + C.reset;
         });
+        if (hasData) out += '\n' + botBorder();
         return out;
     }
 
