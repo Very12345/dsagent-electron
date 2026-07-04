@@ -340,25 +340,60 @@ async function runInteractive(token, timeout, raw, continueSession) {
     //   Brand = Magenta (bright magenta 95)
     //   Muted = SGR 90 (DarkGrey / "bright black")
     //   Secondary = default fg (no color)
-    var C = {
-    reset:'\x1b[0m',
-    bold:'\x1b[1m',
-    dim:'\x1b[2m',
-    cyan:'\x1b[34m',     // 深蓝（原 96 浅蓝改）
-    magenta:'\x1b[95m',  // Brand
-    gray:'\x1b[90m',     // Muted
-    red:'\x1b[91m',      // Error
-    green:'\x1b[92m',    // Success
-    yellow:'\x1b[93m',   // Warning
-    rev:'\x1b[7m',       // Reverse video
-        HOME:'\x1b[H',
-        CLS:'\x1b[2J',
-        EL:'\x1b[K',
-        HIDE:'\x1b[?25l',
-        SHOW:'\x1b[?25h',
-        // 不再设置下划线/块状光标样式（\x1b[4 q / \x1b[0 q 是终端全局状态，
-        // 频繁切换会在错误位置留下 _ 残影）。用终端默认光标，只控制 SHOW/HIDE。
+    var THEMES = {
+        'atomcode': {
+            name:'AtomCode',
+            reset:'\x1b[0m', bold:'\x1b[1m', dim:'\x1b[2m',
+            cyan:'\x1b[34m', magenta:'\x1b[95m', gray:'\x1b[90m',
+            red:'\x1b[91m', green:'\x1b[92m', yellow:'\x1b[93m',
+            rev:'\x1b[7m',
+        },
+        'warm': {
+            name:'暖色',
+            reset:'\x1b[0m', bold:'\x1b[1m', dim:'\x1b[2m',
+            cyan:'\x1b[93m',  // 标题变金黄
+            magenta:'\x1b[92m', // 工具调用变翠绿
+            gray:'\x1b[90m',
+            red:'\x1b[91m',
+            green:'\x1b[96m',  // 成功变青蓝
+            yellow:'\x1b[95m', // 警告变紫
+            rev:'\x1b[7m',
+        },
+        'aurora': {
+            name:'极光',
+            reset:'\x1b[0m', bold:'\x1b[1m', dim:'\x1b[2m',
+            cyan:'\x1b[92m',  // 标题变荧光绿
+            magenta:'\x1b[96m', // 工具调用变冰蓝
+            gray:'\x1b[90m',
+            red:'\x1b[91m',
+            green:'\x1b[92m',
+            yellow:'\x1b[95m', // 警告变紫
+            rev:'\x1b[7m',
+        },
+        'mono': {
+            name:'极简',
+            reset:'\x1b[0m', bold:'\x1b[1m', dim:'\x1b[2m',
+            cyan:'\x1b[1m',  // 标题仅加粗
+            magenta:'\x1b[36m', // 工具调用柔青
+            gray:'\x1b[2m',
+            red:'\x1b[31m',
+            green:'\x1b[32m',
+            yellow:'\x1b[33m',
+            rev:'\x1b[7m',
+        }
     };
+    var activeTheme = 'atomcode';
+    function getC() {
+        var t = THEMES[activeTheme] || THEMES['warm'];
+        t.HOME = '\x1b[H'; t.CLS = '\x1b[2J'; t.EL = '\x1b[K';
+        t.HIDE = '\x1b[?25l'; t.SHOW = '\x1b[?25h';
+        return t;
+    }
+    function setTheme(name) {
+        if (THEMES[name]) { activeTheme = name; C = getC(); return true; }
+        return false;
+    }
+    var C = getC();
     function pos(r, c) { return '\x1b[' + r + ';' + c + 'H'; }
 
     // ── 工具名称格式化（AtomCode 风格） ──
@@ -554,35 +589,36 @@ async function runInteractive(token, timeout, raw, continueSession) {
         }
 
         // 表格行 | ... |
+        // A-2: 缓冲多行，跨行对齐
         if (trimmed.startsWith('|')) {
-            // 分隔行 |---|---| 渲染为灰色横线
-            if (/^\|[-:| ]+\|$/.test(trimmed)) {
-                var tblW = displayWidth(stripAnsi(line));
-                var hl = '';
-                for (var hli = 0; hli < tblW; hli++) hl += '─';
-                return { line: C.gray + hl + C.reset, skip: false };
+            if (!state._tableAccum) state._tableAccum = [];
+            state._tableAccum.push(trimmed);
+            return { line: '', skip: true };
+        }
+        // A-2: 非表格行到达时刷出缓冲的表格
+        if (state._tableAccum && state._tableAccum.length > 0) {
+            var tbl = flushTable(state._tableAccum, w);
+            state._tableAccum = [];
+            if (tbl) {
+                var tblLines = tbl.split('\n');
+                for (var tbi = 0; tbi < tblLines.length; tbi++) {
+                    pushBodyRow(tblLines[tbi]);
+                }
             }
-            // 普通表格行：分割单元格，按列对齐（A-2 跨行对齐通过 flushTable 在 /compact 时调用）
-            var rawCells = trimmed.split('|');
-            if (rawCells.length > 0 && rawCells[0].trim() === '') rawCells.shift();
-            if (rawCells.length > 0 && rawCells[rawCells.length - 1].trim() === '') rawCells.pop();
-            var renderedCells = rawCells.map(function(c) { return renderMdInline(c.trim()); });
-            if (renderedCells.length > 0) {
-                var cellVis = renderedCells.map(function(c) { return displayWidth(stripAnsi(c)); });
-                var maxW2 = 0;
-                for (var ci2 = 0; ci2 < cellVis.length; ci2++) { if (cellVis[ci2] > maxW2) maxW2 = cellVis[ci2]; }
-                var maxColW = Math.max(4, Math.floor((w - renderedCells.length * 3 - 2) / Math.max(1, renderedCells.length)));
-                var padded2 = renderedCells.map(function(c, ci3) {
-                    var vis = cellVis[ci3];
-                    var target = Math.min(maxW2, maxColW);
-                    return c + ' '.repeat(Math.max(0, target - vis));
-                });
-                return { line: C.gray + '│ ' + C.reset + padded2.join(C.gray + ' │ ' + C.reset) + C.gray + ' │' + C.reset, skip: false };
-            }
-            return { line: renderMdInline(line), skip: false };
         }
 
         // 默认：行内渲染
+        // A-2: 非表格行到达时刷出缓冲的表格
+        if (state._tableAccum && state._tableAccum.length > 0) {
+            var tbl = flushTable(state._tableAccum, w);
+            state._tableAccum = [];
+            if (tbl) {
+                var tblLines = tbl.split('\n');
+                for (var tbi = 0; tbi < tblLines.length; tbi++) {
+                    pushBodyRow(tblLines[tbi]);
+                }
+            }
+        }
         return { line: renderMdInline(line), skip: false };
     }
 
@@ -750,6 +786,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
         { name:'/view',     desc:'预览文件内容',   match:['view','cat'] },
         { name:'/rename',   desc:'重命名会话',     match:['rename'] },
         { name:'/keys',     desc:'键盘快捷键',     match:['keys'] },
+        { name:'/theme',    desc:'切换颜色主题',   match:['theme'] },
+        { name:'/find',     desc:'搜索对话历史',   match:['find','search'] },
         { name:'/mcp',      desc:'MCP 状态',      match:['mcp'] },
         { name:'/skills',   desc:'浏览技能',       match:['skills'] },
         { name:'/language', desc:'切换语言',       match:['language','lang'] },
@@ -828,6 +866,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
         // ── 并行工具批次 ──
         _currentBatchId: null,
         _batchHeaderPushed: false,
+        // ── 颜色主题 ──
+        _activeTheme: 'atomcode',
     };
     _tui_state = state;
 
@@ -2177,6 +2217,49 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 echoSystem('已撤销上一轮');
             } else {
                 echoSystem('没有可撤销的操作');
+            }
+        } else if (name === '/theme') {
+            // 主题切换命令
+            if (!arg) {
+                echoSystem('当前主题: ' + C.cyan + activeTheme + C.reset + ' (' + (THEMES[activeTheme] ? THEMES[activeTheme].name : '') + ')');
+                echoSystem('可用主题: ' + Object.keys(THEMES).join(', '));
+            } else if (arg === 'list') {
+                var list = '';
+                for (var tk in THEMES) {
+                    var mark = tk === activeTheme ? ' ✓' : '';
+                    list += '  ' + tk + mark + ' — ' + THEMES[tk].name + '\n';
+                }
+                echoSystem('可用主题:\n' + list.trim());
+            } else if (setTheme(arg)) {
+                state._activeTheme = activeTheme;
+                echoSystem('主题已切换为: ' + C.cyan + activeTheme + C.reset + ' (' + THEMES[activeTheme].name + ')');
+                redraw();
+                saveSession(state);
+            } else {
+                echoError('未知主题: ' + arg + '（可用: ' + Object.keys(THEMES).join(', ') + '）');
+            }
+        } else if (name === '/find') {
+            // body 文本搜索
+            if (!arg) { echoError('请指定搜索文本: /find <text>'); }
+            else {
+                var matches = [];
+                for (var fi = 0; fi < state.body.length; fi++) {
+                    var bl = state.body[fi];
+                    if (typeof bl === 'string' && bl.toLowerCase().indexOf(arg.toLowerCase()) >= 0) {
+                        matches.push({ idx: fi, line: bl });
+                    }
+                }
+                if (matches.length === 0) {
+                    echoSystem('在 ' + state.body.length + ' 行中未找到: ' + arg);
+                } else {
+                    echoSystem('在 ' + state.body.length + ' 行中找到 ' + matches.length + ' 处匹配:');
+                    for (var mi = 0; mi < Math.min(matches.length, 20); mi++) {
+                        var ml = matches[mi];
+                        var display = stripAnsi(ml.line).substring(0, 80);
+                        echoSystem(C.yellow + '#' + (ml.idx + 1) + C.reset + ' ' + display);
+                    }
+                    if (matches.length > 20) echoSystem('... (还有 ' + (matches.length - 20) + ' 行)');
+                }
             }
         } else if (name === '/keys') {
             var foldIdx = state.body.length;
