@@ -505,9 +505,19 @@ async function runInteractive(token, timeout, raw, continueSession) {
             return { line: C.gray + C.dim + (trimmed.replace(/^```/, '```').replace(/^~~~/, '~~~')) + C.reset, skip: false };
         }
 
-        // 在代码块内：原样输出，不处理 markdown，加轻微灰色
+        // 在代码块内：原样输出，不处理 markdown
         if (_inCodeBlock) {
-            return { line: C.reset + line + C.reset, skip: false };
+            // A-1: 代码块语法着色
+            var highlighted = line;
+            try {
+                if (typeof require !== 'undefined') {
+                    var hl = require('../tools/tool-highlight.js');
+                    if (hl && hl.highlightBlock) {
+                        highlighted = hl.highlightBlock(line, _codeBlockLang);
+                    }
+                }
+            } catch(e) {}
+            return { line: C.reset + highlighted + C.reset, skip: false };
         }
 
         // 水平线 ---
@@ -547,41 +557,73 @@ async function runInteractive(token, timeout, raw, continueSession) {
         if (trimmed.startsWith('|')) {
             // 分隔行 |---|---| 渲染为灰色横线
             if (/^\|[-:| ]+\|$/.test(trimmed)) {
-                // 计算表格宽度（去 ANSI 后的视觉宽度），画灰色横线
                 var tblW = displayWidth(stripAnsi(line));
                 var hl = '';
                 for (var hli = 0; hli < tblW; hli++) hl += '─';
                 return { line: C.gray + hl + C.reset, skip: false };
             }
-            // 普通表格行：分割单元格，按列对齐
+            // 普通表格行：分割单元格，按列对齐（A-2 跨行对齐通过 flushTable 在 /compact 时调用）
             var rawCells = trimmed.split('|');
-            // 去掉首尾空元素（| a | b | 分割后首尾是空）
             if (rawCells.length > 0 && rawCells[0].trim() === '') rawCells.shift();
             if (rawCells.length > 0 && rawCells[rawCells.length - 1].trim() === '') rawCells.pop();
             var renderedCells = rawCells.map(function(c) { return renderMdInline(c.trim()); });
-            // 简单对齐：每个单元格填充到该列最大视觉宽度
             if (renderedCells.length > 0) {
                 var cellVis = renderedCells.map(function(c) { return displayWidth(stripAnsi(c)); });
-                // 用当前行内容估算列宽（无全局表格状态，单行对齐有限，但至少分隔线和数据行宽度一致）
-                var maxCellW = 0;
-                for (var ci2 = 0; ci2 < cellVis.length; ci2++) {
-                    if (cellVis[ci2] > maxCellW) maxCellW = cellVis[ci2];
-                }
-                // 限制单元格最大宽度，避免超屏
+                var maxW2 = 0;
+                for (var ci2 = 0; ci2 < cellVis.length; ci2++) { if (cellVis[ci2] > maxW2) maxW2 = cellVis[ci2]; }
                 var maxColW = Math.max(4, Math.floor((w - renderedCells.length * 3 - 2) / Math.max(1, renderedCells.length)));
-                var padded = renderedCells.map(function(c, ci3) {
+                var padded2 = renderedCells.map(function(c, ci3) {
                     var vis = cellVis[ci3];
-                    var target = Math.min(maxCellW, maxColW);
-                    var pad = Math.max(0, target - vis);
-                    return c + ' '.repeat(pad);
+                    var target = Math.min(maxW2, maxColW);
+                    return c + ' '.repeat(Math.max(0, target - vis));
                 });
-                return { line: C.gray + '│ ' + C.reset + padded.join(C.gray + ' │ ' + C.reset) + C.gray + ' │' + C.reset, skip: false };
+                return { line: C.gray + '│ ' + C.reset + padded2.join(C.gray + ' │ ' + C.reset) + C.gray + ' │' + C.reset, skip: false };
             }
             return { line: renderMdInline(line), skip: false };
         }
 
         // 默认：行内渲染
         return { line: renderMdInline(line), skip: false };
+    }
+
+    // A-2: 跨行表格对齐刷出
+    function flushTable(rows, termWidth) {
+        if (!rows || rows.length === 0) return '';
+        // 解析所有行列
+        var parsed = rows.map(function(r) {
+            var cells = r.split('|');
+            if (cells.length > 0 && cells[0].trim() === '') cells.shift();
+            if (cells.length > 0 && cells[cells.length - 1].trim() === '') cells.pop();
+            return cells.map(function(c) { return c.trim(); });
+        });
+        // 计算最大列宽
+        var maxCols = 0;
+        parsed.forEach(function(p) { if (p.length > maxCols) maxCols = p.length; });
+        if (maxCols === 0) return '';
+        var colWidths = [];
+        for (var ci = 0; ci < maxCols; ci++) {
+            var maxW = 0;
+            parsed.forEach(function(p) {
+                if (ci < p.length) {
+                    var w = displayWidth(stripAnsi(renderMdInline(p[ci])));
+                    if (w > maxW) maxW = w;
+                }
+            });
+            colWidths.push(Math.min(maxW, Math.floor((termWidth - maxCols * 3 - 2) / Math.max(1, maxCols))));
+        }
+        // 组装输出
+        var out = '';
+        parsed.forEach(function(p) {
+            var cells = [];
+            for (var ci = 0; ci < maxCols; ci++) {
+                var txt = ci < p.length ? renderMdInline(p[ci]) : '';
+                var vis = displayWidth(stripAnsi(txt));
+                var pad = Math.max(0, colWidths[ci] - vis);
+                cells.push(txt + ' '.repeat(pad));
+            }
+            out += (out ? '\n' : '') + C.gray + '│ ' + C.reset + cells.join(C.gray + ' │ ' + C.reset) + C.gray + ' │' + C.reset;
+        });
+        return out;
     }
 
     // ── 辅助：视觉宽度（ASCII=1, CJK=2） ──
@@ -777,6 +819,15 @@ async function runInteractive(token, timeout, raw, continueSession) {
         _exchangeCount: 0,  // 用户-AI 交互轮次
         _sessionStart: Date.now(), // 会话启动时间戳
         _currentModelName: '', // 当前使用的模型名
+        // ── 推理块跟踪 ──
+        _inThinkBlock: false,
+        // ── 工具调用行跟踪 ──
+        _toolCallRows: [],
+        // ── 表格累积器 ──
+        _tableAccum: null,
+        // ── 并行工具批次 ──
+        _currentBatchId: null,
+        _batchHeaderPushed: false,
     };
     _tui_state = state;
 
@@ -1814,6 +1865,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
 
             var hasStreamedToolCall = false;
             function onStreamLine(msg) {
+                // B-2: 并行工具分组 — 检测 batchId
+                var batchId = msg.batchId || (msg.meta && msg.meta.batchId);
                 if (msg.type === 'tool-call') {
                     if (!hasStreamedToolCall) {
                         hasStreamedToolCall = true;
@@ -1822,27 +1875,116 @@ async function runInteractive(token, timeout, raw, continueSession) {
                             flushCollectedText();
                         }
                     }
-                    // AtomCode inflight tool 模式：清 spinner，推 committed 工具行，再推新 spinner
+                    // B-1/B-2: 工具调用动画 + 并行分组
                     var rawName = msg.name || msg.content || 'tool';
                     var argsJson = msg.content || '';
                     var dispName = displayToolNameShort(rawName);
                     var detail = formatToolDetail(rawName, argsJson);
                     var color = C.green;
-                    var toolLine = color + '● ' + C.reset + C.bold + color + dispName + C.reset + C.gray + ' ' + detail + C.reset;
-                    // 清除当前 spinner，在它的位置推工具行，然后重推 spinner
-                    clearSpinner(); // pop from body_lines + erase terminal row
-                    pushBodyRow(toolLine);
-                    // 重推 spinner（最后一个 pending row）
-                    var elapsed = Math.floor((Date.now() - startTime) / 1000);
-                    var elapsedStr = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm' + (elapsed % 60) + 's';
-                    var frame = spinFrames[(spinFrameIdx + 1) % spinFrames.length];
-                    var currentLabel = THINKING_LABELS[(state.spinLabelIdx + Math.floor(elapsed / 2)) % THINKING_LABELS.length];
-                    var newSpinRow = C.magenta + frame + C.reset + ' ' + C.bold + currentLabel + '…' + C.reset + C.gray + ' (' + elapsedStr + ')' + C.reset;
-                    pushOrUpdateSpinner(newSpinRow);
-                    redraw();
+                    var isBatchChild = batchId && state._currentBatchId === batchId;
+                    if (batchId) state._currentBatchId = batchId;
+                    // B-2: 如果是同批次的后续工具，缩进显示为子行
+                    if (isBatchChild) {
+                        // 子工具行：不更新当前批次 ID，直接推子行
+                        var childLine = C.magenta + '  ↻ ' + C.reset + C.bold + color + dispName + C.reset + C.gray + ' ' + detail + C.reset;
+                        clearSpinner();
+                        pushBodyRow(childLine);
+                        if (!state._toolCallRows) state._toolCallRows = [];
+                        state._toolCallRows.push({ idx: state.body.length - 1, name: dispName, batchId: batchId });
+                        var elapsedB = Math.floor((Date.now() - startTime) / 1000);
+                        var elapsedStrB = elapsedB < 60 ? elapsedB + 's' : Math.floor(elapsedB / 60) + 'm' + (elapsedB % 60) + 's';
+                        var frameB = spinFrames[(spinFrameIdx + 1) % spinFrames.length];
+                        var labelB = THINKING_LABELS[(state.spinLabelIdx + Math.floor(elapsedB / 2)) % THINKING_LABELS.length];
+                        pushOrUpdateSpinner(C.magenta + frameB + C.reset + ' ' + C.bold + labelB + '…' + C.reset + C.gray + ' (' + elapsedStrB + ')' + C.reset);
+                        redraw();
+                    } else {
+                        // 新批次或单工具：正常渲染
+                        if (batchId) state._batchHeaderPushed = true;
+                        // 动画图标：↻ 标识进行中
+                        var animIcon = '↻';
+                        var toolLine = C.magenta + animIcon + ' ' + C.reset + C.bold + color + dispName + C.reset + C.gray + ' ' + detail + C.reset;
+                        // 清除当前 spinner，在它的位置推工具行，然后重推 spinner
+                        clearSpinner(); // pop from body_lines + erase terminal row
+                        pushBodyRow(toolLine);
+                        // 记录工具行索引供后续更新为 ✓
+                        var toolRowIdx = state.body.length - 1;
+                        if (!state._toolCallRows) state._toolCallRows = [];
+                        state._toolCallRows.push({ idx: toolRowIdx, name: dispName });
+                        // 重推 spinner（最后一个 pending row）
+                        var elapsed = Math.floor((Date.now() - startTime) / 1000);
+                        var elapsedStr = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm' + (elapsed % 60) + 's';
+                        var frame = spinFrames[(spinFrameIdx + 1) % spinFrames.length];
+                        var currentLabel = THINKING_LABELS[(state.spinLabelIdx + Math.floor(elapsed / 2)) % THINKING_LABELS.length];
+                        var newSpinRow = C.magenta + frame + C.reset + ' ' + C.bold + currentLabel + '…' + C.reset + C.gray + ' (' + elapsedStr + ')' + C.reset;
+                        pushOrUpdateSpinner(newSpinRow);
+                        redraw();
+                    }
                 } else if (msg.type === 'tool-result') {
                     collectedToolMsgCount++;
+                    // B-1: 更新对应的工具调用行为 ✓（如果有追踪）
+                    if (state._toolCallRows && state._toolCallRows.length > 0) {
+                        var lastTool = state._toolCallRows.pop();
+                        var success = msg.success !== false;
+                        var resultColor = success ? C.green : C.red;
+                        var resultIcon = success ? '✓' : '✗';
+                        state.body[lastTool.idx] = resultColor + resultIcon + ' ' + C.reset + C.bold + resultColor + lastTool.name + C.reset;
+                        // 重绘该行
+                        redraw();
+                    }
+                    // C-1: 工具结果摘要行
+                    var success = msg.success !== false;
+                    var summary = msg.summary || '';
+                    if (!summary && msg.content) summary = msg.content.substring(0, 80);
+                    if (summary) {
+                        clearSpinner();
+                        var resultColor = success ? C.green : C.red;
+                        var resultIcon = success ? '✓' : '✗';
+                        pushBodyRow('  ' + resultColor + resultIcon + C.reset + C.gray + ' ' + resultColor + summary + C.reset);
+                        // 重推 spinner
+                        var elapsedR = Math.floor((Date.now() - startTime) / 1000);
+                        var elapsedStrR = elapsedR < 60 ? elapsedR + 's' : Math.floor(elapsedR / 60) + 'm' + (elapsedR % 60) + 's';
+                        var frameR = spinFrames[(spinFrameIdx + 1) % spinFrames.length];
+                        var labelR = THINKING_LABELS[(state.spinLabelIdx + Math.floor(elapsedR / 2)) % THINKING_LABELS.length];
+                        pushOrUpdateSpinner(C.magenta + frameR + C.reset + ' ' + C.bold + labelR + '…' + C.reset + C.gray + ' (' + elapsedStrR + ')' + C.reset);
+                        redraw();
+                    }
+                } else if (msg.type === 'think') {
+                    // D-2: 流式推理显示（灰色/斜体）
+                    if (!state._inThinkBlock) {
+                        state._inThinkBlock = true;
+                        clearSpinner();
+                        pushBodyRow(C.magenta + C.bold + '🧠 Thinking...' + C.reset);
+                        var elapsedT = Math.floor((Date.now() - startTime) / 1000);
+                        var elapsedStrT = elapsedT < 60 ? elapsedT + 's' : Math.floor(elapsedT / 60) + 'm' + (elapsedT % 60) + 's';
+                        var frameT = spinFrames[(spinFrameIdx + 1) % spinFrames.length];
+                        pushOrUpdateSpinner(C.magenta + frameT + C.reset + ' ' + C.bold + 'Thinking...' + C.reset + C.gray + ' (' + elapsedStrT + ')' + C.reset);
+                        redraw();
+                    }
+                    var thinkText = msg.content || '';
+                    if (thinkText) {
+                        var thinkLines = thinkText.split('\n');
+                        var maxTW = Math.max(20, (state.cols || 80) - 4);
+                        clearSpinner();
+                        for (var tli = 0; tli < thinkLines.length; tli++) {
+                            if (!thinkLines[tli]) { pushBodyRow(''); continue; }
+                            var wrapped = visualWrap(thinkLines[tli], maxTW);
+                            if (wrapped.length === 0) wrapped = [''];
+                            for (var wi = 0; wi < wrapped.length; wi++) {
+                                pushBodyRow(C.dim + C.gray + wrapped[wi] + C.reset);
+                            }
+                        }
+                        var elapsedT2 = Math.floor((Date.now() - startTime) / 1000);
+                        var elapsedStrT2 = elapsedT2 < 60 ? elapsedT2 + 's' : Math.floor(elapsedT2 / 60) + 'm' + (elapsedT2 % 60) + 's';
+                        var frameT2 = spinFrames[(spinFrameIdx + 1) % spinFrames.length];
+                        pushOrUpdateSpinner(C.magenta + frameT2 + C.reset + ' ' + C.bold + 'Thinking...' + C.reset + C.gray + ' (' + elapsedStrT2 + ')' + C.reset);
+                        redraw();
+                    }
                 } else if (msg.type === 'text') {
+                    // A-3: think 块结束时添加分隔
+                    if (state._inThinkBlock) {
+                        state._inThinkBlock = false;
+                        pushBodyRow(C.gray + C.dim + '─── /think ───' + C.reset);
+                    }
                     if (hasStreamedToolCall) {
                         // 工具调用间文本：清 spinner → 推文本行 → 重推 spinner
                         var textLines = (msg.content || '').split('\n');
@@ -1904,6 +2046,9 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 // 有工具调用时：工具行和中间文本已在 stream 期间实时推入，不需额外处理
                 state.hasHistory = true;
                 setStatus(state.status.model, '/help 查看命令', '');
+                // D-1: Turn 分隔线
+                var sep = C.gray + C.dim + '─── turn #' + state.turn + ' ───' + C.reset;
+                pushBodyRow(sep);
                 saveSession(state);
             } else {
                 echoError(C.red + '╰─ 错误: ' + C.reset + 'HTTP ' + streamStatus);
@@ -2094,11 +2239,13 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 echoError('git diff 错误: ' + (e.message || e));
             }
         } else if (name === '/compact') {
-            // 压缩 body：保留最后 20 条，前面的折叠
+            // D-3: 压缩 body — 标记压缩点 + 折叠
             if (state.body.length > 30) {
                 var keep = 20;
                 var folded = state.body.length - keep;
-                state.body.splice(0, folded, C.gray + C.dim + '  [已折叠 ' + folded + ' 条历史消息]' + C.reset);
+                // 添加压缩标记线
+                var markLine = C.gray + C.dim + '  ──── compaction point ────' + C.reset;
+                state.body.splice(0, folded, markLine, C.gray + C.dim + '  [已折叠 ' + folded + ' 条历史消息]' + C.reset);
                 echoSystem('已压缩对话历史（保留最后 ' + keep + ' 条，折叠 ' + folded + ' 条）');
                 redraw();
             } else {
