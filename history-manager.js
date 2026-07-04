@@ -210,18 +210,37 @@ function saveCliSession(state) {
     const dir = getCliBaseDir();
     if (!ensureDir(dir)) return { success: false, error: 'Cannot create CLI session dir' };
     try {
-        const filePath = path.join(dir, CLI_SESSION_FILE);
-        fs.writeFileSync(filePath, JSON.stringify({
+        const sessionData = {
             sessionId: state.sessionId,
+            sessionName: state.sessionName || '',
             hasHistory: state.hasHistory,
             modelId: state.modelId,
+            _currentModelName: state._currentModelName,
             deepThink: state.deepThink,
             body: state.body,
             goal: state.goal,
+            goalCondition: state.goalCondition,
+            goalActive: state.goalActive,
             turn: state.turn,
+            _exchangeCount: state._exchangeCount,
+            _sessionStart: state._sessionStart,
+            mode: state.mode,
+            language: state.language,
+            undoStack: state.undoStack,
             status: { model: state.status.model, cwd: state.status.cwd },
             savedAt: new Date().toISOString()
-        }, null, 2), 'utf-8');
+        };
+        // 覆盖最近一次会话（兼容 --continue 快速恢复）
+        const filePath = path.join(dir, CLI_SESSION_FILE);
+        fs.writeFileSync(filePath, JSON.stringify(sessionData, null, 2), 'utf-8');
+        // 同时保存到独立的 session ID 文件（供 /resume 列表）
+        if (state.sessionId) {
+            const sessDir = path.join(dir, 'sessions');
+            if (ensureDir(sessDir)) {
+                const sessFile = path.join(sessDir, state.sessionId.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json');
+                fs.writeFileSync(sessFile, JSON.stringify(sessionData, null, 2), 'utf-8');
+            }
+        }
         return { success: true };
     } catch (e) {
         console.warn('[History] Failed to save CLI session:', e.message);
@@ -252,6 +271,32 @@ function deleteCliSession() {
     }
 }
 
+// 列出所有已保存的 CLI 会话（用于 /resume 命令，按时间倒序）
+function listAllCliSessions() {
+    const sessDir = path.join(getCliBaseDir(), 'sessions');
+    if (!fs.existsSync(sessDir)) return [];
+    try {
+        var files = fs.readdirSync(sessDir).filter(function(f) { return f.endsWith('.json'); });
+        var sessions = [];
+        for (var fi = 0; fi < files.length; fi++) {
+            try {
+                var data = JSON.parse(fs.readFileSync(path.join(sessDir, files[fi]), 'utf-8'));
+                if (data && data.sessionId) sessions.push(data);
+            } catch(e) { /* skip corrupt files */ }
+        }
+        // 按保存时间降序（最新的在前面）
+        sessions.sort(function(a, b) {
+            var ta = a.savedAt ? new Date(a.savedAt).getTime() : 0;
+            var tb = b.savedAt ? new Date(b.savedAt).getTime() : 0;
+            return tb - ta;
+        });
+        return sessions;
+    } catch(e) {
+        console.warn('[History] Failed to list CLI sessions:', e.message);
+        return [];
+    }
+}
+
 module.exports = {
     listHistories,
     listHistoriesAll,
@@ -263,5 +308,6 @@ module.exports = {
     findByModel,
     saveCliSession,
     loadCliSession,
-    deleteCliSession
+    deleteCliSession,
+    listAllCliSessions
 };

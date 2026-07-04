@@ -79,6 +79,47 @@ function deleteSession() {
     try { historyManager.deleteCliSession(); } catch(e) {}
 }
 
+// 列出所有已保存的 CLI 会话（用于 /resume）
+function loadAllSessions() {
+    try {
+        // 从 history-manager 获取所有 CLI 会话
+        if (historyManager.listAllCliSessions) {
+            return historyManager.listAllCliSessions();
+        }
+        // fallback: 只返回当前会话
+        var cur = loadSession();
+        return cur ? [cur] : [];
+    } catch(e) { return []; }
+}
+
+// 恢复一个历史会话到当前 state（用于 /resume Tab 选择）
+function restoreSession(sess) {
+    if (!sess || !sess.sessionId) return;
+    try {
+        state.sessionId = sess.sessionId;
+        state.hasHistory = sess.hasHistory || false;
+        state.modelId = sess.modelId || state.modelId;
+        state._currentModelName = sess._currentModelName || sess.modelId || state.modelId;
+        state.deepThink = sess.deepThink || false;
+        state.goal = sess.goal || null;
+        state.goalCondition = sess.goalCondition || null;
+        state.goalActive = sess.goalActive || false;
+        state.turn = sess.turn || 0;
+        state.body = sess.body || [];
+        state.undoStack = sess.undoStack || [];
+        state.sessionName = sess.sessionName || '';
+        state.mode = sess.mode || 'build';
+        state.language = sess.language || 'zh';
+        state.status.model = sess.status && sess.status.model || state.modelId;
+        state.status.cwd = sess.status && sess.status.cwd || state.status.cwd;
+        state._scrolledOff = 0;
+        state._liveSpinnerActive = false;
+        state.scrollOffset = 0;
+        if (sess._exchangeCount) state._exchangeCount = sess._exchangeCount;
+        if (sess._sessionStart) state._sessionStart = sess._sessionStart;
+    } catch(e) { /* partial restore OK */ }
+}
+
 // 自动启动 Electron（如果未运行）
 function ensureServerRunning() {
     return new Promise(function(resolve, reject) {
@@ -607,6 +648,20 @@ async function runInteractive(token, timeout, raw, continueSession) {
             }
         }
 
+        // ── 冲刷表格缓冲（回复以表格结尾时使用） ──
+        function flushTableAccum() {
+            if (state._tableAccum && state._tableAccum.length > 0) {
+                var tbl = flushTable(state._tableAccum, state.cols || 80);
+                state._tableAccum = [];
+                if (tbl) {
+                    var tblLines = tbl.split('\n');
+                    for (var tbi = 0; tbi < tblLines.length; tbi++) {
+                        pushBodyRow(tblLines[tbi]);
+                    }
+                }
+            }
+        }
+
         // 水平线 ---
         if (/^[-*_]{3,}$/.test(trimmed)) {
             return { line: '', skip: false };
@@ -854,6 +909,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
         { name:'/language', desc:'切换语言',       match:['language','lang'] },
         { name:'/bg',       desc:'后台任务',        match:['bg'] },
         { name:'/goal',     desc:'目标自动循环',    match:['goal'] },
+        { name:'/resume',   desc:'恢复历史会话',    match:['resume','re'] },
+        { name:'/session',  desc:'新建/切换会话',   match:['session','sess'] },
     ];
 
     var state = {
@@ -1049,18 +1106,51 @@ async function runInteractive(token, timeout, raw, continueSession) {
         state.menu = { items: items, selected: 0 };
     }
 
-    function getFooterRows() {
+    // ── 统一 footer 布局计算（消除 getFooterRows 与 redraw 两套计算导致输入框错位） ──
+    function computeFooterLayout() {
+        var w = state.cols || 80;
+        var h = state.rows || 24;
         var menuRows = state.menu ? Math.min(state.menu.items.length, 5) : 0;
-        var goalRow = state.goal ? 1 : 0;
-        var textBudget = Math.max(1, (state.cols || 80) - 2);
+        var hasGoal = !!state.goal;
+        var goalRow = hasGoal ? 1 : 0;
+        var STATUS_ROWS = 1;
+        var ATTACHMENT_ROWS = 0;
+        var MAX_INPUT_ROWS = 10;
+        // 预留给：topRule(1) + botRule(1) + attachments + menu + goal + status + 1 guard
+        var reservedInputRows = 2 + ATTACHMENT_ROWS + menuRows + goalRow + STATUS_ROWS + 1;
+        var maxInputRows = Math.max(1, Math.min(MAX_INPUT_ROWS, h - reservedInputRows));
+        var textBudget = Math.max(1, w - 2);
         var _wc = wrapWithCursor(state.input || '', textBudget, state.cursor || 0);
         var inputLines = _wc[0];
-        var h = state.rows || 24;
-        var MAX_INPUT_ROWS = 10;
-        var reservedInputRows = 2 + 0 + menuRows + goalRow + 1 + 1;
-        var maxInputRows = Math.max(1, Math.min(MAX_INPUT_ROWS, h - reservedInputRows));
-        var middleRows = Math.min(inputLines.length, maxInputRows);
-        return 1 + middleRows + 1 + menuRows + goalRow + 1;
+        var cursorRowInMiddleOrig = _wc[1];
+        var cursorColInRow = _wc[2];
+        var inputViewStart = inputLines.length > maxInputRows
+            ? Math.min(
+                Math.max(0, cursorRowInMiddleOrig - (maxInputRows - 1)),
+                inputLines.length - maxInputRows
+              )
+            : 0;
+        var cursorRowInMiddle = cursorRowInMiddleOrig - inputViewStart;
+        var middleRows = Math.min(inputLines.length - inputViewStart, maxInputRows);
+        var totalFooterRows = 1 + middleRows + 1 + ATTACHMENT_ROWS + menuRows + goalRow + STATUS_ROWS;
+        return {
+            totalFooterRows: totalFooterRows,
+            middleRows: middleRows,
+            menuRows: menuRows,
+            hasGoal: hasGoal,
+            goalRow: goalRow,
+            inputLines: inputLines,
+            inputViewStart: inputViewStart,
+            cursorRowInMiddle: cursorRowInMiddle,
+            cursorColInRow: cursorColInRow,
+            maxInputRows: maxInputRows,
+            textBudget: textBudget,
+        };
+    }
+
+    function getFooterRows() {
+        var layout = computeFooterLayout();
+        return layout.totalFooterRows;
     }
 
     // ── body push (严格对齐 AtomCode append-only 模型) ──
@@ -1191,31 +1281,15 @@ async function runInteractive(token, timeout, raw, continueSession) {
         var w = state.cols, h = state.rows;
         var visibleBodyLen = state.body.length - _scrolledOff;
 
-        var textBudget = Math.max(1, w - 2);
-        // AtomCode wrap_with_cursor：分行 + 返回光标行列
-        var _wc = wrapWithCursor(state.input || '', textBudget, state.cursor || 0);
-        var inputLines = _wc[0];
-        var cursorRowInMiddle = _wc[1];   // 0-indexed row
-        var cursorColInRow = _wc[2];      // display width (0 = after "> " prefix)
-
-        var menuRows = state.menu ? Math.min(state.menu.items.length, 5) : 0;
-        var hasGoal = !!state.goal;
-        var statusRows = 1;
-        var goalRows = hasGoal ? 1 : 0;
-        var attachmentRows = 0;
-        // AtomCode max_input_rows: leave room for top_rule(1) + bot_rule(1) + attachments + menu + goal + status + 1 body row
-        var MAX_INPUT_ROWS = 10;
-        var reservedInputRows = 2 + attachmentRows + menuRows + goalRows + statusRows + 1;
-        var maxInputRows = Math.max(1, Math.min(MAX_INPUT_ROWS, h - reservedInputRows));
-        var inputViewStart = inputLines.length > maxInputRows
-            ? Math.min(
-                Math.max(0, cursorRowInMiddle - (maxInputRows - 1)),
-                inputLines.length - maxInputRows
-              )
-            : 0;
-        var cursorRowInMiddle = cursorRowInMiddle - inputViewStart;
-        var middleRows = Math.min(inputLines.length - inputViewStart, maxInputRows);
-        var totalFooterRows = 1 + middleRows + 1 + attachmentRows + menuRows + goalRows + statusRows;
+        var layout = computeFooterLayout();
+        var inputLines = layout.inputLines;
+        var menuRows = layout.menuRows;
+        var hasGoal = layout.hasGoal;
+        var middleRows = layout.middleRows;
+        var totalFooterRows = layout.totalFooterRows;
+        var inputViewStart = layout.inputViewStart;
+        var cursorRowInMiddle = layout.cursorRowInMiddle;
+        var cursorColInRow = layout.cursorColInRow;
         // AtomCode: footerTop = body_rows_on_screen = min(visibleBodyLen, h - totalFooterRows)
         var bodyRowsOnScreen = Math.min(visibleBodyLen, Math.max(0, h - totalFooterRows));
         var footerTop = bodyRowsOnScreen;
@@ -1742,6 +1816,13 @@ async function runInteractive(token, timeout, raw, continueSession) {
                     echoSystem('模型切换为: ' + C.bold + sel.name + C.reset);
                     setStatus(state.modelId, '/help 查看命令', '');
                     redraw();
+                } else if (state.menu._isSessionMenu && sel._session) {
+                    // 恢复选中的会话
+                    var sess = sel._session;
+                    state.menu = null;
+                    restoreSession(sess);
+                    echoSystem('已恢复会话: ' + C.bold + (sess.sessionName || sess.sessionId || '(未命名)') + C.reset);
+                    redraw();
                 } else {
                     state.input = sel.name + ' ';
                     state.cursor = state.input.length;
@@ -2174,6 +2255,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
                         echoAssistant(collectedTextLines[mi]);
                     }
                 }
+                // 冲刷残留的表格缓冲（如果回复以表格结尾）
+                flushTableAccum();
                 // 有工具调用时：工具行和中间文本已在 stream 期间实时推入，不需额外处理
                 state.hasHistory = true;
                 setStatus(state.status.model, '/help 查看命令', '');
@@ -2190,6 +2273,7 @@ async function runInteractive(token, timeout, raw, continueSession) {
             clearInterval(state.spinTimer);
             state.spinTimer = null;
             clearSpinner();
+            flushTableAccum(); // 冲刷可能残留的表格缓冲
             if (e.message === 'aborted') {
                 // Ctrl+C 取消，已显示"已取消"
             } else {
@@ -2244,6 +2328,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
             echoSystem('  /goal <条件>            设置自动目标');
             echoSystem('  /goal status            查看目标状态');
             echoSystem('  /goal clear             清除目标');
+            echoSystem('  /resume                 恢复历史会话');
+            echoSystem('  /session                新建/切换会话');
             echoSystem('  /undo                   撤销上一轮');
             echoSystem('  /keys                   键盘快捷键');
             echoSystem(C.cyan + '──' + C.reset);
@@ -2654,6 +2740,47 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 echoSystem('🎯 目标: ' + arg + '（下条消息启动循环）');
                 state._nextGoal = arg;
             }
+        } else if (name === '/resume') {
+            // 恢复历史会话：列出已保存的会话
+            try {
+                var saved = loadAllSessions();
+                if (!saved || saved.length === 0) {
+                    echoSystem('(没有已保存的会话可供恢复)');
+                } else {
+                    // 翻转显示最新在前
+                    var sessions = saved.slice().reverse();
+                    var items = [];
+                    for (var si = 0; si < sessions.length; si++) {
+                        var s = sessions[si];
+                        var label = s.sessionName || s.sessionId || '(未命名)';
+                        var detail = s.modelId || '';
+                        if (s.turn || s._exchangeCount) detail += ' · ' + (s.turn || s._exchangeCount) + '轮';
+                        var time = s._sessionStart ? new Date(s._sessionStart).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+                        if (time) detail += ' · ' + time;
+                        items.push({ name: label, desc: detail, _session: s });
+                    }
+                    state.menu = { items: items, selected: 0, _isSessionMenu: true };
+                    state.input = '/resume '; state.cursor = state.input.length;
+                    echoSystem(C.cyan + '选择要恢复的会话（↑/↓ 切换，Enter 确认）：' + C.reset);
+                    redraw();
+                }
+            } catch(e) {
+                echoError('读取会话失败: ' + (e.message || e));
+            }
+        } else if (name === '/session') {
+            // 新建会话（保留当前会话在磁盘，开始新的空白会话）
+            saveSession(state);
+            state.sessionId = 'cli-repl-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
+            state.hasHistory = false;
+            state.goal = null;
+            state.turn = 0;
+            state.body = [];
+            state._scrolledOff = 0;
+            state._liveSpinnerActive = false;
+            state.undoStack = [];
+            state.sessionName = '';
+            clearAll();
+            echoSystem('已新建会话（之前的会话已保存）');
         } else {
             echoError('未知命令: ' + name + ' （输入 /help 查看命令）');
         }
