@@ -1632,9 +1632,14 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 setStatus(state.status.model, '/help 查看命令', '');
                 redrawFooter(); return;
             }
-            // 空输入：Ctrl+C 退出
-            cleanupExit('再见！');
-            return;
+            // 空输入：第1次提示再按退出，第2次退出
+            if (state._exitWarned) {
+                cleanupExit('再见！');
+                return;
+            }
+            state._exitWarned = true;
+            setStatus(state.status.model, '再按 Ctrl+C 退出', '');
+            redrawFooter(); return;
         }
         // Ctrl+D
         if (ch === '\x04') {
