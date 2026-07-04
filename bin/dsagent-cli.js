@@ -597,7 +597,7 @@ async function runInteractive(token, timeout, raw, continueSession) {
         }
         // A-2: 非表格行到达时刷出缓冲的表格
         if (state._tableAccum && state._tableAccum.length > 0) {
-            var tbl = flushTable(state._tableAccum, w);
+            var tbl = flushTable(state._tableAccum, state.cols || 80);
             state._tableAccum = [];
             if (tbl) {
                 var tblLines = tbl.split('\n');
@@ -607,18 +607,40 @@ async function runInteractive(token, timeout, raw, continueSession) {
             }
         }
 
-        // 默认：行内渲染
-        // A-2: 非表格行到达时刷出缓冲的表格
-        if (state._tableAccum && state._tableAccum.length > 0) {
-            var tbl = flushTable(state._tableAccum, w);
-            state._tableAccum = [];
-            if (tbl) {
-                var tblLines = tbl.split('\n');
-                for (var tbi = 0; tbi < tblLines.length; tbi++) {
-                    pushBodyRow(tblLines[tbi]);
-                }
-            }
+        // 水平线 ---
+        if (/^[-*_]{3,}$/.test(trimmed)) {
+            return { line: '', skip: false };
         }
+
+        // 标题 # ## ###
+        var hd = trimmed.match(/^(#{1,6})\s+(.+)$/);
+        if (hd) {
+            var level = hd[1].length;
+            var inner = renderMdInline(hd[2]);
+            var indent = '  '.repeat(level - 1);
+            if (level <= 3) {
+                return { line: indent + C.cyan + C.bold + inner + C.reset, skip: false };
+            }
+            return { line: indent + C.dim + inner + C.reset, skip: false };
+        }
+
+        // 无序列表 - / *
+        var li = trimmed.match(/^(\s*)[-*]\s+(.+)$/);
+        if (li) {
+            var liIndent = li[1];
+            var liText = renderMdInline(li[2]);
+            return { line: liIndent + C.magenta + '• ' + C.reset + liText, skip: false };
+        }
+
+        // 有序列表 1. 2.
+        var oi = trimmed.match(/^(\s*)(\d+)\.\s+(.+)$/);
+        if (oi) {
+            var oiIndent = oi[1];
+            var oiText = renderMdInline(oi[3]);
+            return { line: oiIndent + C.gray + oi[2] + '.' + C.reset + ' ' + oiText, skip: false };
+        }
+
+        // 默认：行内渲染
         return { line: renderMdInline(line), skip: false };
     }
 
