@@ -13,6 +13,10 @@ const FORBIDDEN_DELETE_PATHS = [
 ];
 
 let BASE_DIR = null;
+let _cwd = process.cwd(); // 独立 cwd 句柄，不随 BASE_DIR 变动
+
+function getCwd() { return _cwd; }
+function setCwd(newPath) { _cwd = path.resolve(newPath); return _cwd; }
 
 const DEFAULT_CONFIG = {
     dangerousCommands: [
@@ -160,9 +164,12 @@ function runCmd(command, timeoutMs) {
 
 function setBaseDir(newBaseDir) {
     BASE_DIR = newBaseDir;
+    if (newBaseDir) _cwd = path.resolve(newBaseDir);
     console.log('[AGENT] Base directory set to:', BASE_DIR || '(none)');
 }
 function getBaseDir() { return BASE_DIR; }
+function getCwd() { return _cwd; }
+function setCwd(newPath) { _cwd = path.resolve(newPath); return _cwd; }
 
 async function execCmd(command, timeoutMs) {
     if (!command) return { success: false, error: 'Missing command' };

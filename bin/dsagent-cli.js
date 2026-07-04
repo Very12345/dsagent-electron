@@ -764,6 +764,9 @@ async function runInteractive(token, timeout, raw, continueSession) {
         goalActive: false,
         // ── Ctrl+C 安全退出 ──
         _exitWarned: false,
+        // ── Esc 双击撤销 ──
+        _lastEscTime: 0,
+        _escWarned: false,
         // ── 滚动状态 ──
         scrollOffset: 0,
         _inModelMenu: false, // 模型选择菜单模式
@@ -1299,8 +1302,9 @@ async function runInteractive(token, timeout, raw, continueSession) {
                         redrawFooter();
                         continue;
                     }
-                    // 裸 ESC，丢弃
+                    // 裸 ESC → handleEscPress
                     _inputBuf = _inputBuf.substring(1);
+                    handleEscPress();
                     continue;
                 }
                 continue;
@@ -1349,6 +1353,16 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 state.input = state.input.substring(0, state.cursor) + '\n' + state.input.substring(state.cursor);
                 state.cursor++;
                 redrawFooter(); return;
+            }
+            // Ctrl+↑ (keyCode=1, modifier=5) → 向上滚动 3 行
+            if (keyCode === 65 && modifier === 5) {
+                state.scrollOffset = (state.scrollOffset || 0) + 3;
+                redraw(); return;
+            }
+            // Ctrl+↓ (keyCode=1, modifier=5)
+            if (keyCode === 66 && modifier === 5) {
+                state.scrollOffset = Math.max(0, (state.scrollOffset || 0) - 3);
+                redraw(); return;
             }
             return;
         }
@@ -1503,6 +1517,33 @@ async function runInteractive(token, timeout, raw, continueSession) {
             state.input = state.input.substring(0, state.cursor);
             redrawFooter(); return;
         }
+        // Ctrl+L: 清屏/新建对话
+        if (ch === '\x0c') {
+            handleCommand('/clear');
+            return;
+        }
+        // Ctrl+V: 检查剪贴板图片（仅通过 API 读剪贴板）
+        if (ch === '\x16') {
+            // 通过 electronAPI 检查剪贴板是否有图片
+            if (window.electronAPI && window.electronAPI.clipboardHasImage) {
+                window.electronAPI.clipboardHasImage().then(function(hasImage) {
+                    if (hasImage) {
+                        handleCommand('/paste');
+                    } else {
+                        // 无图片时正常插入字符
+                        state.input = state.input.substring(0, state.cursor) + ch + state.input.substring(state.cursor);
+                        state.cursor++;
+                        redrawFooter();
+                    }
+                });
+                return;
+            }
+            // 不支持检测时直接插入
+            state.input = state.input.substring(0, state.cursor) + ch + state.input.substring(state.cursor);
+            state.cursor++;
+            redrawFooter();
+            return;
+        }
         // Tab
         if (ch === '\t') {
             if (state.menu && state.menu.items.length > 0) {
@@ -1538,6 +1579,30 @@ async function runInteractive(token, timeout, raw, continueSession) {
             updateMenu();
             redrawFooter();
         }
+    }
+
+    // ── Esc 处理（清输入/取消/撤销） ──
+    function handleEscPress() {
+        // 有菜单时先关菜单
+        if (state.menu) { state.menu = null; redrawFooter(); return; }
+        // 有 input 时清空
+        if (state.input) { state.input = ''; state.cursor = 0; state.menu = null; state._escWarned = false; redrawFooter(); return; }
+        // 有生成进行中时取消
+        if (state.abortController) { try { state.abortController.abort(); } catch(e) {} state.abortController = null; echoSystem(C.yellow + '╰─ 已取消' + C.reset); setStatus(state.status.model, '/help 查看命令', ''); return; }
+        // 双击 Esc → 撤销
+        var now = Date.now();
+        if (now - state._lastEscTime < 1000) {
+            state._lastEscTime = 0;
+            state._escWarned = false;
+            handleCommand('/undo');
+            return;
+        }
+        state._lastEscTime = now;
+        if (!state._escWarned) {
+            state._escWarned = true;
+            setStatus(state.status.model, '再按 Esc 撤销', '');
+        }
+        redrawFooter();
     }
 
     // ── 命令处理 ──
@@ -2040,17 +2105,16 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 echoSystem('对话历史较短（' + state.body.length + ' 条），无需压缩');
             }
         } else if (name === '/cd') {
-            // 切换工作目录（CLI 侧状态）
+            // 切换工作目录（通过 API 通知 daemon，保持会话运行）
             if (arg) {
                 try {
-                    var cdRes = await window.electronAPI.agentInfo(arg);
-                    if (cdRes && cdRes.success && cdRes.isDirectory) {
-                        state.status.cwd = arg;
-                        setStatus(state.status.model, '/help 查看命令', state.status.ctx);
-                        echoSystem('工作目录: ' + arg);
-                    } else {
-                        echoError('目录不存在或不是目录: ' + arg);
+                    // 先通过 API 通知 daemon 更新 cwd
+                    if (state.token) {
+                        await httpPost('/api/change-dir', { token: state.token, path: arg });
                     }
+                    state.status.cwd = arg;
+                    setStatus(state.status.model, '/help 查看命令', state.status.ctx);
+                    echoSystem('工作目录: ' + arg);
                 } catch(e) {
                     state.status.cwd = arg;
                     setStatus(state.status.model, '/help 查看命令', state.status.ctx);

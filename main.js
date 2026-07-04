@@ -265,45 +265,17 @@ function openFolder(folderPath, opts) {
         return;
     }
 
-    // 切换目录 → 强制关闭当前对话
-    stopAll().then(function() {
-        // 通知 Agent 视图清除当前对话
-        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
-            agentView.webContents.send('agent-close-conversation');
-        }
-        // 导航 DeepSeek 回首页，结束当前会话
-        // 先移出窗口防止 loadURL 触发 Chromium HWND 重绘闪现
-        if (deepseekView) {
-            try {
-                try { mainWindow.removeBrowserView(deepseekView); } catch(e) {}
-                deepseekView.webContents.loadURL('about:blank');
-                setTimeout(function() {
-                    deepseekView.webContents.loadURL(DEEPSEEK_URL);
-                    // 导航完成后重新加入窗口并移回屏幕外
-                    setTimeout(function() {
-                        try {
-                            mainWindow.addBrowserView(deepseekView);
-                            var ob = deepseekView.getBounds();
-                            if (ob.x > -1000) {
-                                deepseekView.setBounds({ x: -10000, y: ob.y, width: ob.width, height: ob.height });
-                            }
-                            if (agentView && agentViewVisible && !agentView.webContents.isDestroyed()) {
-                                mainWindow.setTopBrowserView(agentView);
-                            }
-                        } catch(e) {}
-                    }, 500);
-                }, 100);
-            } catch(e) {
-                console.warn('[OpenFolder] Navigate home failed:', e);
-            }
-        }
-        // 切换目录后刷新历史对话列表
-        if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
-            agentView.webContents.send('refresh-history');
-        }
-    });
-
-    // 重新加载技能列表（不再推送到控制栏，由 agent 视图弹窗按需加载）
+    // 切换目录 → 更新 cwd，保持当前会话运行
+    agent.setCwd(folderPath);
+    console.log('[OpenFolder] CWD updated to:', folderPath);
+    // 通知 Agent 视图 cwd 变更（不关闭对话）
+    if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+        agentView.webContents.send('cwd-changed', { path: folderPath });
+    }
+    // 刷新历史对话列表（显示新目录下的历史）
+    if (agentView && agentView.webContents && !agentView.webContents.isDestroyed()) {
+        agentView.webContents.send('refresh-history');
+    }
 }
 
 // ==================== 读取注入脚本 ====================
@@ -2540,6 +2512,10 @@ function setupControlBarIPC() {
         return { success: true, histories: historyManager.listHistories(dir) };
     });
 
+    ipcMain.handle('history-list-all', async () => {
+        return { success: true, histories: historyManager.listHistoriesAll() };
+    });
+
     ipcMain.handle('history-load', async (event, id) => {
         var dir = getHistoryDir();
         const data = historyManager.loadHistory(dir, id);
@@ -2926,6 +2902,12 @@ function setupIpcHandlers() {
     ipcMain.handle('subagent-invoke', async (event, params) => {
         if (!subagentManager) return { success: false };
         return await subagentManager.invoke(params);
+    });
+
+    // cwd 变更 IPC（CLI /cd 时通知桌面版）
+    ipcMain.handle('cwd-changed', async (event, path) => {
+        agent.setCwd(path);
+        return { success: true };
     });
 
     // ==================== 持久化记忆 IPC（P2） ====================
@@ -4774,6 +4756,27 @@ function startContentServer() {
             }
             res.writeHead(200);
             res.end(JSON.stringify({ success: true, data: modelsList }));
+        } else if (req.method === 'POST' && req.url === '/api/change-dir') {
+            // CLI /cd：更新 daemon 侧 cwd，不 kill 会话
+            var cdBody = '';
+            req.on('data', function(chunk) { cdBody += chunk; });
+            req.on('end', function() {
+                try {
+                    var cdPayload = JSON.parse(cdBody);
+                    if (cdPayload.token !== API_TOKEN) {
+                        res.writeHead(403);
+                        res.end(JSON.stringify({ success: false, error: 'Invalid token' }));
+                        return;
+                    }
+                    agent.setCwd(cdPayload.path);
+                    console.log('[API] CWD changed to:', cdPayload.path);
+                    res.writeHead(200);
+                    res.end(JSON.stringify({ success: true }));
+                } catch (e) {
+                    res.writeHead(400);
+                    res.end(JSON.stringify({ success: false, error: e.message }));
+                }
+            });
         } else if (req.method === 'POST' && req.url === '/api/request') {
             var body = '';
             req.on('data', function(chunk) { body += chunk; });

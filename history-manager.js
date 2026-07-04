@@ -7,6 +7,9 @@ const HISTORIES_DIR = '.dsa';
 const SUBDIR = 'histories';
 const CLI_SUBDIR = 'cli-sessions';  // CLI TUI 会话专用子目录（全局，不跟项目走）
 
+// 全局历史目录：~/.dsa/histories-all/（跨项目查看/恢复所有 session）
+const GLOBAL_HISTORY_DIR = path.join(os.homedir(), HISTORIES_DIR, 'histories-all');
+
 function getBaseDir(rootDir) {
     if (!rootDir) return null;
     return path.join(rootDir, HISTORIES_DIR, SUBDIR);
@@ -59,6 +62,36 @@ function listHistories(rootDir) {
         return histories;
     } catch (e) {
         console.warn('[History] Failed to list histories:', e.message);
+        return [];
+    }
+}
+
+// 列出所有项目的全局历史（跨目录）
+function listHistoriesAll() {
+    var dir = GLOBAL_HISTORY_DIR;
+    if (!dir || !fs.existsSync(dir)) return [];
+    try {
+        var files = fs.readdirSync(dir).filter(function(f) { return f.endsWith('.json'); });
+        var histories = files.map(function(f) {
+            try {
+                var data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
+                return {
+                    id: data.id,
+                    mode: data.mode,
+                    modelId: data.modelId || null,
+                    conversationUrl: data.conversationUrl || null,
+                    createdAt: data.createdAt,
+                    updatedAt: data.updatedAt,
+                    messageCount: (data.messages || []).length,
+                    title: data.title || '(无标题)',
+                    rootDir: data.rootDir || ''
+                };
+            } catch (e) { return null; }
+        }).filter(Boolean);
+        histories.sort(function(a, b) { return (b.updatedAt || '').localeCompare(a.updatedAt || ''); });
+        return histories;
+    } catch (e) {
+        console.warn('[History] Failed to list all histories:', e.message);
         return [];
     }
 }
@@ -121,6 +154,15 @@ function saveHistory(rootDir, historyData) {
         const tmpPath = filePath + '.tmp';
         fs.writeFileSync(tmpPath, JSON.stringify(historyData, null, 2), 'utf-8');
         fs.renameSync(tmpPath, filePath);
+        // 同步保存到全局目录（跨项目可见）
+        if (ensureDir(GLOBAL_HISTORY_DIR)) {
+            var globalData = JSON.parse(JSON.stringify(historyData));
+            globalData.rootDir = rootDir || '';
+            var globalPath = path.join(GLOBAL_HISTORY_DIR, historyData.id + '.json');
+            var globalTmp = globalPath + '.tmp';
+            fs.writeFileSync(globalTmp, JSON.stringify(globalData, null, 2), 'utf-8');
+            fs.renameSync(globalTmp, globalPath);
+        }
         return { success: true };
     } catch (e) {
         console.warn('[History] Failed to save history:', e.message);
@@ -212,6 +254,7 @@ function deleteCliSession() {
 
 module.exports = {
     listHistories,
+    listHistoriesAll,
     loadHistory,
     saveHistory,
     deleteHistory,

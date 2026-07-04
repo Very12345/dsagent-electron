@@ -1627,6 +1627,7 @@ body.startup #menu-bar { display: none !important; }
         <div class="panel-title">
             历史对话
             <span class="hist-refresh" onclick="loadHistoryList()" title="刷新">&#x21bb;</span>
+            <button id="history-all-toggle" onclick="toggleHistoryAll()" title="显示全部会话" style="margin-left:4px;width:26px;height:26px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:var(--bg-elevated);color:var(--text-muted);line-height:1;display:flex;align-items:center;justify-content:center;">🌐</button>
             <button id="history-new-chat-btn" onclick="showPreInitPanel()" title="新建对话" style="margin-left:auto;width:26px;height:26px;border:none;border-radius:6px;cursor:pointer;font-size:16px;font-weight:700;transition:all var(--transition-normal);background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;line-height:1;display:flex;align-items:center;justify-content:center;">+</button>
         </div>
 
@@ -2622,6 +2623,48 @@ function loadHistoryList() {
     }).catch(function() {
         listEl.innerHTML = '<div class="history-empty">加载失败</div>';
     });
+}
+
+// 切换全部会话列表（跨目录）
+var _showingAllHistories = false;
+function toggleHistoryAll() {
+    _showingAllHistories = !_showingAllHistories;
+    var btn = document.getElementById('history-all-toggle');
+    if (btn) btn.style.background = _showingAllHistories ? 'var(--accent)' : 'var(--bg-elevated)';
+    if (_showingAllHistories) {
+        loadAllHistoryList();
+    } else {
+        loadHistoryList();
+    }
+}
+function loadAllHistoryList() {
+    var listEl = document.getElementById('history-list');
+    listEl.innerHTML = '<div class="history-empty">加载中...</div>';
+    if (window.electronAPI.historyListAll) {
+        window.electronAPI.historyListAll().then(function(res) {
+            if (!res.success || !res.histories || res.histories.length === 0) {
+                listEl.innerHTML = '<div class="history-empty">没有历史对话</div>';
+                _showingAllHistories = false;
+                var btn2 = document.getElementById('history-all-toggle');
+                if (btn2) btn2.style.background = 'var(--bg-elevated)';
+                return;
+            }
+            listEl.innerHTML = '';
+            res.histories.forEach(function(h) {
+                var item = document.createElement('div');
+                item.className = 'history-item' + (h.id === currentHistoryId ? ' active' : '');
+                var dirLabel = h.rootDir ? ' [' + h.rootDir.split(/[\\\/]/).pop() + ']' : '';
+                item.innerHTML = '<div class="hi-title">' + escapeHtml(h.title || '(无标题)') + dirLabel + '</div>'
+                    + '<div class="hi-meta">' + formatTime(h.updatedAt) + ' | ' + h.messageCount + '条</div>';
+                item.onclick = function() { loadHistoryConversation(h.id); };
+                listEl.appendChild(item);
+            });
+        }).catch(function() {
+            listEl.innerHTML = '<div class="history-empty">加载失败</div>';
+        });
+    } else {
+        listEl.innerHTML = '<div class="history-empty">全局历史不可用</div>';
+    }
 }
 
 function getConversationTitle() {

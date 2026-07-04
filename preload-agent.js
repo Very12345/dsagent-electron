@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // History management
     historyList: () => ipcRenderer.invoke('history-list'),
+    historyListAll: () => ipcRenderer.invoke('history-list-all'),
     historyLoad: (id) => ipcRenderer.invoke('history-load', id),
     historySave: (data) => ipcRenderer.invoke('history-save', data),
     historyLoadUrl: (id, url) => ipcRenderer.invoke('history-load-url', id, url),
@@ -55,6 +56,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 历史对话列表刷新（文件浏览器切换目录时触发）
     onRefreshHistory: (callback) => {
         ipcRenderer.on('refresh-history', () => callback());
+    },
+
+    // cwd 变更通知（/cd 切换目录时，不关闭对话）
+    onCwdChanged: (callback) => {
+        ipcRenderer.on('cwd-changed', (event, data) => callback(data));
     },
 
     // 恢复历史对话（应用启动时）
