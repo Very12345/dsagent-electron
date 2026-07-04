@@ -1632,8 +1632,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 setStatus(state.status.model, '/help 查看命令', '');
                 redrawFooter(); return;
             }
-            // 空输入：Ctrl+C 复制最后一条回复到剪贴板（退出请用 /quit 或 Ctrl+D）
-            copySelectedToClipboard();
+            // 空输入：Ctrl+C 退出
+            cleanupExit('再见！');
             return;
         }
         // Ctrl+D
