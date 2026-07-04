@@ -586,7 +586,7 @@ function renderMenubar(config) {
         btn.className = 'mb-btn'; btn.dataset.menuId = m.id; btn.textContent = m.label;
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
-            // 通过主进程在当前可见的 BrowserView 中注入菜单 overlay（避免被其他 BrowserView 遮挡）
+            // 通过主进程转发到 agentView 渲染菜单 overlay（避免被 agentView BrowserView 遮挡）
             var rect = btn.getBoundingClientRect();
             ipcRenderer.send('inject-menu-overlay', { menuId: m.id, left: rect.left, bottom: rect.bottom });
         });
@@ -653,7 +653,7 @@ function showCustomMenu(btn, menuData) {
             } else if (role) {
                 ipcRenderer.send('menu-role-action', role);
             } else if (action) {
-                ipcRenderer.send('menu-action', action);
+                ipcRenderer.send('titlebar-menu-action', { action: action, theme: theme, id: id, role: role });
             }
         });
     });

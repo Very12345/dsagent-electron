@@ -156,6 +156,7 @@ function setBaseDir(newBaseDir) {
     BASE_DIR = newBaseDir;
     console.log('[AGENT] Base directory set to:', BASE_DIR || '(none)');
 }
+function getBaseDir() { return BASE_DIR; }
 
 async function execCmd(command, timeoutMs) {
     if (!command) return { success: false, error: 'Missing command' };
@@ -1023,9 +1024,35 @@ function getMcpPrompt() {
     return mcpManager.generateToolsPrompt();
 }
 
+function getMcpResources() {
+    return { success: true, resources: mcpManager.getAllResources() };
+}
+
+function getMcpPrompts() {
+    return { success: true, prompts: mcpManager.getAllPrompts() };
+}
+
 async function callMcpTool(serverName, toolName, args) {
     try {
         var result = await mcpManager.callTool(serverName, toolName, args);
+        return { success: true, result: result };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+async function callMcpResource(serverName, uri) {
+    try {
+        var result = await mcpManager.readResource(serverName, uri);
+        return { success: true, result: result };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+async function callMcpPrompt(serverName, name, args) {
+    try {
+        var result = await mcpManager.getPrompt(serverName, name, args);
         return { success: true, result: result };
     } catch (e) {
         return { success: false, error: e.message };
@@ -1080,6 +1107,7 @@ function planDelete() {
 
 module.exports = {
     setBaseDir,
+    getBaseDir,
     execCmd,
     execCmdAdmin,
     readFile,
@@ -1123,6 +1151,10 @@ module.exports = {
     setMcpToolEnabled,
     getMcpPrompt,
     callMcpTool,
+    getMcpResources,
+    getMcpPrompts,
+    callMcpResource,
+    callMcpPrompt,
     shutdownMcp,
     planLoad,
     planSave,

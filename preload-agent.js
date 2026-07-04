@@ -38,6 +38,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // DeepSeek 原始对话删除（同步删除历史时使用）
     agentDeleteDeepseekConversation: (deepseekUrl) => ipcRenderer.invoke('agent-delete-deepseek-conversation', deepseekUrl),
 
+    // Qwen 原始对话删除（同步删除历史时使用）  
+    agentDeleteQwenConversation: (qwenUrl) => ipcRenderer.invoke('agent-delete-qwen-conversation', qwenUrl),
+
     // Dangerous command confirmation
     onAgentShowConfirm: (callback) => {
         ipcRenderer.on('agent-show-confirm', (event, data) => callback(data));
@@ -210,6 +213,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     mcpGetTools: () => ipcRenderer.invoke('mcp-get-tools'),
     mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp-call-tool', serverName, toolName, args),
     mcpShutdown: () => ipcRenderer.invoke('mcp-shutdown'),
+    // MCP Resources protocol
+    mcpGetResources: () => ipcRenderer.invoke('mcp-get-resources'),
+    mcpReadResource: (serverName, uri) => ipcRenderer.invoke('mcp-read-resource', serverName, uri),
+    // MCP Prompts protocol
+    mcpGetPrompts: () => ipcRenderer.invoke('mcp-get-prompts'),
+    mcpGetPrompt: (serverName, name, args) => ipcRenderer.invoke('mcp-get-prompt', serverName, name, args),
+    // 文件历史 Undo（P1）
+    fileHistoryUndo: (filePath, sessionId) => ipcRenderer.invoke('file-history-undo', filePath, sessionId),
+    fileHistoryVersions: (filePath, sessionId) => ipcRenderer.invoke('file-history-versions', filePath, sessionId),
+    fileHistoryRestore: (filePath, version, sessionId) => ipcRenderer.invoke('file-history-restore', filePath, version, sessionId),
+    fileHistoryBackup: (filePath) => ipcRenderer.invoke('file-history-backup', filePath),
+    // 插件管理（CC 生态兼容）
+    pluginList: () => ipcRenderer.invoke('plugin-list'),
+    pluginInstall: (params) => ipcRenderer.invoke('plugin-install', params),
+    pluginUninstall: (name) => ipcRenderer.invoke('plugin-uninstall', name),
+    pluginRefresh: () => ipcRenderer.invoke('plugin-refresh'),
+    // 插件市场
+    pluginMarketplaceAdd: (params) => ipcRenderer.invoke('plugin-marketplace-add', params),
+    pluginMarketplaceList: () => ipcRenderer.invoke('plugin-marketplace-list'),
+    // 技能引擎（对齐 atomcode Skill）
+    skillList: () => ipcRenderer.invoke('skill-list'),
+    skillExecute: (name, args) => ipcRenderer.invoke('skill-execute', name, args),
+    skillRefresh: () => ipcRenderer.invoke('skill-refresh'),
     mcpGetToolStates: () => ipcRenderer.invoke('mcp-get-tool-states'),
     mcpSetToolEnabled: (serverName, toolName, enabled) => ipcRenderer.invoke('mcp-set-tool-enabled', serverName, toolName, enabled),
 
@@ -239,8 +265,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('render-menu-overlay', (event, data) => callback(data));
     },
 
-    // 获取 INSTRUCTION.md 基本指令内容
-    getInstructionText: () => ipcRenderer.invoke('get-instruction-text'),
+    // 获取 INSTRUCTION.md 基本指令内容（可选传 modelId，智能选择 XML/JSON 格式）
+    getInstructionText: (modelId) => ipcRenderer.invoke('get-instruction-text', { modelId: modelId || '' }),
 
     // 启动进度更新（来自主进程的 DeepSeek→Qwen→Agent 顺序加载）
     onSplashProgress: (callback) => {
@@ -269,4 +295,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 定时任务状态同步和队列管理
     intervalStateUpdate: (state) => ipcRenderer.send('interval-state-update', state),
     intervalFlushQueue: () => ipcRenderer.send('interval-flush-queue'),
+
+    // ==================== 模型服务化架构（新） ====================
+    // 统一 agent-request
+    agentRequest: (payload) => ipcRenderer.invoke('agent-request', payload),
+    // 模型列表
+    modelList: () => ipcRenderer.invoke('model-list'),
+    // 工具颜色映射（单一来源 tools/tool-colors.js）
+    toolColors: () => ipcRenderer.invoke('tool-colors-get'),
+    // 集群模板
+    clusterTemplates: () => ipcRenderer.invoke('cluster-templates'),
+    clusterSelectionOptions: (templateId) => ipcRenderer.invoke('cluster-selection-options', templateId),
+    // 集群配置
+    clusterConfigGet: () => ipcRenderer.invoke('cluster-config-get'),
+    clusterConfigSave: (cfg) => ipcRenderer.invoke('cluster-config-save', cfg),
+    // Subagent
+    subagentList: () => ipcRenderer.invoke('subagent-list'),
+    subagentInvoke: (params) => ipcRenderer.invoke('subagent-invoke', params),
+    // 持久化记忆（P2）
+    memoryRead: () => ipcRenderer.invoke('memory-read'),
+    memoryAppend: (scope, content) => ipcRenderer.invoke('memory-append', scope, content),
+    memoryClear: (scope) => ipcRenderer.invoke('memory-clear', scope),
+    // API Key 服务管理
+    apikeyList: () => ipcRenderer.invoke('apikey-list'),
+    apikeyAdd: (service) => ipcRenderer.invoke('apikey-add', service),
+    apikeyUpdate: (id, patch) => ipcRenderer.invoke('apikey-update', id, patch),
+    apikeyDelete: (id) => ipcRenderer.invoke('apikey-delete', id),
+    // 并发槽位状态
+    modelSlotStatus: () => ipcRenderer.invoke('model-slot-status'),
+    // 关闭对话
+    agentCloseConv: (agentId) => ipcRenderer.invoke('agent-close-conv', agentId),
 });

@@ -210,5 +210,105 @@
         }
     });
 
+    // mcp-read-resource — 读取 MCP 资源
+    window.__dsagent_tools.register({
+        name: 'mcp-read-resource',
+        scope: '读取 MCP 服务器暴露的资源（文件/数据）',
+        description: '读取 MCP 服务器的资源内容。资源由 URI 标识，可以是文件、配置、数据库记录等。\n\n'
+            + '参数说明：\n'
+            + '- `server`: MCP 服务器名称（必填）\n'
+            + '- `uri`: 资源 URI（必填），如 `file:///path/to/file`、`config://section/key`\n\n'
+            + '可用 `mcp-list` 查看已连接的 MCP 服务器，资源列表会自动注入到提示词中。',
+        params: [
+            { name: 'server', type: '字符串', default: '—', required: true, description: 'MCP 服务器名称' },
+            { name: 'uri', type: '字符串', default: '—', required: true, description: '资源 URI' }
+        ],
+        usage: '<tool:mcp-read-resource>{"server": "my-server", "uri": "file:///config/app.json"}</tool:mcp-read-resource>',
+        notes: 'MCP 资源由服务器定义，读取操作有 30 秒超时。',
+        handler: async function(params, body) {
+            var makeResult = window.__dsagent_tools.makeResult;
+            var server = params.server || '';
+            var uri = params.uri || '';
+
+            if (!server) return makeResult(false, null, '请指定 MCP 服务器名称（server）');
+            if (!uri) return makeResult(false, null, '请指定资源 URI（uri）');
+
+            try {
+                var res = await window.electronAPI.mcpReadResource(server, uri);
+                if (res.success) {
+                    var result = res.result;
+                    if (result && result.contents && Array.isArray(result.contents)) {
+                        result = result.contents.map(function(c) {
+                            if (c.text) return c.text;
+                            if (c.blob) return '[Base64 blob: ' + (c.mimeType || 'unknown') + ']';
+                            return JSON.stringify(c);
+                        }).join('\n\n---\n\n');
+                    } else if (typeof result === 'object') {
+                        result = JSON.stringify(result, null, 2);
+                    }
+                    return makeResult(true, result || '(空资源)');
+                }
+                return makeResult(false, null, res.error || '资源读取失败');
+            } catch (e) {
+                return makeResult(false, null, e.message || '资源读取异常');
+            }
+        }
+    });
+
+    // mcp-get-prompt — 获取 MCP 提示词
+    window.__dsagent_tools.register({
+        name: 'mcp-get-prompt',
+        scope: '获取 MCP 服务器定义的提示词模板',
+        description: '获取 MCP 服务器的提示词模板内容。提示词模板带参数，可动态生成内容。\n\n'
+            + '参数说明：\n'
+            + '- `server`: MCP 服务器名称（必填）\n'
+            + '- `name`: 提示词名称（必填）\n'
+            + '- `args`: 提示词参数（可选，JSON 对象）\n\n'
+            + '可用 `mcp-list` 查看已连接的 MCP 服务器，提示词列表会自动注入到提示词中。',
+        params: [
+            { name: 'server', type: '字符串', default: '—', required: true, description: 'MCP 服务器名称' },
+            { name: 'name', type: '字符串', default: '—', required: true, description: '提示词名称' },
+            { name: 'args', type: '对象', default: '{}', required: false, description: '提示词参数（JSON 对象）' }
+        ],
+        usage: '<tool:mcp-get-prompt>{"server": "my-server", "name": "code_review", "args": {"language": "python"}}</tool:mcp-get-prompt>',
+        notes: 'MCP 提示词是服务器定义的模板，可带参数。',
+        handler: async function(params, body) {
+            var makeResult = window.__dsagent_tools.makeResult;
+            var server = params.server || '';
+            var name = params.name || '';
+            var args = params.args || {};
+
+            if (!server) return makeResult(false, null, '请指定 MCP 服务器名称（server）');
+            if (!name) return makeResult(false, null, '请指定提示词名称（name）');
+
+            try {
+                var res = await window.electronAPI.mcpGetPrompt(server, name, args);
+                if (res.success) {
+                    var result = res.result;
+                    if (result && result.messages && Array.isArray(result.messages)) {
+                        result = result.messages.map(function(m) {
+                            var role = m.role || 'assistant';
+                            var content = '';
+                            if (typeof m.content === 'string') content = m.content;
+                            else if (m.content && Array.isArray(m.content)) {
+                                content = m.content.map(function(c) {
+                                    if (c.type === 'text') return c.text;
+                                    return JSON.stringify(c);
+                                }).join('\n');
+                            }
+                            return '【' + role + '】\n' + content;
+                        }).join('\n\n---\n\n');
+                    } else if (typeof result === 'object') {
+                        result = JSON.stringify(result, null, 2);
+                    }
+                    return makeResult(true, result || '(空提示词)');
+                }
+                return makeResult(false, null, res.error || '获取提示词失败');
+            } catch (e) {
+                return makeResult(false, null, e.message || '获取提示词异常');
+            }
+        }
+    });
+
     window.__dsagent_tools._mcp_registered = true;
 })();

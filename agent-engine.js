@@ -79,31 +79,12 @@
         });
     };
 
-    // ==================== Subreader 策略 ====================
+    // ==================== subreader 已废弃（保留兼容 shim，由 subagent 架构替代） ====================
 
-    var _subreaderStrategy = null;
-
-    E.loadSubreaderStrategy = async function() {
-        if (_subreaderStrategy) return _subreaderStrategy;
-        try {
-            var res = await window.electronAPI.getSubreaderStrategy();
-            if (res && res.success && res.text) {
-                _subreaderStrategy = res.text;
-                return res.text;
-            }
-        } catch(e) {
-            console.warn('Failed to load subreader strategy:', e);
-        }
-        _subreaderStrategy = '你是一个子代理(sub-agent)，负责分析文件。请直接返回结果，使用中文。';
-        return _subreaderStrategy;
-    };
-
+    // buildSubreaderPrompt 保留为兼容 shim：旧 subreader 命令降级串行执行时仍可能调用
     E.buildSubreaderPrompt = async function(fileListStr, extraPrompt) {
-        var strategy = await E.loadSubreaderStrategy();
-        var parts = [strategy];
-        if (extraPrompt) {
-            parts.push('【用户额外要求】\n' + extraPrompt);
-        }
+        var parts = ['你是一个子代理(sub-agent)，负责分析文件。请直接返回结果，使用中文。'];
+        if (extraPrompt) parts.push('【用户额外要求】\n' + extraPrompt);
         parts.push('请阅读以下文件：' + fileListStr);
         return parts.join('\n\n');
     };
@@ -147,646 +128,6 @@
             think: 'off',
             prompt: prompt
         };
-    };
-
-    // ==================== Qwen 通用函数 ====================
-
-    E.execQwen = async function(fnName, args) {
-        var res = await window.electronAPI.qwenExec(fnName, args);
-        if (!res.success) throw new Error(res.error || 'Qwen exec failed');
-        if (res.result && typeof res.result === 'object' && res.result.success === false) {
-            throw new Error('Qwen ' + fnName + ' failed: ' + (res.result.error || 'unknown error'));
-        }
-        return res.result;
-    };
-
-    E.showQwen = async function() {
-        var vis = await window.electronAPI.qwenIsVisible();
-        if (!vis.visible) await window.electronAPI.qwenShowView();
-    };
-
-    E.hideQwen = async function() {
-        await window.electronAPI.qwenHideView();
-    };
-
-    E.downloadQwenImage = async function(url, savePath) {
-        var res = await window.electronAPI.qwenDownloadImage(url, savePath);
-        if (!res.success) throw new Error('下载图片失败: ' + (res.error || url));
-        return { path: res.path, dataUrl: res.dataUrl };
-    };
-
-    E.getQwenResponseViaCopy = async function() {
-        var saved = await window.electronAPI.clipboardSave();
-        try {
-            var btnInfo = await E.execQwen('copyLastResponse', []);
-            if (btnInfo && btnInfo.success && btnInfo.x !== undefined) {
-                var clickRes = await window.electronAPI.qwenClickAt(btnInfo.x, btnInfo.y);
-                if (clickRes && clickRes.success) {
-                    await new Promise(function(r) { setTimeout(r, 800); });
-                    var clipRes = await window.electronAPI.qwenGetClipboard();
-                    if (clipRes && clipRes.success && clipRes.text) {
-                        return clipRes.text;
-                    }
-                }
-            }
-            var fallback = await E.execQwen('getLastResponseText', []);
-            return fallback || '';
-        } finally {
-            if (saved && saved.text !== undefined) {
-                await window.electronAPI.clipboardRestore(saved.text);
-            }
-        }
-    };
-
-    E.waitForQwenPageReady = async function() {
-        var start = Date.now();
-        var maxWait = 15000;
-        while (Date.now() - start < maxWait) {
-            var bodyText = await E.execQwen('__rawEval', ['document.body ? document.body.innerText || "" : ""']);
-            bodyText = (bodyText && typeof bodyText === 'string') ? bodyText : '';
-            if (bodyText.indexOf('对话不存在') >= 0 || bodyText.indexOf('该对话不存在') >= 0) {
-                await new Promise(function(r) { setTimeout(r, 1000); });
-                continue;
-            }
-            var edRes = await E.execQwen('focusEditor', []);
-            if (edRes && edRes.success) return;
-            await new Promise(function(r) { setTimeout(r, 500); });
-        }
-    };
-
-    // ==================== Qwen 视觉分析 ====================
-
-    E.qwenVision = async function(content, progressCb) {
-        progressCb = progressCb || function(){};
-        var pathRegex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
-        var match;
-        var filePaths = [];
-        var lastMatchEnd = 0;
-        while ((match = pathRegex.exec(content)) !== null) {
-            lastMatchEnd = match.index + match[0].length;
-            var key = match[1].toLowerCase();
-            var val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : match[4]);
-            if (key === 'path' && val) filePaths.push(val);
-        }
-        var promptText = content.substring(lastMatchEnd).trim() || '请描述这些图片';
-        if (filePaths.length === 0) {
-            var firstLineEnd = content.indexOf('\n');
-            filePaths = [firstLineEnd > 0 ? content.substring(0, firstLineEnd).trim() : content.trim()];
-            promptText = firstLineEnd > 0 ? content.substring(firstLineEnd + 1).trim() : '请描述这张图片';
-        }
-
-        progressCb('[Qwen] 使用 Qwen 进行视觉分析...');
-        progressCb('[Qwen] 新建对话...');
-        await E.execQwen('newConversation');
-        await new Promise(function(r) { setTimeout(r, 1000); });
-
-        for (var fi = 0; fi < filePaths.length; fi++) {
-            progressCb('[Qwen] 上传文件: ' + filePaths[fi] + '...');
-            var pasteRes = await window.electronAPI.qwenPasteImage(filePaths[fi]);
-            if (!pasteRes.success) throw new Error('上传文件失败: ' + (pasteRes.error || ''));
-            await new Promise(function(r) { setTimeout(r, 1000); });
-        }
-        progressCb('[Qwen] 发送提示词...');
-        await E.execQwen('focusEditor');
-        await window.electronAPI.qwenPasteText(promptText);
-        await new Promise(function(r) { setTimeout(r, 800); });
-        progressCb('[Qwen] 等待回复...');
-        await E.execQwen('clickSend');
-
-        var progressDone = false;
-        (async function() {
-            while (!progressDone) {
-                try {
-                    var resp = await E.execQwen('isResponding', []);
-                    progressCb(resp && resp.responding ? '[Qwen] 正在输出回复...' : '[Qwen] 等待回复...');
-                } catch(e) {}
-                await new Promise(function(r) { setTimeout(r, 2000); });
-            }
-        })();
-
-        var waitRes = await E.execQwen('waitForTextResponse', [120000]);
-        progressDone = true;
-        if (!waitRes.success) throw new Error(waitRes.error === 'Timeout' ? 'Qwen 回复超时' : 'Qwen 回复失败: ' + waitRes.error);
-        await new Promise(function(r) { setTimeout(r, 1500); });
-        var text = await E.getQwenResponseViaCopy();
-        progressCb('[Qwen] 分析完成');
-        try { await E.execQwen('deleteConversation'); } catch(e) { console.warn('[Qwen] deleteConversation:', e.message); }
-        await new Promise(function(r) { setTimeout(r, 500); });
-        await E.waitForQwenPageReady();
-        var clean = (text || '').replace(new RegExp(E.escapeRegex(promptText), 'g'), '').trim();
-        return clean || '(Qwen 未返回内容)';
-    };
-
-    // ==================== Qwen 绘图 ====================
-
-    E.qwenDraw = async function(content, progressCb) {
-        progressCb = progressCb || function(){};
-        var lines = content.trim().split('\n');
-        var kv = {};
-        var promptLines = [];
-        var paramRegex = /^(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(.+?))\s*$/;
-        for (var li = 0; li < lines.length; li++) {
-            var line = lines[li].trim();
-            if (!line) continue;
-            var m = line.match(paramRegex);
-            if (m) {
-                var key = m[1].toLowerCase();
-                var val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
-                kv[key] = val;
-            } else {
-                promptLines.push(line);
-            }
-        }
-        var saveDir = kv.savepath || '';
-        var desc = kv.desc || '';
-        var refPath = kv.ref || '';
-        var promptText = promptLines.join('\n').trim();
-        if (!promptText) throw new Error('Missing drawing prompt');
-
-        var fullPrompt = '请根据以下描述生成图片，务必实际绘制图片并输出图片结果，不要仅提供文字描述或建议：\n\n' + promptText;
-        if (desc) fullPrompt += '\n\n附加要求：' + desc;
-
-        progressCb('[Qwen] 使用 Qwen 进行绘图...');
-        progressCb('[Qwen] 新建对话...');
-        await E.execQwen('newConversation');
-        await new Promise(function(r) { setTimeout(r, 1000); });
-
-        if (refPath) {
-            progressCb('[Qwen] 上传参考图片: ' + refPath + '...');
-            var pasteRes = await window.electronAPI.qwenPasteImage(refPath);
-            if (!pasteRes.success) {
-                progressCb('[Qwen] 参考图上传失败，继续使用纯文本绘图...');
-            } else {
-                await new Promise(function(r) { setTimeout(r, 1000); });
-            }
-        }
-
-        progressCb('[Qwen] 发送绘图提示词...');
-        await E.execQwen('focusEditor');
-        await window.electronAPI.qwenPasteText(fullPrompt);
-        await new Promise(function(r) { setTimeout(r, 800); });
-        progressCb('[Qwen] 等待绘图开始...');
-        await E.execQwen('clickSend');
-
-        var progressDone = false;
-        (async function() {
-            while (!progressDone) {
-                try {
-                    var p = await E.execQwen('getDrawProgress');
-                    progressCb('[Qwen绘图] ' + p.detail);
-                    var resp = await E.execQwen('isResponding', []);
-                    if (resp && resp.responding && p.current < 3) {
-                        progressCb('[Qwen绘图] Qwen 正在输出... 阶段: ' + p.detail);
-                    }
-                } catch(e) {}
-                await new Promise(function(r) { setTimeout(r, 1000); });
-            }
-        })();
-
-        var waitRes = await E.execQwen('waitForDrawResponse', [300000]);
-        progressDone = true;
-        if (!waitRes.success) {
-            if (waitRes.error === 'Timeout') throw new Error('Qwen 绘图超时');
-            else throw new Error('Qwen 绘图失败：当前内容无法生成，请修改描述后重试');
-        }
-        await new Promise(function(r) { setTimeout(r, 1000); });
-        var imgUrls = await E.execQwen('getLastImageUrls', []);
-        progressCb('[Qwen] 绘图完成，正在下载图片...');
-
-        var dirRes = await window.electronAPI.getDownloadsPath();
-        var baseDir = saveDir || (dirRes.success ? dirRes.path : '.');
-        var baseName = E.getBaseFilename(promptText);
-        var savedPaths = [];
-
-        for (var ui = 0; ui < (imgUrls || []).length; ui++) {
-            var ext = (imgUrls[ui] || '').match(/\.(\w+)(\?|$)/);
-            var suffix = ext ? '.' + ext[1] : '.png';
-            var saveName = baseName + '_' + (ui + 1) + suffix;
-            var savePath = baseDir + '\\' + saveName;
-            try {
-                var p = await E.downloadQwenImage(imgUrls[ui], savePath);
-                savedPaths.push(p.path);
-            } catch (e) {
-                console.warn('[qwenDraw] Failed to download image ' + (ui + 1), e);
-            }
-        }
-        progressCb('[Qwen] 下载完成');
-        progressCb('[Qwen] 删除临时对话...');
-        try { await E.execQwen('deleteConversation'); } catch(e) { console.warn('[Qwen] deleteConversation:', e.message); }
-        await new Promise(function(r) { setTimeout(r, 500); });
-        await E.waitForQwenPageReady();
-
-        var result = '✅ Qwen 绘图完成，共生成 ' + savedPaths.length + ' 张图片。\n\n';
-        for (var ui = 0; ui < savedPaths.length; ui++) {
-            result += '📁 已保存: ' + savedPaths[ui] + '\n';
-        }
-        return result;
-    };
-
-    // ==================== Qwen PPT 生成 ====================
-
-    E.qwenPPT = async function(content, progressCb) {
-        progressCb = progressCb || function(){};
-        var lines = content.trim().split('\n');
-        var kv = {};
-        var promptLines = [];
-        var paramRegex = /^(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))\s*$/;
-        for (var li = 0; li < lines.length; li++) {
-            var line = lines[li].trim();
-            if (!line) continue;
-            var m = line.match(paramRegex);
-            if (m) {
-                var key = m[1].toLowerCase();
-                var val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
-                kv[key] = val;
-            } else {
-                promptLines.push(line);
-            }
-        }
-        var saveDir = kv.savepath || '';
-        var desc = kv.desc || '';
-        var refPath = kv.ref || '';
-        var promptText = promptLines.join('\n').trim();
-        if (!promptText) throw new Error('Missing PPT prompt');
-
-        var fullPrompt = '你是子代理(sub-agent)。请根据以下描述生成一份PPT，务必实际生成PPT文件并输出下载链接，不要仅提供文字描述或建议：\n\n' + promptText;
-        if (desc) fullPrompt += '\n\n附加要求：' + desc;
-        fullPrompt += ' 返回后对话将被删除，请确保返回完整信息，滚动到页面底部确保所有内容可见。';
-
-        progressCb('[Qwen PPT] 新建对话...');
-        await E.execQwen('newConversation');
-        await new Promise(function(r) { setTimeout(r, 1000); });
-
-        if (refPath) {
-            progressCb('[Qwen PPT] 上传参考文件: ' + refPath + '...');
-            var pasteRes = await window.electronAPI.qwenPasteImage(refPath);
-            if (!pasteRes.success) {
-                progressCb('[Qwen PPT] 参考文件上传失败，继续...');
-            } else {
-                await new Promise(function(r) { setTimeout(r, 1000); });
-            }
-        }
-
-        progressCb('[Qwen PPT] 发送PPT生成提示词...');
-        await E.execQwen('focusEditor');
-        await window.electronAPI.qwenPasteText(fullPrompt);
-        await new Promise(function(r) { setTimeout(r, 800); });
-        progressCb('[Qwen PPT] 等待PPT生成...');
-        await E.execQwen('clickSend');
-
-        var pptRes = await E.execQwen('waitForPPTResponse', [1800000]);
-        if (!pptRes.success) throw new Error('Qwen PPT 生成超时或失败');
-        await new Promise(function(r) { setTimeout(r, 2000); });
-
-        var downDirRes = await window.electronAPI.getDownloadsPath();
-        var baseDir = saveDir || (downDirRes.success ? downDirRes.path : '.');
-        progressCb('[Qwen PPT] 准备下载, 保存目录=' + baseDir);
-        var downloadPromise = window.electronAPI.qwenPreparePPTDownload(baseDir);
-
-        progressCb('[Qwen PPT] 点击下载按钮...');
-        var clickRes = await E.execQwen('clickPPTDownload', []);
-        if (!clickRes.success) throw new Error('未找到 PPT 下载按钮');
-
-        var dlRes = await downloadPromise;
-        if (!dlRes.success) throw new Error('PPT 下载失败: ' + (dlRes.error || ''));
-
-        progressCb('[Qwen PPT] 下载完成: ' + dlRes.path);
-        progressCb('[Qwen PPT] 删除临时对话...');
-        try { await E.execQwen('deleteConversation'); } catch(e) { console.warn('[Qwen PPT] deleteConversation:', e.message); }
-        await new Promise(function(r) { setTimeout(r, 500); });
-        await E.waitForQwenPageReady();
-
-        return '✅ Qwen PPT 生成完成。\n\n📁 已保存: ' + dlRes.path;
-    };
-
-    // ==================== Qwen 通用问答 ====================
-
-    E.qwenGeneral = async function(content, progressCb) {
-        progressCb = progressCb || function(){};
-        var lines = content.split('\n');
-        var filePaths = [];
-        var textLines = [];
-        for (var li = 0; li < lines.length; li++) {
-            var line = lines[li].trim();
-            var m = line.match(/^path\s*=\s*(.+)$/);
-            if (m) {
-                filePaths.push(m[1].trim());
-            } else if (line) {
-                textLines.push(line);
-            }
-        }
-        var text = textLines.join('\n').trim();
-
-        progressCb('[Qwen] 使用 Qwen...');
-        progressCb('[Qwen] 新建对话...');
-        await E.waitForQwenPageReady();
-        await E.execQwen('newConversation');
-        await new Promise(function(r) { setTimeout(r, 1000); });
-
-        for (var fi = 0; fi < filePaths.length; fi++) {
-            progressCb('[Qwen] 上传文件: ' + filePaths[fi] + '...');
-            var pasteRes = await window.electronAPI.qwenPasteImage(filePaths[fi]);
-            if (!pasteRes.success) throw new Error('上传文件失败: ' + (pasteRes.error || ''));
-            await new Promise(function(r) { setTimeout(r, 1000); });
-        }
-        if (filePaths.length > 0 && !text) text = '请分析这些文件的内容';
-
-        text = '你是子代理(sub-agent)。不生成PPT，不生成文档。' + text + ' 返回后对话将被删除，请确保返回完整信息，滚动到页面底部确保所有内容可见。';
-
-        progressCb('[Qwen] 发送消息...');
-        await E.execQwen('focusEditor');
-        await window.electronAPI.qwenPasteText(text);
-        await new Promise(function(r) { setTimeout(r, 800); });
-        progressCb('[Qwen] 等待回复...');
-        await E.execQwen('clickSend');
-
-        var progressDone = false;
-        (async function() {
-            while (!progressDone) {
-                try {
-                    var resp = await E.execQwen('isResponding', []);
-                    progressCb(resp && resp.responding ? '[Qwen] 正在输出回复...' : '[Qwen] 等待回复...');
-                } catch(e) {}
-                await new Promise(function(r) { setTimeout(r, 2000); });
-            }
-        })();
-
-        var waitRes = await E.execQwen('waitForTextResponse', [120000]);
-        progressDone = true;
-        if (!waitRes.success) throw new Error(waitRes.error === 'Timeout' ? 'Qwen 回复超时' : 'Qwen 回复失败: ' + waitRes.error);
-        await new Promise(function(r) { setTimeout(r, 1500); });
-        var resultText = await E.getQwenResponseViaCopy();
-        progressCb('[Qwen] 删除临时对话...');
-        try { await E.execQwen('deleteConversation'); } catch(e) { console.warn('[Qwen] deleteConversation:', e.message); }
-        await new Promise(function(r) { setTimeout(r, 500); });
-        progressCb('[Qwen] 处理完成');
-        return resultText || '(Qwen 未返回内容)';
-    };
-
-    // ==================== SendOnly 模式（异步） ====================
-
-    E.qwenGeneralSendOnly = async function(content, progressCb) {
-        progressCb = progressCb || function(){};
-        var pathRegex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
-        var match;
-        var filePaths = [];
-        var lastMatchEnd = 0;
-        while ((match = pathRegex.exec(content)) !== null) {
-            lastMatchEnd = match.index + match[0].length;
-            var key = match[1].toLowerCase();
-            var val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : match[4]);
-            if (key === 'path' && val) filePaths.push(val);
-        }
-        var text = content.substring(lastMatchEnd).trim();
-
-        await E.waitForQwenPageReady();
-        progressCb('[Qwen] qwenGeneralSendOnly: 开始, 新建对话...');
-        await E.execQwen('newConversation');
-        await new Promise(function(r) { setTimeout(r, 1000); });
-
-        for (var fi = 0; fi < filePaths.length; fi++) {
-            var pasteRes = await window.electronAPI.qwenPasteImage(filePaths[fi]);
-            if (!pasteRes.success) throw new Error('上传文件失败: ' + (pasteRes.error || ''));
-            await new Promise(function(r) { setTimeout(r, 1000); });
-        }
-        if (filePaths.length > 0 && !text) text = '请分析这些文件的内容';
-
-        text = '你是子代理(sub-agent)。不生成PPT，不生成文档。' + text + ' 返回后对话将被删除，请确保返回完整信息，滚动到页面底部确保所有内容可见。';
-
-        await E.execQwen('focusEditor');
-        await window.electronAPI.qwenPasteText(text);
-        await new Promise(function(r) { setTimeout(r, 800); });
-        progressCb('[Qwen] qwenGeneralSendOnly: 点击发送...');
-        await E.execQwen('clickSend');
-
-        progressCb('[Qwen] qwenGeneralSendOnly: 等待对话URL...');
-        var urlRes = await E.execQwen('waitForConversationUrl', [10000]);
-        var convUrl = (urlRes && urlRes.url) ? urlRes.url : '';
-        return { url: convUrl };
-    };
-
-    E.qwenDrawSendOnly = async function(content, progressCb) {
-        progressCb = progressCb || function(){};
-        var lines = content.trim().split('\n');
-        var kv = {};
-        var promptLines = [];
-        var paramRegex = /^(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))\s*$/;
-        for (var li = 0; li < lines.length; li++) {
-            var line = lines[li].trim();
-            if (!line) continue;
-            var m = line.match(paramRegex);
-            if (m) {
-                var key = m[1].toLowerCase();
-                var val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
-                kv[key] = val;
-            } else {
-                promptLines.push(line);
-            }
-        }
-        var desc = kv.desc || '';
-        var refPath = kv.ref || '';
-        var promptText = promptLines.join('\n').trim();
-        if (!promptText) throw new Error('Missing drawing prompt');
-
-        var fullPrompt = '请根据以下描述生成图片，务必实际绘制图片并输出图片结果：\n\n' + promptText;
-        if (desc) fullPrompt += '\n\n附加要求：' + desc;
-
-        progressCb('[Qwen绘图] 新建对话...');
-        await E.execQwen('newConversation');
-        await new Promise(function(r) { setTimeout(r, 1000); });
-
-        if (refPath) {
-            progressCb('[Qwen绘图] 上传参考图片: ' + refPath + '...');
-            var pasteRes = await window.electronAPI.qwenPasteImage(refPath);
-            if (!pasteRes.success) {
-                progressCb('[Qwen绘图] 参考图上传失败，继续使用纯文本绘图...');
-            } else {
-                await new Promise(function(r) { setTimeout(r, 1000); });
-            }
-        }
-
-        progressCb('[Qwen绘图] 发送绘图提示词...');
-        await E.execQwen('focusEditor');
-        await window.electronAPI.qwenPasteText(fullPrompt);
-        await new Promise(function(r) { setTimeout(r, 800); });
-        progressCb('[Qwen绘图] 点击发送...');
-        await E.execQwen('clickSend');
-
-        progressCb('[Qwen绘图] 等待对话URL...');
-        var urlRes = await E.execQwen('waitForConversationUrl', [10000]);
-        var convUrl = (urlRes && urlRes.url) ? urlRes.url : '';
-        return { url: convUrl, savepath: kv.savepath || '', promptText: promptText };
-    };
-
-    E.qwenPPTSendOnly = async function(content, progressCb) {
-        progressCb = progressCb || function(){};
-        var lines = content.trim().split('\n');
-        var kv = {};
-        var promptLines = [];
-        var paramRegex = /^(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))\s*$/;
-        for (var li = 0; li < lines.length; li++) {
-            var line = lines[li].trim();
-            if (!line) continue;
-            var m = line.match(paramRegex);
-            if (m) {
-                var key = m[1].toLowerCase();
-                var val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
-                kv[key] = val;
-            } else {
-                promptLines.push(line);
-            }
-        }
-        var desc = kv.desc || '';
-        var refPath = kv.ref || '';
-        var promptText = promptLines.join('\n').trim();
-        if (!promptText) throw new Error('Missing PPT prompt');
-
-        var fullPrompt = '你是子代理(sub-agent)。请根据以下描述生成一份PPT，务必实际生成PPT文件并输出下载链接：\n\n' + promptText;
-        if (desc) fullPrompt += '\n\n附加要求：' + desc;
-        fullPrompt += ' 返回后对话将被删除，请确保返回完整信息。';
-
-        progressCb('[Qwen PPT] 新建对话...');
-        await E.execQwen('newConversation');
-        await new Promise(function(r) { setTimeout(r, 1000); });
-
-        if (refPath) {
-            progressCb('[Qwen PPT] 上传参考文件: ' + refPath + '...');
-            var pasteRes = await window.electronAPI.qwenPasteImage(refPath);
-            if (!pasteRes.success) {
-                progressCb('[Qwen PPT] 参考文件上传失败，继续...');
-            } else {
-                await new Promise(function(r) { setTimeout(r, 1000); });
-            }
-        }
-
-        progressCb('[Qwen PPT] 发送PPT生成提示词...');
-        await E.execQwen('focusEditor');
-        await window.electronAPI.qwenPasteText(fullPrompt);
-        await new Promise(function(r) { setTimeout(r, 800); });
-        progressCb('[Qwen PPT] 点击发送...');
-        await E.execQwen('clickSend');
-
-        progressCb('[Qwen PPT] 等待对话URL...');
-        var urlRes = await E.execQwen('waitForConversationUrl', [10000]);
-        var convUrl = (urlRes && urlRes.url) ? urlRes.url : '';
-        return { url: convUrl, savepath: kv.savepath || '', promptText: promptText };
-    };
-
-    // ==================== WaitAndExtract 模式 ====================
-
-    E.qwenDrawWaitAndExtract = async function(ref, skipNavigation, progressCb) {
-        progressCb = progressCb || function(){};
-        if (!ref || !ref.url) return '(Qwen 绘图未返回内容)';
-
-        if (skipNavigation) {
-            progressCb('[Qwen绘图] 已在目标对话，原地等待...');
-        } else {
-            progressCb('[Qwen绘图] 切回对话, URL=' + ref.url);
-            await E.execQwen('navigateToUrl', [ref.url]);
-            await new Promise(function(r) { setTimeout(r, 2000); });
-        }
-
-        progressCb('[Qwen绘图] 等待图片生成...');
-        var waitRes = await E.execQwen('waitForDrawResponse', [300000]);
-        if (!waitRes.success) {
-            if (waitRes.error === 'Timeout') throw new Error('Qwen 绘图超时');
-            else throw new Error('Qwen 绘图失败');
-        }
-        await new Promise(function(r) { setTimeout(r, 1000); });
-
-        var imgUrls = await E.execQwen('getLastImageUrls', []);
-        progressCb('[Qwen绘图] 绘图完成，正在下载图片...');
-
-        var dirRes = await window.electronAPI.getDownloadsPath();
-        var baseDir = (ref.savepath || '') || (dirRes.success ? dirRes.path : '.');
-        var baseName = E.getBaseFilename(ref.promptText || '');
-        var savedPaths = [];
-
-        for (var ui = 0; ui < (imgUrls || []).length; ui++) {
-            var ext = (imgUrls[ui] || '').match(/\.(\w+)(\?|$)/);
-            var suffix = ext ? '.' + ext[1] : '.png';
-            var saveName = baseName + '_' + (ui + 1) + suffix;
-            var savePath = baseDir + '\\' + saveName;
-            try {
-                var p = await E.downloadQwenImage(imgUrls[ui], savePath);
-                savedPaths.push(p.path);
-            } catch (e) {
-                console.warn('[qwenDraw] Failed to download image ' + (ui + 1), e);
-            }
-        }
-        progressCb('[Qwen绘图] 下载完成，删除临时对话...');
-        try { await E.execQwen('deleteConversation'); } catch(e) { console.warn('[Qwen绘图] deleteConversation:', e.message); }
-        await new Promise(function(r) { setTimeout(r, 500); });
-
-        var result = '✅ Qwen 绘图完成，共生成 ' + savedPaths.length + ' 张图片。\n\n';
-        for (var ui = 0; ui < savedPaths.length; ui++) {
-            result += '📁 已保存: ' + savedPaths[ui] + '\n';
-        }
-        return result;
-    };
-
-    E.qwenPPTWaitAndExtract = async function(ref, skipNavigation, progressCb) {
-        progressCb = progressCb || function(){};
-        if (!ref || !ref.url) return '(Qwen PPT 生成未返回内容)';
-
-        if (skipNavigation) {
-            progressCb('[Qwen PPT] 已在目标对话，原地等待...');
-        } else {
-            progressCb('[Qwen PPT] 切回对话, URL=' + ref.url);
-            await E.execQwen('navigateToUrl', [ref.url]);
-            await new Promise(function(r) { setTimeout(r, 2000); });
-        }
-
-        progressCb('[Qwen PPT] 等待 PPT 卡片生成...');
-        var pptRes = await E.execQwen('waitForPPTResponse', [1800000]);
-        if (!pptRes.success) throw new Error('Qwen PPT 生成超时或失败');
-        await new Promise(function(r) { setTimeout(r, 2000); });
-
-        var dRes = await window.electronAPI.getDownloadsPath();
-        var baseDir = (ref.savepath || '') || (dRes.success ? dRes.path : '.');
-        progressCb('[Qwen PPT] 准备下载, 保存目录=' + baseDir);
-        var downloadPromise = window.electronAPI.qwenPreparePPTDownload(baseDir);
-
-        progressCb('[Qwen PPT] 点击下载按钮...');
-        var clickRes = await E.execQwen('clickPPTDownload', []);
-        if (!clickRes.success) throw new Error('未找到 PPT 下载按钮');
-
-        var dlRes = await downloadPromise;
-        if (!dlRes.success) throw new Error('PPT 下载失败: ' + (dlRes.error || ''));
-
-        progressCb('[Qwen PPT] 下载完成: ' + dlRes.path);
-        progressCb('[Qwen PPT] 删除临时对话...');
-        try { await E.execQwen('deleteConversation'); } catch(e) { console.warn('[Qwen PPT] deleteConversation:', e.message); }
-        await new Promise(function(r) { setTimeout(r, 500); });
-
-        return '✅ Qwen PPT 生成完成。\n\n📁 已保存: ' + dlRes.path;
-    };
-
-    E.qwenWaitAndExtract = async function(ref, skipNavigation, progressCb) {
-        progressCb = progressCb || function(){};
-        if (!ref || !ref.url) return '(Qwen 未返回内容)';
-
-        if (skipNavigation) {
-            progressCb('[Qwen] 已在目标对话，原地等待...');
-        } else {
-            progressCb('[Qwen] 切回对话, URL=' + ref.url);
-            await E.execQwen('navigateToUrl', [ref.url]);
-            await new Promise(function(r) { setTimeout(r, 2000); });
-        }
-
-        var isResp = await E.execQwen('isResponding', []);
-        if (isResp && isResp.responding) {
-            progressCb('[Qwen] 等待回复...');
-            var waitRes = await E.execQwen('waitForTextResponse', [120000]);
-            if (!waitRes.success) throw new Error('Qwen 回复超时');
-        }
-
-        await new Promise(function(r) { setTimeout(r, 1500); });
-        var resultText = await E.getQwenResponseViaCopy();
-        progressCb('[Qwen] 删除临时对话...');
-        try { await E.execQwen('deleteConversation'); } catch(e) { console.warn('[Qwen] deleteConversation:', e.message); }
-        await new Promise(function(r) { setTimeout(r, 500); });
-        return resultText || '(Qwen 未返回内容)';
     };
 
     // ==================== 本地命令执行（electronAPI only） ====================
@@ -1013,18 +354,6 @@
     window.__dsagent_queueIntervalResult = function(taskName, content) {
         _pendingIntervalResults.push({ taskName: taskName, content: content, timestamp: Date.now() });
     };
-
-    // Qwen
-    window.__dsagent_qwenVision = E.qwenVision;
-    window.__dsagent_qwenDraw = E.qwenDraw;
-    window.__dsagent_qwenPPT = E.qwenPPT;
-    window.__dsagent_qwenGeneral = E.qwenGeneral;
-    window.__dsagent_qwenGeneralSendOnly = E.qwenGeneralSendOnly;
-    window.__dsagent_qwenDrawSendOnly = E.qwenDrawSendOnly;
-    window.__dsagent_qwenPPTSendOnly = E.qwenPPTSendOnly;
-    window.__dsagent_qwenDrawWaitAndExtract = E.qwenDrawWaitAndExtract;
-    window.__dsagent_qwenPPTWaitAndExtract = E.qwenPPTWaitAndExtract;
-    window.__dsagent_qwenWaitAndExtract = E.qwenWaitAndExtract;
 
     // Subreader
     window.__dsagent_handleSingleRead = function(params) {
@@ -1308,6 +637,113 @@
             }
         }
         return { sr: sr, qw: qw, normal: normal };
+    };
+
+    // ==================== P0: 循环检测（Loop Guard） ====================
+    // 参考 atomcode 的 LoopGuardState 设计
+    // 检测同一 (name, args, output, success) 重复 3 次 → 打断
+    // STATE_CHANGING 工具（edit/save/write/delete）成功执行时重置计数器
+
+    var STATE_CHANGING = ['edit', 'save', 'write', 'delete', 'edit_file', 'write_file', 'save_file', 'search_replace'];
+    var LOOP_THRESHOLD = 3;
+    var LOOP_HARD_THRESHOLD = 6;
+    var LOOP_WINDOW = 32;
+
+    var _loopRecent = [];
+
+    function _loopKey(name, args) {
+        // args 归一化：只取 JSON 字段名（去掉值），避免同一工具不同参数误判
+        var argSig = '';
+        try {
+            var parsed = typeof args === 'string' ? JSON.parse(args) : args;
+            argSig = Object.keys(parsed || {}).sort().join(',');
+        } catch(e) {
+            argSig = String(args).substring(0, 80);
+        }
+        return name + '\0' + argSig;
+    }
+
+    function _loopOutputHash(output) {
+        var str = typeof output === 'string' ? output : JSON.stringify(output);
+        var hash = 0;
+        for (var i = 0; i < str.length; i++) {
+            var ch = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + ch;
+            hash |= 0;
+        }
+        return hash;
+    }
+
+    function loopGuardCheck(name, args, output, success) {
+        if (!name) return { blocked: false };
+
+        var key = _loopKey(name, args);
+        var outHash = _loopOutputHash(output);
+        var isStateChanging = STATE_CHANGING.indexOf(name) >= 0;
+
+        // 检查是否循环
+        var sameKeyCount = 0;
+        var strictMatchCount = 0;
+        for (var i = 0; i < _loopRecent.length; i++) {
+            var e = _loopRecent[i];
+            if (e.key === key) {
+                sameKeyCount++;
+                if (e.outputHash === outHash && e.success === success) {
+                    strictMatchCount++;
+                }
+            }
+        }
+
+        // 硬上限：同一 (name, args) 超过 6 次 → 阻止
+        if (sameKeyCount >= LOOP_HARD_THRESHOLD) {
+            console.warn('[LoopGuard] HARD block: ' + name + ' repeated ' + (sameKeyCount + 1) + ' times');
+            return { blocked: true, reason: '工具 ' + name + ' 已重复执行 ' + (sameKeyCount + 1) + ' 次，已自动阻止循环' };
+        }
+
+        // 严格检测：同一 (name, args, output, success) 超过 3 次 → 阻止
+        if (strictMatchCount >= LOOP_THRESHOLD) {
+            console.warn('[LoopGuard] STRICT block: ' + name + ' identical call #' + (strictMatchCount + 1));
+            return { blocked: true, reason: '工具 ' + name + ' 已产生相同结果 ' + (strictMatchCount + 1) + ' 次，已自动阻止循环' };
+        }
+
+        // 记录本次调用
+        _loopRecent.push({
+            key: key,
+            outputHash: outHash,
+            success: !!success,
+            name: name,
+            timestamp: Date.now()
+        });
+
+        // 窗口大小限制
+        if (_loopRecent.length > LOOP_WINDOW) _loopRecent.shift();
+
+        // STATE_CHANGING 工具成功执行 → 重置计数器（保留当前记录作为参考, 但清老记录）
+        if (isStateChanging && success) {
+            _loopRecent = _loopRecent.slice(-3); // 只保留最近 3 条供参考
+        }
+
+        return { blocked: false };
+    }
+
+    function loopGuardReset() {
+        _loopRecent = [];
+    }
+
+    // 导出到 window 供 inject 层调用
+    window.__dsagent_loopGuardCheck = loopGuardCheck;
+    window.__dsagent_loopGuardReset = loopGuardReset;
+    E.loopGuardCheck = loopGuardCheck;
+    E.loopGuardReset = loopGuardReset;
+
+    // ==================== P1: 文件快照桥接 ====================
+    window.__dsagent_fileHistoryBackup = function(filePath) {
+        // 通过 electronAPI 调用主进程的文件历史备份
+        try {
+            if (window.electronAPI && window.electronAPI.fileHistoryBackup) {
+                window.electronAPI.fileHistoryBackup(filePath);
+            }
+        } catch(e) { /* 非关键 */ }
     };
 
     console.log('[DS Agent Engine] Loaded');

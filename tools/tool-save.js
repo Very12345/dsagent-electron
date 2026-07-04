@@ -27,6 +27,12 @@
             }
 
             if (!filePath) return makeResult(false, null, 'Missing file path');
+            // P1: 文件快照 — 保存前备份
+            try {
+                if (typeof window.__dsagent_fileHistoryBackup === 'function') {
+                    window.__dsagent_fileHistoryBackup(filePath.trim());
+                }
+            } catch(e) {}
             var res = await window.electronAPI.agentSave(filePath.trim(), fileContent);
             if (!res.success) return makeResult(false, null, res.error);
             return makeResult(true, res.message);

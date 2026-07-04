@@ -4,13 +4,17 @@
   "description": "DeepSeek Local Agent - Electron desktop app",
   "main": "main.js",
   "bin": {
-    "dsagent": "./bin/dsagent.js"
+    "dsagent": "./bin/dsagent.js",
+    "dsagent-cli": "./bin/dsagent-cli.js"
   },
   "scripts": {
-    "start": "chcp 65001 > nul & electron .",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win --x64",
-    "dist:portable": "electron-builder --win --x64 --config.portable=true",
+    "start": "chcp 65001 > nul & electron --disable-logging .",
+    "cli": "node bin/dsagent-cli.js",
+    "build:cli": "pkg bin/dsagent-cli.js --targets node18-win-x64,node18-macos-x64,node18-linux-x64 --output dist-cli/dsagent-cli",
+    "build:cli:win": "pkg bin/dsagent-cli.js --targets node18-win-x64 --output dist-cli/dsagent-cli",
+    "dist": "npm run build:cli && electron-builder",
+    "dist:win": "npm run build:cli:win && electron-builder --win --x64",
+    "dist:portable": "npm run build:cli:win && electron-builder --win --x64 --config.portable=true",
     "pack": "electron-packager . dsagent-electron --all",
     "pack:win": "electron-packager . dsagent-electron --platform=win32 --arch=x64 --out=dist_pack",
     "pack:update": "echo 打包更新文件（不含Electron）供已有安装的人覆盖更新 && powershell Compress-Archive -Path main.js,preload-*.js,agentview.html,controlbar.html,filebrowser.html,agent-engine.js,inject-deepseek.js,inject-qwen.js,tools,utils -DestinationPath update.zip -Force",
@@ -39,29 +43,31 @@
     "@larksuiteoapi/node-sdk": "^1.68.0",
     "@mdi/font": "^7.4.47",
     "axios": "^1.17.0",
-    "electron-updater": "^6.8.9",
+    "electron": "^28.0.0",
     "iconv-lite": "^0.6.3",
     "localtunnel": "^2.0.2",
     "qrcode-generator": "^2.0.4",
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "electron": "^28.0.0",
     "electron-builder": "^24.13.3",
-    "electron-packager": "^17.1.2"
+    "electron-packager": "^17.1.2",
+    "pkg": "^5.8.1"
   },
   "build": {
-    "appId": "com.deepseek.dsagent",
-    "productName": "DeepSeek Agent",
-    "directories": {
-      "output": "dist"
-    },
-    "asar": true,
-    "publish": {
-      "provider": "github",
-      "owner": "Very12345",
-      "repo": "dsagent-electron"
-    },
+  "appId": "com.deepseek.dsagent",
+  "productName": "DeepSeek Agent",
+  "directories": {
+    "output": "dist"
+  },
+  "asar": true,
+  "extraResources": [
+    {
+      "from": "dist-cli/",
+      "to": "cli/",
+      "filter": ["**/*"]
+    }
+  ],
     "files": [
       "**/*",
       "!node_modules/.bin",

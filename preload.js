@@ -117,4 +117,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 菜单项点击（注入菜单 overlay 中使用）
     sendMenuAction: (data) => ipcRenderer.send('menu-item-clicked', data),
+
+    // 切换工作目录（影响 exec 等工具的相对路径解析）
+    changeDir: (path) => ipcRenderer.invoke('change-dir', path),
 });

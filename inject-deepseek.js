@@ -62,7 +62,6 @@
     let _contextCompressSent = false; // 本轮是否已触发上下文压缩提示
     window.__dsagent_pendingAsyncTasks = [];  // 待处理异步任务列表
     window.__dsagent_seenToolDocs = [];       // AI 已查看过文档的工具名列表
-    window.__dsagent_concurrentMode = false;  // subreader 是否处于并发子代理模式
 
 var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 维护）
 
@@ -469,921 +468,32 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
     }
 
 
-    async function handleSingleRead(params) {
-    var pathsList = params.paths || [];
-    var mode = params.mode || 'quick';
-    var enableSearch = params.search === 'on';
-    var enableThink = params.think === 'on';
-    var extraPrompt = params.prompt || '';
-    var sendOnly = params.sendOnly || false;
+    // ==================== subreader 已删除（由 subagent 架构替代） ====================
 
-    if (pathsList.length === 0) {
-        throw new Error('Missing file path(s)');
-    }
-    
-    // 声明状态变量
-    var searchActuallyEnabled = false;
-    var thinkActuallyEnabled = false;
-
-    // ======== 读取所有文件并检查大小 ========
-    var fileResults = [];
-    var fileListStr = '';
-    var totalSizeBytes = 0;
-    var MAX_QUICK_FILES = 50;
-    var MAX_QUICK_SIZE_PER_FILE = 100 * 1024 * 1024;
-    var MAX_EXPERT_TOTAL_SIZE = 159 * 1024;
-    
-    for (var fi = 0; fi < pathsList.length; fi++) {
-        if ((mode === 'quick' || mode === 'image') && fi >= MAX_QUICK_FILES) {
-            throw new Error('快速模式最多支持 ' + MAX_QUICK_FILES + ' 个文件');
-        }
-        showToast('Reading file ' + (fi + 1) + '/' + pathsList.length + '...');
-        var fileInfo = await window.electronAPI.agentInfo(pathsList[fi]);
-        if (fileInfo.success && fileInfo.size !== undefined) {
-            if (mode === 'quick' || mode === 'image') {
-                if (fileInfo.size > MAX_QUICK_SIZE_PER_FILE) {
-                    throw new Error('快速模式单个文件不能超过 100MB');
-                }
-            } else {
-                totalSizeBytes += fileInfo.size;
-                if (totalSizeBytes > MAX_EXPERT_TOTAL_SIZE) {
-                    throw new Error('专家模式总大小不能超过 159KB');
-                }
+    // 估算页面上当前对话总字符数（用于上下文压缩检查）
+    function estimateCurrentContextLength() {
+        try {
+            var containers = document.querySelectorAll(SELECTORS.messageContainer);
+            var total = 0;
+            for (var ci = 0; ci < containers.length; ci++) {
+                var c = containers[ci];
+                if (c.querySelector('.ds-loading') || c.querySelector('[class*="loading"]')) continue;
+                total += (c.textContent || '').length;
             }
-        }
-        var fileRes = await window.electronAPI.agentReadFile(pathsList[fi]);
-        if (!fileRes.success) throw new Error(fileRes.error || 'File not found: ' + pathsList[fi]);
-        
-        // 非文本/代码文件：生成 .txt 副本，避免格式不支持
-        var ext = (fileRes.name || '').split('.').pop().toLowerCase();
-        var TEXT_EXTS = ['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'py', 'html', 'htm', 'css', 'scss', 'less',
-            'xml', 'yaml', 'yml', 'sh', 'bat', 'ps1', 'csv', 'ini', 'cfg', 'conf', 'log', 'sql',
-            'java', 'c', 'cpp', 'h', 'hpp', 'rs', 'go', 'rb', 'php', 'swift', 'kt', 'r', 'lua',
-            'toml', 'env', 'gitignore', 'dockerfile', 'makefile', 'cmake'];
-        if (TEXT_EXTS.indexOf(ext) === -1 && ext !== fileRes.name.toLowerCase()) {
-            showToast('Converting ' + fileRes.name + ' to .txt...');
-            try {
-                var textContent = await window.electronAPI.agentRead(pathsList[fi]);
-                if (textContent.success && textContent.content) {
-                    var txtName = fileRes.name + '.txt';
-                    var txtPath = '.dsa/temp/' + txtName.replace(/[<>:"/\\|?*]/g, '_');
-                    await window.electronAPI.agentSave(txtPath, textContent.content);
-                    var txtRes = await window.electronAPI.agentReadFile(txtPath);
-                    if (txtRes.success) {
-                        fileRes = txtRes;
-                        pathsList[fi] = txtPath;
-                    }
-                }
-            } catch(e) {
-                console.warn('Failed to convert to txt, using original:', e.message);
-            }
-        }
-        
-        fileResults.push(fileRes);
-        if (fileListStr) fileListStr += ', ';
-        fileListStr += fileRes.name;
+            return total;
+        } catch (e) { return 0; }
     }
 
-    // ======== 单线程模式：所有文件上传到同一个子对话 ========
-    return await handleSingleReadSingle(pathsList, fileResults, mode, extraPrompt, enableSearch, enableThink, fileListStr, sendOnly);
-}
-
-// 估算页面上当前对话总字符数（不含 subreader 子代理阅读内容）
-function estimateCurrentContextLength() {
-    var containers = document.querySelectorAll(SELECTORS.messageContainer);
-    var total = 0;
-    for (var ci = 0; ci < containers.length; ci++) {
-        var c = containers[ci];
-        // 跳过正在生成的 AI 消息
-        if (c.querySelector('.ds-loading') || c.querySelector('[class*="loading"]')) continue;
-        var text = c.textContent || '';
-        // 排除 subreader 子代理的阅读内容（通常位于单独的消息块）
-        if (text.indexOf('subreader') !== -1) {
-            var codeBlocks = c.querySelectorAll('pre, .md-code-block');
-            for (var bi = 0; bi < codeBlocks.length; bi++) {
-                var cb = codeBlocks[bi];
-                if ((cb.textContent || '').indexOf('subreader') !== -1) {
-                    var cbLen = (cb.textContent || '').length;
-                    text = text.substring(0, Math.max(0, text.indexOf(cb.textContent))) +
-                           text.substring(Math.min(text.length, text.indexOf(cb.textContent) + cbLen));
-                }
-            }
-        }
-        total += text.length;
-    }
-    return total;
-}
-
-// 添加上下文压缩提示：委托 engine 生成提示文本，本函数仅负责 DOM 发送
-async function appendContextCompressPrompt() {
-    if (_contextCompressSent) return;
-    _contextCompressSent = true;
-    var prompt = await E.buildContextCompressPrompt();
-    await fillAndSend(prompt);
-}
-
-async function handleSingleReadSingle(pathsList, fileResults, mode, extraPrompt, enableSearch, enableThink, fileListStr, sendOnly) {
-    var searchActuallyEnabled = false;
-    var thinkActuallyEnabled = false;
-
-    // ======== Save original conversation reference ========
-    showToast('Creating sub-agent conversation...');
-    var origConvEl = null;
-    var origConvHref = null;
-    var allSideItems = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"], [class*="sidebar-item"]');
-    for (var si = 0; si < allSideItems.length; si++) {
-        var item = allSideItems[si];
-        if (item.classList && (item.classList.contains('active') || item.getAttribute('aria-current') === 'page' || item.dataset && item.dataset.active)) {
-            origConvEl = item;
-            break;
-        }
-    }
-    origConvHref = window.location.pathname + window.location.search + window.location.hash;
-
-    // ======== Create new conversation ========
-    var newChatBtn = await findNewChatButton();
-    if (!newChatBtn) throw new Error('找不到新建对话按钮');
-    newChatBtn.click();
-
-    // 等待新页面加载完成（以 textarea 出现为标志）
-    var ta = null;
-    for (var retry = 0; retry < 30; retry++) {
-        ta = document.querySelector('textarea');
-        if (ta) break;
-        await sleep(300);
-    }
-    if (!ta) throw new Error('新对话加载超时');
-    ta.focus();
-    await sleep(600);
-
-    // ======== 专家 / 识图模式特殊处理 ========
-    if (mode === 'professional' || mode === 'image') {
-        var isImageMode = (mode === 'image');
-        showToast(isImageMode ? '识图模式 (Quick + 无深度思考)...' : 'Switching to Expert mode...');
-        setModelMode(isImageMode ? 'quick' : 'professional');
-        await sleep(1500);
-        
-        // 专家模式：需要先点击输入框激活完整工具栏
-        ta.click();
-        await sleep(500);
-        
-        // 识图模式：始终禁用深度思考
-        if (isImageMode) {
-            for (var attempt = 0; attempt < 5; attempt++) {
-                var allToggles = document.querySelectorAll('.ds-toggle-button');
-                var deepThinkBtn = null;
-                for (var ti = 0; ti < allToggles.length; ti++) {
-                    var toggle = allToggles[ti];
-                    var span = toggle.querySelector('span');
-                    if (span && (span.textContent.includes('深度思考') || span.textContent.includes('Deep Think'))) {
-                        deepThinkBtn = toggle;
-                        break;
-                    }
-                }
-                if (!deepThinkBtn) {
-                    deepThinkBtn = document.querySelector('[aria-label="深度思考"], [aria-label="Deep Think"]');
-                }
-                if (deepThinkBtn) {
-                    if (deepThinkBtn.getAttribute('aria-pressed') === 'true') {
-                        deepThinkBtn.click();
-                        await sleep(400);
-                    }
-                    break;
-                }
-                await sleep(500);
-            }
-        } else {
-            // 专家模式：按需处理深度思考
-            if (enableThink) {
-            showToast('Enabling deep think in Expert mode...');
-            var thinkSuccess = false;
-
-            // 方法1：通过 ds-toggle-button 查找
-            for (var attempt = 0; attempt < 8; attempt++) {
-                // 查找所有 toggle 按钮
-                var allToggles = document.querySelectorAll('.ds-toggle-button');
-                var deepThinkBtn = null;
-
-                for (var ti = 0; ti < allToggles.length; ti++) {
-                    var toggle = allToggles[ti];
-                    var span = toggle.querySelector('span');
-                    if (span && (span.textContent.includes('深度思考') || span.textContent.includes('Deep Think'))) {
-                        deepThinkBtn = toggle;
-                        break;
-                    }
-                }
-
-                // 方法2：通过 aria-label
-                if (!deepThinkBtn) {
-                    deepThinkBtn = document.querySelector('[aria-label="深度思考"], [aria-label="Deep Think"]');
-                }
-
-                if (deepThinkBtn) {
-                    var isActive = deepThinkBtn.getAttribute('aria-pressed') === 'true';
-                    if (!isActive) {
-                        deepThinkBtn.click();
-                        await sleep(600);
-                        // 验证
-                        var newActive = deepThinkBtn.getAttribute('aria-pressed') === 'true';
-                        if (newActive) {
-                            thinkSuccess = true;
-                            thinkActuallyEnabled = true;
-                            showToast('Deep think enabled', 1000);
-                            break;
-                        }
-                    } else {
-                        thinkSuccess = true;
-                        thinkActuallyEnabled = true;
-                        break;
-                    }
-                }
-                await sleep(500);
-            }
-
-            if (!thinkSuccess) {
-                console.warn('Failed to enable deep think in expert mode');
-                showToast('Warning: Could not enable deep think', 3000);
-            }
-        } else {
-            // 新对话可能沿用之前的深度思考状态，需要关闭
-            for (var attempt = 0; attempt < 5; attempt++) {
-                var allToggles = document.querySelectorAll('.ds-toggle-button');
-                var deepThinkBtn = null;
-                for (var ti = 0; ti < allToggles.length; ti++) {
-                    var toggle = allToggles[ti];
-                    var span = toggle.querySelector('span');
-                    if (span && (span.textContent.includes('深度思考') || span.textContent.includes('Deep Think'))) {
-                        deepThinkBtn = toggle;
-                        break;
-                    }
-                }
-                if (!deepThinkBtn) {
-                    deepThinkBtn = document.querySelector('[aria-label="深度思考"], [aria-label="Deep Think"]');
-                }
-                if (deepThinkBtn) {
-                    if (deepThinkBtn.getAttribute('aria-pressed') === 'true') {
-                        deepThinkBtn.click();
-                        await sleep(400);
-                    }
-                    break;
-                }
-                await sleep(500);
-            }
-        }
-        }
-
-        // 专家模式联网搜索
-        if (enableSearch) {
-            for (var attempt = 0; attempt < 5; attempt++) {
-                var allToggles = document.querySelectorAll('.ds-toggle-button');
-                var searchBtn = null;
-                for (var ti = 0; ti < allToggles.length; ti++) {
-                    var toggle = allToggles[ti];
-                    var span = toggle.querySelector('span');
-                    if (span && (span.textContent.includes('联网搜索') || span.textContent.includes('智能搜索') || span.textContent.includes('搜索'))) {
-                        searchBtn = toggle;
-                        break;
-                    }
-                }
-                if (!searchBtn) {
-                    searchBtn = document.querySelector('[aria-label*="搜索"], [aria-label*="Search"]');
-                }
-                if (searchBtn) {
-                    if (searchBtn.getAttribute('aria-pressed') !== 'true') {
-                        searchBtn.click();
-                        await sleep(400);
-                        searchActuallyEnabled = true;
-                    } else {
-                        searchActuallyEnabled = true;
-                    }
-                    break;
-                }
-                await sleep(500);
-            }
-        } else {
-            // 新对话可能沿用之前的联网搜索状态，需要关闭
-            for (var attempt = 0; attempt < 5; attempt++) {
-                var allToggles = document.querySelectorAll('.ds-toggle-button');
-                var searchBtn = null;
-                for (var ti = 0; ti < allToggles.length; ti++) {
-                    var toggle = allToggles[ti];
-                    var span = toggle.querySelector('span');
-                    if (span && (span.textContent.includes('联网搜索') || span.textContent.includes('智能搜索') || span.textContent.includes('搜索'))) {
-                        searchBtn = toggle;
-                        break;
-                    }
-                }
-                if (!searchBtn) {
-                    searchBtn = document.querySelector('[aria-label*="搜索"], [aria-label*="Search"]');
-                }
-                if (searchBtn) {
-                    if (searchBtn.getAttribute('aria-pressed') === 'true') {
-                        searchBtn.click();
-                        await sleep(400);
-                    }
-                    break;
-                }
-                await sleep(500);
-            }
-        }
-    } else {
-        // 普通模式
-        showToast('Using Quick mode...');
-        setModelMode('quick');
-        await sleep(800);
-        
-        // 普通模式的深度思考
-        if (enableThink) {
-            showToast('Enabling deep think...');
-            for (var attempt = 0; attempt < 5; attempt++) {
-                var dt = await waitForToggle('深度思考', 2000);
-                if (dt) {
-                    var active = isToggleActive(dt);
-                    if (!active) {
-                        dt.click();
-                        await sleep(500);
-                        var newActive = isToggleActive(dt);
-                        if (newActive) {
-                            thinkActuallyEnabled = true;
-                            showToast('Deep think enabled', 1000);
-                            break;
-                        }
-                    } else {
-                        thinkActuallyEnabled = true;
-                        break;
-                    }
-                }
-                await sleep(500);
-            }
-        } else {
-            // 新对话可能沿用之前的深度思考状态，需要关闭
-            for (var attempt = 0; attempt < 3; attempt++) {
-                var dt = await waitForToggle('深度思考', 2000);
-                if (dt) {
-                    if (isToggleActive(dt)) {
-                        dt.click();
-                        await sleep(400);
-                    }
-                    break;
-                }
-                await sleep(500);
-            }
-        }
-
-        // 普通模式联网搜索
-        if (enableSearch) {
-            showToast('Enabling web search...');
-            for (var attempt = 0; attempt < 3; attempt++) {
-                var st = await waitForToggle('智能搜索', 3000);
-                if (st && !isToggleActive(st)) {
-                    st.click();
-                    searchActuallyEnabled = true;
-                    await sleep(400);
-                    break;
-                } else if (st && isToggleActive(st)) {
-                    searchActuallyEnabled = true;
-                    break;
-                }
-                await sleep(500);
-            }
-        } else {
-            // 新对话可能沿用之前的联网搜索状态，需要关闭
-            for (var attempt = 0; attempt < 3; attempt++) {
-                var st = await waitForToggle('智能搜索', 3000);
-                if (st) {
-                    if (isToggleActive(st)) {
-                        st.click();
-                        await sleep(400);
-                    }
-                    break;
-                }
-                await sleep(500);
-            }
-        }
+    // 添加上下文压缩提示
+    async function appendContextCompressPrompt() {
+        if (_contextCompressSent) return;
+        _contextCompressSent = true;
+        try {
+            var prompt = await E.buildContextCompressPrompt();
+            await fillAndSend(prompt);
+        } catch (e) { /* 非关键 */ }
     }
 
-    // ======== 处理文件（注意编码） ========
-    var readMsg;
-    if (mode === 'quick' || mode === 'image') {
-        // 快速模式：上传文件
-        var fileInput = document.querySelector(SELECTORS.fileInput);
-        if (!fileInput) throw new Error('找不到文件上传输入框');
-
-        var dt = new DataTransfer();
-        for (var fi = 0; fi < fileResults.length; fi++) {
-            var fr = fileResults[fi];
-            showToast('Uploading file: ' + fr.name + '...');
-            // 处理 base64 编码，确保中文正确
-            var binaryString = window.atob(fr.data);
-            var bytes = new Uint8Array(binaryString.length);
-            for (var i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            var blob = new Blob([bytes], { type: fr.mime || 'application/octet-stream' });
-            var file = new File([blob], fr.name, { type: fr.mime || 'application/octet-stream' });
-            dt.items.add(file);
-        }
-        fileInput.files = dt.files;
-        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-        await waitForReady();
-
-        // ======== 核验：上传完成后立即检查页面是否有格式不支持的通知 ========
-        var uploadErr = checkPageError();
-        if (uploadErr && uploadErr.error === 'format_unsupported') {
-            showToast('⚠️ 上传格式不支持，立即终止');
-            // 清理临时对话
-            var nt0 = document.querySelector(SELECTORS.navToggleBtn);
-            if (nt0) { nt0.click(); await sleep(500); }
-            var convItems0 = document.querySelectorAll(SELECTORS.convItem);
-            if (convItems0.length === 0) convItems0 = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"]');
-            if (convItems0.length > 0) {
-                var delBtn0 = await findDeleteButton(convItems0[0]);
-                if (delBtn0) { delBtn0.click(); await sleep(2000); var cf0 = findConfirmButton(); if (cf0) { cf0.click(); await sleep(1500); } }
-            }
-            return '⚠️ 上传失败：DeepSeek 不支持该文件格式，请尝试将文件转换为支持的格式（如 txt、pdf、docx 等文本格式）后重试。';
-        }
-
-        readMsg = await window.__dsagent_engine.buildSubreaderPrompt(fileListStr, extraPrompt);
-    } else {
-        // 专家模式：以文本形式发送，注意编码
-        showToast('Reading file content for Expert mode...');
-        var allTextContent = '';
-        for (var fi = 0; fi < fileResults.length; fi++) {
-            var fr = fileResults[fi];
-            try {
-                var textRes = await window.electronAPI.agentRead(pathsList[fi]);
-                if (textRes.success) {
-                    if (allTextContent) allTextContent += '\n\n--- 文件分隔 ---\n\n';
-                    allTextContent += '**文件: ' + fr.name + '**\n```text\n' + textRes.content + '\n```';
-                }
-            } catch(e) {
-                console.warn('Failed to read file content:', e);
-            }
-        }
-        
-        if (allTextContent) {
-            readMsg = await window.__dsagent_engine.buildSubreaderPrompt(fileListStr, extraPrompt) + '\n\n' + allTextContent + '\n\n请基于以上内容进行分析，返回完整结果。';
-        } else {
-            // 降级方案：通过路径读取
-            readMsg = await window.__dsagent_engine.buildSubreaderPrompt(fileListStr, extraPrompt) + '\n路径：' + pathsList.join(', ');
-        }
-    }
-
-    showToast('Sending to sub-agent...');
-    await fillAndSend(readMsg);
-
-    // sendOnly 模式：发送完毕即返回引用，不等待回复
-    if (sendOnly) {
-        return {
-            sendOnly: true,
-            origConvEl: origConvEl,
-            origConvHref: origConvHref,
-            convHref: window.location.pathname + window.location.search + window.location.hash,
-            searchActuallyEnabled: searchActuallyEnabled,
-            thinkActuallyEnabled: thinkActuallyEnabled,
-            mode: mode,
-            fileListStr: fileListStr
-        };
-    }
-
-    showToast('Waiting for sub-agent response...');
-    await waitForGenerationEnd();
-    showToast('Sub-agent responded, extracting...');
-
-    // ======== 核验：生成结束后再次检查页面是否有文字识别失败的通知 ========
-    var genErr = checkPageError();
-    if (genErr && genErr.error === 'no_text_recognized') {
-        showToast('⚠️ 图片未识别到文字，立即终止');
-        // 清理临时对话
-        var ntErr = document.querySelector(SELECTORS.navToggleBtn);
-        if (ntErr) { ntErr.click(); await sleep(500); }
-        var convItemsErr = document.querySelectorAll(SELECTORS.convItem);
-        if (convItemsErr.length === 0) convItemsErr = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"]');
-        if (convItemsErr.length > 0) {
-            var delBtnErr = await findDeleteButton(convItemsErr[0]);
-            if (delBtnErr) { delBtnErr.click(); await sleep(2000); var cfErr = findConfirmButton(); if (cfErr) { cfErr.click(); await sleep(1500); } }
-        }
-        return '⚠️ 图片识别失败：DeepSeek 未能从图片中识别出文字。请确保图片中包含清晰的文字内容，或使用 qwen-vision 进行视觉分析。';
-    }
-
-    // ======== Extract response ========
-    var messages = document.querySelectorAll(SELECTORS.messageContainer);
-    var lastAiMsg = null;
-    for (var mi = messages.length - 1; mi >= 0; mi--) {
-        var msg = messages[mi];
-        var textEls = msg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
-        if (textEls.length > 0) { lastAiMsg = msg; break; }
-    }
-    var responseText = '';
-    if (lastAiMsg) {
-        var textEls = lastAiMsg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
-        for (var ti = 0; ti < textEls.length; ti++) {
-            responseText += textEls[ti].textContent + '\n';
-        }
-    }
-    if (!responseText.trim()) responseText = '(子代理未返回内容)';
-
-    // ======== 核验：检查回复文本中是否包含文字识别失败（兜底） ========
-    var errorCheck = responseText.trim();
-    if (errorCheck.indexOf('未识别到文字') !== -1 || errorCheck.indexOf('未能识别到文字') !== -1) {
-        showToast('⚠️ 图片未识别到文字，立即终止');
-        // 清理临时对话
-        var nt2 = document.querySelector(SELECTORS.navToggleBtn);
-        if (nt2) { nt2.click(); await sleep(500); }
-        var convItems2 = document.querySelectorAll(SELECTORS.convItem);
-        if (convItems2.length === 0) convItems2 = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"]');
-        if (convItems2.length > 0) {
-            var delBtn2 = await findDeleteButton(convItems2[0]);
-            if (delBtn2) { delBtn2.click(); await sleep(2000); var cf2 = findConfirmButton(); if (cf2) { cf2.click(); await sleep(1500); } }
-        }
-        return '⚠️ 图片识别失败：DeepSeek 未能从图片中识别出文字。请确保图片中包含清晰的文字内容，或使用 qwen-vision 进行视觉分析。';
-    }
-
-    // ======== Delete temporary conversation ========
-    showToast('Cleaning up sub-agent conversation...');
-    var navToggle2 = document.querySelector(SELECTORS.navToggleBtn);
-    if (navToggle2) { navToggle2.click(); await sleep(500); }
-
-    var convItems = document.querySelectorAll(SELECTORS.convItem);
-    if (convItems.length === 0) {
-        convItems = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"]');
-    }
-    if (convItems.length > 0) {
-        var tempConv = convItems[0];
-        var delBtn = await findDeleteButton(tempConv);
-        if (delBtn) {
-            delBtn.click();
-            await sleep(2000);
-            var confirmBtn = findConfirmButton();
-            if (confirmBtn) { confirmBtn.click(); await sleep(1500); }
-        }
-    }
-
-    // ======== Return to original conversation ========
-    showToast('Returning to original conversation...');
-    var wentBack = false;
-    if (origConvEl && document.body.contains(origConvEl)) {
-        origConvEl.click();
-        wentBack = true;
-        await sleep(1000);
-    }
-    if (!wentBack && origConvHref) {
-        var targetId = origConvHref.replace(/^.*\/chat\//, '');
-        var allConvLinks = document.querySelectorAll('a[href*="/chat/"]');
-        for (var cli = 0; cli < allConvLinks.length; cli++) {
-            var href = allConvLinks[cli].getAttribute('href');
-            if (href && href.includes(targetId)) {
-                allConvLinks[cli].click();
-                wentBack = true;
-                await sleep(1000);
-                break;
-            }
-        }
-    }
-    if (!wentBack) {
-        var allItems = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"]');
-        for (var ai = 0; ai < allItems.length; ai++) {
-            if (ai === 0) continue;
-            allItems[ai].click();
-            wentBack = true;
-            await sleep(1000);
-            break;
-        }
-    }
-    if (!wentBack) {
-        if (navToggle2) navToggle2.click();
-        await sleep(500);
-    }
-
-    // ======== Return result ========
-    var modeLabel = mode === 'professional' ? 'Expert' : (mode === 'image' ? 'Image' : 'Quick');
-    if (searchActuallyEnabled) modeLabel += '+Search';
-    if (thinkActuallyEnabled) modeLabel += '+DeepThink';
-    
-    return '**子代理分析结果 (' + modeLabel + '): ' + fileListStr + '**\n\n' + responseText.trim();
-}
-
-// sendOnly 模式的第二阶段：切回对话、等待回复、提取结果、清理
-async function waitAndExtractSingle(ref) {
-    var origConvEl = ref.origConvEl;
-    var origConvHref = ref.origConvHref;
-    var convHref = ref.convHref;
-    var searchActuallyEnabled = ref.searchActuallyEnabled;
-    var thinkActuallyEnabled = ref.thinkActuallyEnabled;
-    var mode = ref.mode;
-    var fileListStr = ref.fileListStr;
-
-    // 切回子代理对话
-    showToast('Switching back to pending sub-agent...');
-    var targetId = convHref.replace(/^.*\/chat\//, '');
-    var allConvLinks = document.querySelectorAll('a[href*="/chat/"]');
-    var switched = false;
-    for (var cli = 0; cli < allConvLinks.length; cli++) {
-        if (allConvLinks[cli].getAttribute('href') && allConvLinks[cli].getAttribute('href').includes(targetId)) {
-            allConvLinks[cli].click();
-            switched = true;
-            await sleep(1000);
-            break;
-        }
-    }
-    if (!switched) {
-        var navToggle = document.querySelector(SELECTORS.navToggleBtn);
-        if (navToggle) { navToggle.click(); await sleep(500); }
-        allConvLinks = document.querySelectorAll('a[href*="/chat/"]');
-        for (var cli2 = 0; cli2 < allConvLinks.length; cli2++) {
-            if (allConvLinks[cli2].getAttribute('href') && allConvLinks[cli2].getAttribute('href').includes(targetId)) {
-                allConvLinks[cli2].click();
-                await sleep(1000);
-                break;
-            }
-        }
-    }
-
-    showToast('Waiting for sub-agent response...');
-    var btn2 = getSendStopBtn();
-    var alreadyDone2 = false;
-    if (btn2) {
-        var svg2 = btn2.querySelector('svg path');
-        var d2 = svg2 ? svg2.getAttribute('d') || '' : '';
-        if (d2.indexOf('M2 4.88') < 0) {
-            alreadyDone2 = true;
-        }
-    }
-    if (!alreadyDone2) {
-        await waitForGenerationEnd();
-    } else {
-        showToast('Sub-agent already finished, extracting...');
-    }
-    showToast('Sub-agent responded, extracting...');
-
-    // 核验
-    var genErr = checkPageError();
-    if (genErr && genErr.error === 'no_text_recognized') {
-        showToast('⚠️ 图片未识别到文字，立即终止');
-        await deleteCurrentConversation();
-        return '⚠️ 图片识别失败：DeepSeek 未能从图片中识别出文字。';
-    }
-
-    // 提取回复
-    var messages = document.querySelectorAll(SELECTORS.messageContainer);
-    var lastAiMsg = null;
-    for (var mi = messages.length - 1; mi >= 0; mi--) {
-        var msg = messages[mi];
-        var textEls = msg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
-        if (textEls.length > 0) { lastAiMsg = msg; break; }
-    }
-    var responseText = '';
-    if (lastAiMsg) {
-        var textEls = lastAiMsg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
-        for (var ti = 0; ti < textEls.length; ti++) {
-            responseText += textEls[ti].textContent + '\n';
-        }
-    }
-    if (!responseText.trim()) responseText = '(子代理未返回内容)';
-
-    // 清理临时对话
-    showToast('Cleaning up sub-agent conversation...');
-    await deleteCurrentConversation();
-
-    // 返回原对话
-    showToast('Returning to original conversation...');
-    var wentBack = false;
-    if (origConvEl && document.body.contains(origConvEl)) {
-        origConvEl.click();
-        wentBack = true;
-        await sleep(1000);
-    }
-    if (!wentBack && origConvHref) {
-        var origId = origConvHref.replace(/^.*\/chat\//, '');
-        var links = document.querySelectorAll('a[href*="/chat/"]');
-        for (var l = 0; l < links.length; l++) {
-            if (links[l].getAttribute('href') && links[l].getAttribute('href').includes(origId)) {
-                links[l].click();
-                wentBack = true;
-                await sleep(1000);
-                break;
-            }
-        }
-    }
-    if (!wentBack) {
-        var nt = document.querySelector(SELECTORS.navToggleBtn);
-        if (nt) nt.click();
-        await sleep(500);
-    }
-
-    var modeLabel = mode === 'professional' ? 'Expert' : (mode === 'image' ? 'Image' : 'Quick');
-    if (searchActuallyEnabled) modeLabel += '+Search';
-    if (thinkActuallyEnabled) modeLabel += '+DeepThink';
-
-    return '**子代理分析结果 (' + modeLabel + '): ' + fileListStr + '**\n\n' + responseText.trim();
-}
-
-// ======== 二阶并发：拆分文件为两批，创建两个对话并行处理 ========
-async function handleSingleReadConcurrent(pathsList, fileResults, extraPrompt, enableSearch, enableThink, fileListStr) {
-    window.__dsagent_concurrentMode = true;
-    showToast('Concurrent mode: splitting into 2 batches...');
-    var mid = Math.ceil(fileResults.length / 2);
-    var batch1Files = fileResults.slice(0, mid);
-    var batch2Files = fileResults.slice(mid);
-    var batch1Paths = pathsList.slice(0, mid);
-    var batch2Paths = pathsList.slice(mid);
-
-    // ======== Save original conversation reference ========
-    var origConvEl = null;
-    var origConvHref = null;
-    var allSideItems = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"], [class*="sidebar-item"]');
-    for (var si = 0; si < allSideItems.length; si++) {
-        var item = allSideItems[si];
-        if (item.classList && (item.classList.contains('active') || item.getAttribute('aria-current') === 'page' || item.dataset && item.dataset.active)) {
-            origConvEl = item;
-            break;
-        }
-    }
-    origConvHref = window.location.pathname + window.location.search + window.location.hash;
-
-    // ======== Batch 1: 创建对话、上传、发送（不等待） ========
-    showToast('Batch 1/2: Creating conversation...');
-    var batch1ConvHref = await createAndSendBatch(batch1Files, batch1Paths, extraPrompt, enableSearch, enableThink, 'Batch 1');
-    showToast('Batch 1 sent, starting Batch 2...');
-
-    // ======== Batch 2: 创建对话、上传、发送、等待、提取 ========
-    var batch2Result = await processBatchFully(batch2Files, batch2Paths, extraPrompt, enableSearch, enableThink, 'Batch 2');
-
-    // ======== 切回 Batch 1 对话，等待并提取 ========
-    showToast('Switching back to Batch 1...');
-    var batch1Result = await waitAndExtractBatch(batch1ConvHref, batch1Paths, 'Batch 1');
-
-    // ======== Clean up both temporary conversations ========
-    showToast('Cleaning up temporary conversations...');
-    await deleteCurrentConversation();
-    // 切换到 batch 1 的对话（如果还在的话）然后删除
-    if (batch1ConvHref) {
-        var targetId = batch1ConvHref.replace(/^.*\/chat\//, '');
-        var allConvLinks = document.querySelectorAll('a[href*="/chat/"]');
-        for (var cli = 0; cli < allConvLinks.length; cli++) {
-            if (allConvLinks[cli].getAttribute('href') && allConvLinks[cli].getAttribute('href').includes(targetId)) {
-                allConvLinks[cli].click();
-                await sleep(1000);
-                break;
-            }
-        }
-        await deleteCurrentConversation();
-    }
-
-    // ======== Return to original conversation ========
-    showToast('Returning to original conversation...');
-    var wentBack = false;
-    if (origConvEl && document.body.contains(origConvEl)) {
-        origConvEl.click();
-        wentBack = true;
-        await sleep(1000);
-    }
-    if (!wentBack && origConvHref) {
-        var origId = origConvHref.replace(/^.*\/chat\//, '');
-        var links = document.querySelectorAll('a[href*="/chat/"]');
-        for (var l = 0; l < links.length; l++) {
-            if (links[l].getAttribute('href') && links[l].getAttribute('href').includes(origId)) {
-                links[l].click();
-                wentBack = true;
-                await sleep(1000);
-                break;
-            }
-        }
-    }
-    if (!wentBack) {
-        var navToggle = document.querySelector(SELECTORS.navToggleBtn);
-        if (navToggle) navToggle.click();
-        await sleep(500);
-    }
-
-    window.__dsagent_concurrentMode = false;
-
-    // ======== Merge results ========
-    var batch1Name = batch1Paths.map(function(p) { return p.split(/[\\/]/).pop(); }).join(', ');
-    var batch2Name = batch2Paths.map(function(p) { return p.split(/[\\/]/).pop(); }).join(', ');
-    return '**子代理并发分析结果 (Quick): ' + fileListStr + '**\n\n' +
-        '--- Batch 1: ' + batch1Name + ' ---\n' + batch1Result + '\n\n' +
-        '--- Batch 2: ' + batch2Name + ' ---\n' + batch2Result;
-}
-
-// 创建对话、上传文件、发送消息，返回对话 URL（不等待回复）
-async function createAndSendBatch(batchFiles, batchPaths, extraPrompt, enableSearch, enableThink, label) {
-    showToast(label + ': Creating conversation...');
-    var newChatBtn = await findNewChatButton();
-    if (!newChatBtn) throw new Error('找不到新建对话按钮');
-    newChatBtn.click();
-    var ta = null;
-    for (var retry = 0; retry < 30; retry++) {
-        ta = document.querySelector('textarea');
-        if (ta) break;
-        await sleep(300);
-    }
-    if (!ta) throw new Error(label + ': 新对话加载超时');
-    ta.focus();
-    await sleep(600);
-
-    // Quick mode setup
-    setModelMode('quick');
-    await sleep(800);
-
-    if (enableThink) {
-        for (var attempt = 0; attempt < 5; attempt++) {
-            var dt = await waitForToggle('深度思考', 2000);
-            if (dt && !isToggleActive(dt)) { dt.click(); await sleep(500); break; }
-            if (dt && isToggleActive(dt)) break;
-            await sleep(500);
-        }
-    }
-    if (enableSearch) {
-        for (var attempt = 0; attempt < 3; attempt++) {
-            var st = await waitForToggle('智能搜索', 3000);
-            if (st && !isToggleActive(st)) { st.click(); await sleep(400); break; }
-            if (st && isToggleActive(st)) break;
-            await sleep(500);
-        }
-    }
-
-    // Upload files
-    var fileInput = document.querySelector(SELECTORS.fileInput);
-    if (!fileInput) throw new Error(label + ': 找不到文件上传输入框');
-    var dt = new DataTransfer();
-    for (var fi = 0; fi < batchFiles.length; fi++) {
-        var fr = batchFiles[fi];
-        showToast(label + ': Uploading ' + fr.name + '...');
-        var binaryString = window.atob(fr.data);
-        var bytes = new Uint8Array(binaryString.length);
-        for (var i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-        var blob = new Blob([bytes], { type: fr.mime || 'application/octet-stream' });
-        var file = new File([blob], fr.name, { type: fr.mime || 'application/octet-stream' });
-        dt.items.add(file);
-    }
-    fileInput.files = dt.files;
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitForReady();
-
-    var fileNames = batchFiles.map(function(f) { return f.name; }).join(', ');
-    var readMsg = await window.__dsagent_engine.buildSubreaderPrompt(fileNames, extraPrompt);
-    showToast(label + ': Sending...');
-    await fillAndSend(readMsg);
-
-    // 保存当前对话 URL 以便后续切回
-    return window.location.pathname + window.location.search + window.location.hash;
-}
-
-// 完整处理一批：创建、上传、发送、等待、提取（用于第二批）
-async function processBatchFully(batchFiles, batchPaths, extraPrompt, enableSearch, enableThink, label) {
-    await createAndSendBatch(batchFiles, batchPaths, extraPrompt, enableSearch, enableThink, label);
-    showToast(label + ': Waiting for response...');
-    await waitForGenerationEnd();
-    return extractLastAiResponse();
-}
-
-// 等待指定对话完成并提取结果
-async function waitAndExtractBatch(convHref, batchPaths, label) {
-    // 导航到目标对话
-    if (convHref) {
-        var targetId = convHref.replace(/^.*\/chat\//, '');
-        var allConvLinks = document.querySelectorAll('a[href*="/chat/"]');
-        var found = false;
-        for (var cli = 0; cli < allConvLinks.length; cli++) {
-            if (allConvLinks[cli].getAttribute('href') && allConvLinks[cli].getAttribute('href').includes(targetId)) {
-                allConvLinks[cli].click();
-                found = true;
-                await sleep(1000);
-                break;
-            }
-        }
-        if (!found) {
-            // 可能还在当前对话
-            console.log(label + ': Already on target conversation');
-        }
-    }
-    showToast(label + ': Waiting for response...');
-    await waitForGenerationEnd();
-    return extractLastAiResponse();
-}
-
-// 提取最后一个 AI 回复的文本内容
-function extractLastAiResponse() {
-    var messages = document.querySelectorAll(SELECTORS.messageContainer);
-    console.log('[Debug] extractLastAiResponse: found ' + messages.length + ' messages, selector=' + SELECTORS.messageContainer);
-    var lastAiMsg = null;
-    for (var mi = messages.length - 1; mi >= 0; mi--) {
-        var msg = messages[mi];
-        var textEls = msg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
-        if (textEls.length > 0) { lastAiMsg = msg; console.log('[Debug] extractLastAiResponse: last AI message at index ' + mi + ' has ' + textEls.length + ' text elements'); break; }
-    }
-    var responseText = '';
-    if (lastAiMsg) {
-        var textEls = lastAiMsg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
-        for (var ti = 0; ti < textEls.length; ti++) {
-            responseText += textEls[ti].textContent + '\n';
-        }
-    }
-    var result = responseText.trim() || '(子代理未返回内容)';
-    console.log('[Debug] extractLastAiResponse: result length=' + result.length + ' content=' + result.substring(0, 120));
-    return result;
-}
 
 // 删除当前活跃的对话
 async function deleteCurrentConversation() {
@@ -1873,8 +983,17 @@ async function deleteCurrentConversation() {
                     formatHint += '<tool:exec>{"body": "echo 格式测试"}</tool:exec>\n\n';
                     formatHint += '<message>如果只是回复用户消息，请使用 `<message>内容</message>` 包裹。</message>';
                     await fillAndSend(formatHint);
+                    // 格式修正提示发送后，通知任务链结束（CLI waiter 依赖此信号）
+                    try {
+                        window.electronAPI.agentForwardResult({ type: 'tasks-end', stopped: false });
+                    } catch (e) { /* ignore */ }
                 } else {
                     showToast('未找到可执行的指令', 2000);
+                    // 纯文字回复（有 segments 但无工具调用）：通知任务链结束
+                    // CLI waiter 依赖 tasks-end 信号 resolve，agentview 依赖它结束 isTaskChainActive 状态
+                    try {
+                        window.electronAPI.agentForwardResult({ type: 'tasks-end', stopped: false });
+                    } catch (e) { /* ignore */ }
                 }
                 return;
             }
@@ -1886,126 +1005,31 @@ async function deleteCurrentConversation() {
             var cmdMap = window.__dsagent_engine.buildCmdMap(document.querySelectorAll('.md-code-block, pre'), getLanguage, extractCode);
             var results = [];
 
-            // 5a. 分离 subreader、qwen 和普通命令（委托 engine）
+            // 5a. 分类命令（所有命令统一串行执行，并发由 server 层管理）
             var classified = E.classifyCommands(commands);
-            var srCommands = classified.sr;
+            var srCommands = classified.sr;       // 旧分类保留兼容
             var qwCommands = classified.qw;
             var normalCommands = classified.normal;
 
-            // 命令执行委托给 engine（纯业务逻辑）
-            // sendOnly 模式：发送后不等待，返回 refs 供后续 waitAndExtractSingle 使用
-            var execOneCommandSendOnly = async function(c) {
-                var resolvedContent = window.__dsagent_engine.resolveRefs(c.content, cmdMap);
-                try {
-                    var params = window.__dsagent_parseSingleReadParams(resolvedContent);
-                    params.sendOnly = true;
-                    return await window.__dsagent_handleSingleRead(params);
-                } catch (e) {
-                    return null;
-                }
-            };
-
-            // qwen sendOnly 模式：创建对话、上传文件、发送消息，返回对话标题供后续切回提取
-            var execOneCommandQwenSendOnly = async function(c) {
-                var resolvedContent = window.__dsagent_engine.resolveRefs(c.content, cmdMap);
-                try {
-                    var firstLine = resolvedContent.trim().split('\n')[0].trim();
-                    var kv = window.__dsagent_parseKeyValuePairs(firstLine);
-                    var isPicture = (kv.callback || '').toLowerCase() === 'picture';
-                    var isPPT = (kv.callback || '').toLowerCase() === 'ppt';
-                    if (isPicture) {
-                        var ref = await qwenDrawSendOnly(resolvedContent);
-                        ref.isPicture = true;
-                        return ref;
-                    } else if (isPPT) {
-                        var ref = await qwenPPTSendOnly(resolvedContent);
-                        ref.isPPT = true;
-                        return ref;
-                    } else {
-                        return await qwenGeneralSendOnly(resolvedContent);
-                    }
-                } catch (e) {
-                    return null;
-                }
-            };
-
-            // 5b. subreader 二阶并行：先发第一个再发第二个，等待阶段重叠
+            // 5b. 旧 subreader 命令：降级为普通串行执行
             if (srCommands.length > 0) {
-                var BATCH_SIZE = 2;
-                for (var bi = 0; bi < srCommands.length; bi += BATCH_SIZE) {
-                    var batch = srCommands.slice(bi, bi + BATCH_SIZE);
-                    if (batch.length >= 2) {
-                        // 两个 subreader：串行创建+发送，并行等待
-                        window.__dsagent_concurrentMode = true;
-                        showToast('subreader 批次 ' + (Math.floor(bi / BATCH_SIZE) + 1) + '/' + Math.ceil(srCommands.length / BATCH_SIZE) + ' (2个并行)...');
-                        // 第一个：发送后不等待
-                        var ref1 = await execOneCommandSendOnly(batch[0]);
-                        // 第二个：完整执行
-                        var result2 = await E.execOneCommand(batch[1], cmdMap);
-                        // 切回第一个：等待并提取
-                        var result1 = null;
-                        if (ref1) {
-                            result1 = { success: true, data: await waitAndExtractSingle(ref1), meta: { tool: 'subreader' } };
-                        }
-                        // 按原始顺序推送结果
-                        if (result1) { results.push(result1); E.forwardResult(result1); }
-                        if (result2) { results.push(result2); E.forwardResult(result2); }
-                        window.__dsagent_concurrentMode = false;
-                    } else {
-                        // 单个 subreader：正常执行
-                        showToast('subreader (' + (bi + 1) + '/' + srCommands.length + ')...');
-                        var result = await E.execOneCommand(batch[0], cmdMap);
-                        if (result) { results.push(result); E.forwardResult(result); }
-                    }
+                showToast('命令 ' + srCommands.length + ' 个（串行执行）...');
+                for (var si = 0; si < srCommands.length; si++) {
+                    var result = await E.execOneCommand(srCommands[si], cmdMap);
+                    if (result) { results.push(result); E.forwardResult(result); }
+                    if (stopRequested) break;
+                    if (si < srCommands.length - 1) await new Promise(function(r) { setTimeout(r, 300); });
                 }
             }
 
-            // 5b2. qwen 无限并行：全部发送后，逐个切回提取结果
+            // 5b2. qwen 命令：串行执行（并发由 server-qwen 槽位管理）
             if (qwCommands.length > 0) {
-                if (qwCommands.length >= 2) {
-                    window.__dsagent_concurrentMode = true;
-                    showToast('qwen ' + qwCommands.length + '个并行发送中...');
-
-                    // 阶段1：全部发送，收集 URL
-                    var qwRefs = [];
-                    for (var qi = 0; qi < qwCommands.length; qi++) {
-                        showToast('qwen 发送 ' + (qi + 1) + '/' + qwCommands.length + '...');
-                        var ref = await execOneCommandQwenSendOnly(qwCommands[qi]);
-                        qwRefs.push(ref);
-                    }
-
-                    // 阶段2：倒序切回提取（先发的生成时间更久，后提取）
-                    // 最后一个发送的消息已在当前页面，原地等待即可
-                    var qwResults = new Array(qwRefs.length);
-                    for (var qi = qwRefs.length - 1; qi >= 0; qi--) {
-                        showToast('qwen 提取 ' + (qi + 1) + '/' + qwRefs.length + '...');
-                        if (qwRefs[qi]) {
-                            var isPicture = qwRefs[qi].isPicture;
-                            var isPPT = qwRefs[qi].isPPT;
-                            var extractFn = isPicture ? qwenDrawWaitAndExtract : (isPPT ? qwenPPTWaitAndExtract : qwenWaitAndExtract);
-                            // 最后一个发送的（qi === qwRefs.length - 1）= 当前页面，跳过导航
-                            var skipNav = (qi === qwRefs.length - 1);
-                            qwResults[qi] = { success: true, data: await extractFn(qwRefs[qi], skipNav), meta: { tool: 'qwen' } };
-                        } else {
-                            qwResults[qi] = { success: false, data: null, error: 'Qwen 发送失败', meta: { tool: 'qwen' } };
-                        }
-                    }
-                    // 按原始顺序推入
-                    for (var qi = 0; qi < qwResults.length; qi++) {
-                        results.push(qwResults[qi]);
-                        E.forwardResult(qwResults[qi]);
-                    }
-
-                    // 全部提取完成后，回到主页面，避免停留在已删除对话的 "对话不存在" 页面
-                    await window.__dsagent_engine.execQwen('navigateToUrl', ['https://qianwen.com/chat/']);
-                    await sleep(500);
-
-                    window.__dsagent_concurrentMode = false;
-                } else {
-                    // 单个 qwen：正常执行
-                    showToast('qwen (1/1)...');
-                    var result = await E.execOneCommand(qwCommands[0], cmdMap);
+                showToast('qwen 命令 ' + qwCommands.length + ' 个（串行执行）...');
+                for (var qi = 0; qi < qwCommands.length; qi++) {
+                    var result = await E.execOneCommand(qwCommands[qi], cmdMap);
                     if (result) { results.push(result); E.forwardResult(result); }
+                    if (stopRequested) break;
+                    if (qi < qwCommands.length - 1) await new Promise(function(r) { setTimeout(r, 300); });
                 }
             }
 
@@ -2096,7 +1120,7 @@ async function deleteCurrentConversation() {
                     _asyncRoundCount = 0;
                 }
 
-                // 上下文压缩检查：输入输出总字符数（不含 subreader 阅读内容）超过阈值时触发
+                // 上下文压缩检查：输入输出总字符数超过阈值时触发
                 var contextLen = estimateCurrentContextLength();
                 if (contextLen > E._config.contextCompressThreshold && !_contextCompressSent) {
                     feedback += '\n\n[SYSTEM] 当前对话上下文已较大，请在完成本轮后按提示进行历史记忆总结。';
@@ -2437,7 +1461,6 @@ async function deleteCurrentConversation() {
         await E.loadConfig();
 
         // ======== 暴露工具函数给工具系统 ========
-        window.__dsagent_handleSingleRead = handleSingleRead;
         window.__dsagent_fillAndSend = fillAndSend;
         window.__dsagent_isGenerating = function() { return _wasAiGenerating; };
         window.__dsagent_isExecuting = function() { return isExecuting; };
@@ -2541,11 +1564,42 @@ async function deleteCurrentConversation() {
         };
         window.__dsagent_setDeepThink = async function(enable) { return await setDeepThink(!!enable); };
         window.__dsagent_disableWebSearch = function() { tryToggleWebSearch(false); };
+        window.__dsagent_enableWebSearch = function() { tryToggleWebSearch(true); };
         window.__dsagent_sendMessage = async function(text) {
+            // P3: 模型微调指令（DeepSeek → 中文输出锁定）
+            var directives = '';
+            /* 模型级指令由 prompt-builder 注入到 INSTRUCTION 中，此处为兜底 */
+            // per-turn <system-reminder>（对齐 AtomCode，注入日期/时间/轮次）
+            var now = new Date();
+            var dateStr = now.toISOString().split('T')[0];
+            var timeStr = now.toTimeString().split(' ')[0];
+            // 递增轮次计数
+            var turnCount = (window.__dsagent_turnCount || 0) + 1;
+            window.__dsagent_turnCount = turnCount;
+            var systemReminder = '\n\n<system-reminder>\n'
+                + 'Current date: ' + dateStr + ', local time ' + timeStr + '\n'
+                + 'Turn round: ' + turnCount + '\n'
+                + '</system-reminder>';
+            // 每轮追加压缩行为指令（防止长对话后首条 instruction 被压缩遗忘）
+            var behaviorReminder = '\n\n【行为规则】\n'
+                + '- 直接行动，不啰嗦\n'
+                + '- 用 `read` 读文件（非 exec cat），用 `save`/`edit` 改文件（非 exec sed/echo）\n'
+                + '- 并行：不依赖的操作一次完成\n'
+                + '- 贯穿到底：明确后完整执行，不问"要继续吗"\n'
+                + '- 先读再改：不修改未读过的文件\n'
+                + '- 有证据才说完成\n'
+                + '- 不做范围外改进\n'
+                + '- 技术正确性优先\n'
+                + '- 出错先读输出、分析根因，不重试已失败的\n'
+                + '- 危险操作先问用户';
             lastUserText = text;
             sendTimestamp = Date.now();
             rateLimitNotified = false;
-            var result = await fillAndSend(text);
+            // 将 system-reminder 追加到用户消息末尾发送给 LLM
+            var fullText = text + systemReminder + behaviorReminder;
+            // 保存压缩后状态（TASK + 操作记录），由 orchestrator 在压缩后注入
+            window.__dsagent_lastTask = text.substring(0, 200); // 保存当前任务片段
+            var result = await fillAndSend(fullText);
             // 发送后启动轮询兜底
             startPollingFallback();
             return result;
@@ -2649,7 +1703,7 @@ async function deleteCurrentConversation() {
             }
             return baseText;
         };
-        window.__dsagent_newChatAndSendInit = async function(mode, deepthink, userText) {
+        window.__dsagent_newChatAndSendInit = async function(mode, deepthink, userText, enableWebSearch) {
             // 新对话：清空上下文相关状态
             resetContextState();
             // 新对话：清空工具文档阅读记录
@@ -2685,8 +1739,8 @@ async function deleteCurrentConversation() {
             }
             await sleep(300);
 
-            // 确保关闭联网搜索
-            tryToggleWebSearch(false);
+            // 设置联网搜索
+            tryToggleWebSearch(!!enableWebSearch);
             await sleep(400);
 
             // 发送初始化提示词
@@ -2770,7 +1824,6 @@ async function deleteCurrentConversation() {
             var buttonState;
             switch (raw) {
                 case 'disabled-arrow':
-                    // 停止方块→disabled = 输出完毕；可用箭头→disabled = 发送中；其余=未输入
                     buttonState = (prev === 'stop-square') ? 'done' : (prev === 'enabled-arrow') ? 'sending' : 'no-input';
                     break;
                 case 'enabled-arrow':
@@ -2783,7 +1836,7 @@ async function deleteCurrentConversation() {
                     buttonState = 'no-input';
             }
             window.__ds_prevRaw = raw;
-            return { connected: serviceConnected, confirmMode: E._config.confirmMode, buttonState: buttonState, theme: getTheme(), concurrentMode: !!window.__dsagent_concurrentMode };
+            return { connected: serviceConnected, confirmMode: E._config.confirmMode, buttonState: buttonState, theme: getTheme() };
         };
 
         setTimeout(async function() {
@@ -2901,4 +1954,156 @@ async function deleteCurrentConversation() {
     } else {
         init();
     }
+
+    // ==================== Server 层所需接口（供 server-deepseek.js 通过 executeJavaScript 调用） ====================
+
+    // 提取最后一条 AI 回复 + 深度思考内容（结构化返回）
+    window.__dsagent_extractLastResponse = async function() {
+        try {
+            var markdown = '';
+            var think = '';
+
+            // ── 1. 提取 markdown：点击复制按钮 → 读剪贴板 ──
+            var copyBtn = findCopyButton();
+            if (copyBtn) {
+                // 保存当前剪贴板
+                var savedClipboard = null;
+                try { savedClipboard = await window.electronAPI.clipboardSave(); } catch(e) {}
+                try {
+                    copyBtn.click();
+                    // 等待剪贴板更新（最多 3 秒）
+                    for (var ri = 0; ri < 15; ri++) {
+                        await new Promise(function(r) { setTimeout(r, 200); });
+                        try {
+                            var txt = await window.electronAPI.clipboardReadText();
+                            if (txt && txt.length > 5) { markdown = txt; break; }
+                        } catch(e) {}
+                    }
+                } catch(e) { /* clipboard 失败则降级到 DOM */ }
+                // 还原剪贴板
+                if (savedClipboard && savedClipboard.text !== undefined) {
+                    try { await window.electronAPI.clipboardRestore(savedClipboard.text); } catch(e) {}
+                }
+            }
+            // 剪贴板失败时 DOM 兜底
+            if (!markdown) {
+                var messages = document.querySelectorAll(SELECTORS.messageContainer);
+                var lastAiMsg = null;
+                for (var mi = messages.length - 1; mi >= 0; mi--) {
+                    var msg = messages[mi];
+                    var textEls = msg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
+                    if (textEls.length > 0) { lastAiMsg = msg; break; }
+                }
+                if (lastAiMsg) {
+                    var textEls = lastAiMsg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
+                    for (var ti = 0; ti < textEls.length; ti++) {
+                        markdown += textEls[ti].textContent + '\n';
+                    }
+                }
+            }
+
+            // ── 2. 提取深度思考内容（DOM 提取即可） ──
+            var messages = document.querySelectorAll(SELECTORS.messageContainer);
+            var lastAiMsg = null;
+            for (var mi = messages.length - 1; mi >= 0; mi--) {
+                var msg = messages[mi];
+                var textEls = msg.querySelectorAll('.ds-message-content, [class*="markdown"], p');
+                if (textEls.length > 0) { lastAiMsg = msg; break; }
+            }
+            if (lastAiMsg) {
+                var thinkEl = lastAiMsg.querySelector('[class*="think-content"], [class*="reasoning"], [class*="thought"], .ds-think, [class*="ThinkContent"], [class*="think"]');
+                if (!thinkEl) {
+                    var allDivs = lastAiMsg.querySelectorAll('div');
+                    for (var di = 0; di < allDivs.length; di++) {
+                        var txt = allDivs[di].textContent || '';
+                        if ((txt.indexOf('深度思考') >= 0 || txt.indexOf('Thinking') >= 0 || txt.indexOf('已深度思考') >= 0) && txt.length > 20) {
+                            thinkEl = allDivs[di]; break;
+                        }
+                    }
+                }
+                if (!thinkEl) {
+                    var allThinkEls = document.querySelectorAll('[class*="think-content"], [class*="reasoning"], [class*="thought"], .ds-think, [class*="ThinkContent"], [class*="think"]');
+                    if (allThinkEls.length > 0) thinkEl = allThinkEls[allThinkEls.length - 1];
+                }
+                if (thinkEl) {
+                    think = thinkEl.textContent || '';
+                    if (think.length > 10000) think = think.substring(0, 10000) + '\n...（截断）';
+                }
+            }
+
+            return { markdown: markdown.trim(), think: think.trim() };
+        } catch (e) {
+            return { markdown: '', think: '', error: e.message };
+        }
+    };
+
+    // 上传文件到当前对话（由 server-deepseek.js 调用，files 为 [{name, mime, data(base64)}]）
+    // 注意：此函数在 inject 上下文执行，需将 base64 还原为 File 对象
+    window.__dsagent_uploadFiles = async function(files) {
+        try {
+            var fileInput = document.querySelector(SELECTORS.fileInput);
+            if (!fileInput) return { success: false, error: '找不到文件上传输入框' };
+
+            var dt = new DataTransfer();
+            for (var fi = 0; fi < files.length; fi++) {
+                var f = files[fi];
+                var binaryString = window.atob(f.data);
+                var bytes = new Uint8Array(binaryString.length);
+                for (var i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                var blob = new Blob([bytes], { type: f.mime || 'application/octet-stream' });
+                var file = new File([blob], f.name, { type: f.mime || 'application/octet-stream' });
+                dt.items.add(file);
+            }
+            fileInput.files = dt.files;
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            await waitForReady();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    };
+
+    // ==================== 统一 invoke 协议（供 server-deepseek.js 调用） ====================
+    window.__ds = window.__ds || {};
+    window.__ds.invoke = async function(op, args) {
+        args = args || {};
+        try {
+            switch (op) {
+                case 'newChat':
+                    return await window.__dsagent_newChatAndSendInit(args.mode || 'quick', !!args.deepThink, args.userText || '', !!args.webSearch);
+                case 'switchModel':
+                    if (window.__dsagent_setModelMode) { window.__dsagent_setModelMode(args.mode || 'quick'); return { success: true }; }
+                    return { success: false, error: 'setModelMode not available' };
+                case 'setDeepThink':
+                    return await (window.__dsagent_setDeepThink ? window.__dsagent_setDeepThink(!!args.enable) : Promise.resolve({ success: false }));
+                case 'setWebSearch':
+                    if (window.__dsagent_disableWebSearch) { if (!args.enable) window.__dsagent_disableWebSearch(); return { success: true }; }
+                    return { success: false };
+                case 'sendMessage':
+                    return await (window.__dsagent_sendMessage ? window.__dsagent_sendMessage(args.text || '') : Promise.resolve({ success: false, error: 'not ready' }));
+                case 'extractResponse':
+                    return window.__dsagent_extractLastResponse ? window.__dsagent_extractLastResponse() : { markdown: '', think: '' };
+                case 'uploadFiles':
+                    return await (window.__dsagent_uploadFiles ? window.__dsagent_uploadFiles(args.files || []) : Promise.resolve({ success: false }));
+                case 'deleteConversation':
+                    return await (window.__dsagent_deleteConversation ? window.__dsagent_deleteConversation(args.convid || null) : Promise.resolve({ success: false }));
+                case 'stopGeneration':
+                    return window.__dsagent_stopGeneration ? window.__dsagent_stopGeneration() : { success: false };
+                case 'getStatus':
+                    return window.__dsagent_getStatus ? window.__dsagent_getStatus() : { connected: false };
+                case 'checkReady':
+                    return { ready: !!(window.__dsagent_injected && window.__dsagent_sendMessage) };
+                case 'getCurrentUrl':
+                    return { url: window.location.href };
+                case 'getInitPromptText':
+                    return await (window.__dsagent_getInitPromptText ? window.__dsagent_getInitPromptText(args.mode) : Promise.resolve(''));
+                default:
+                    return { success: false, error: 'Unknown op: ' + op };
+            }
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    };
 })();

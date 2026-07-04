@@ -46,18 +46,35 @@
 
     // 自动点击 float-to-bottom 按钮（Qwen 回到底部的滚动按钮）
     // 严格限定：只匹配 chat 区域内的回到底部按钮，排除侧边栏折叠按钮
+    // 加导航状态保护 + 节流防抖：SPA 导航/操作期间 DOM 大量变更，不加节流会导致
+    // MutationObserver 高频触发 → .click() 在 React reconciliation 中间态执行 → Blink 内部状态不
+    // 一致 → 渲染进程 crash（[Qwen] Renderer gone: crashed）
     (function() {
+        var _lastClick = 0;          // 节流：每秒最多 .click() 一次
+        var _navGuard = false;       // navigating 标志（由 Q.sendMessage/newConversation 等设置）
+        Object.defineProperty(Q, '_navigating', {
+            get: function() { return _navGuard; },
+            set: function(v) { _navGuard = !!v; }
+        });
         var observer = new MutationObserver(function() {
-            // 只在 chat 主区域查找，避免误触侧边栏按钮
-            var chatArea = document.querySelector('[class*="chat-area"], [class*="chat-container"], [class*="main"]');
-            var searchRoot = chatArea || document;
-            var ftb = searchRoot.querySelector('[class*="float-to-bottom"]');
-            if (ftb && ftb.className && (ftb.className.indexOf('active') !== -1 || ftb.className.indexOf('float-to-bottom-active') !== -1)) {
-                // 确认不是侧边栏按钮（侧边栏按钮有 sidebar 相关 class 或 SVG）
-                if (ftb.className.indexOf('sidebar') === -1 && !ftb.querySelector('[class*="sidebar"], [class*="Sidebar"]')) {
-                    ftb.click();
+            if (_navGuard) return;               // 操作中，跳过
+            if (Date.now() - _lastClick < 1000) return;  // 节流：至少间隔 1s
+            try {
+                // 仅在 AI 生成中（停止按钮存在时）自动滚到底部
+                // 用户上翻查看时没有停止按钮，不抢滚动，避免干扰阅读
+                var stopBtn = findStopButton();
+                if (!stopBtn) return;
+
+                var chatArea = document.querySelector('[class*="chat-area"], [class*="chat-container"], [class*="main"]');
+                var searchRoot = chatArea || document;
+                var ftb = searchRoot.querySelector('[class*="float-to-bottom"]');
+                if (ftb && ftb.className && (ftb.className.indexOf('active') !== -1 || ftb.className.indexOf('float-to-bottom-active') !== -1)) {
+                    if (ftb.className.indexOf('sidebar') === -1 && !ftb.querySelector('[class*="sidebar"], [class*="Sidebar"]')) {
+                        ftb.click();
+                        _lastClick = Date.now();
+                    }
                 }
-            }
+            } catch(e) { /* DOM 过渡期查询异常，忽略 */ }
         });
         observer.observe(document.body || document.documentElement, {
             childList: true,
@@ -85,6 +102,8 @@
                 || findButton('New Chat');
             if (btn) {
                 btn.click();
+                // 点击后预期导航，阻止 MutationObserver 在过渡期 .click()
+                if (typeof Q._navigating !== 'undefined') Q._navigating = true;
                 resolve({ success: true });
             } else {
                 resolve({ success: false, error: 'New conversation button not found' });
@@ -121,32 +140,86 @@
     };
 
     // 查找发送按钮（精确版，只返回可用的发送按钮）
+    // Qwen 页面按钮无 aria-label，需多策略定位：
+    // 1. aria-label="发送消息"（旧版兼容）
+    // 2. 输入框容器内最右侧的圆形/方形按钮（结构定位）
+    // 3. class 含 "send" 且在页面底部
+    var _sendBtnDiagLogged = false;
     function findSendButton() {
-        // 精确匹配 aria-label="发送消息" 且未禁用
+        // 策略1：aria-label 精确匹配（旧版/其他页面兼容）
         var exact = document.querySelector('button[aria-label="发送消息"]:not([disabled])');
         if (exact) return exact;
 
-        // 遍历按钮，找 aria-label 含"发送"且未禁用
-        var btns = document.querySelectorAll('button');
-        for (var i = 0; i < btns.length; i++) {
-            var b = btns[i];
-            if (b.disabled) continue;
-            var label = (b.getAttribute('aria-label') || '').toLowerCase();
-            if (label === '发送消息' || label === '发送') return b;
+        // 策略2：在输入框容器内找最右侧的按钮（Qwen 发送按钮在输入区右下）
+        var inputContainers = document.querySelectorAll('[class*="chat-input"], [class*="input-area"], [class*="composer"], [class*="footer"]');
+        var bestBtn = null, bestRight = -1;
+        for (var ci = 0; ci < inputContainers.length; ci++) {
+            var btns = inputContainers[ci].querySelectorAll('button');
+            for (var bi = 0; bi < btns.length; bi++) {
+                var b = btns[bi];
+                if (b.disabled) continue;
+                var rect = b.getBoundingClientRect();
+                if (rect.width < 10 || rect.height < 10) continue;
+                // 最右侧的按钮通常是发送
+                if (rect.right > bestRight) { bestRight = rect.right; bestBtn = b; }
+            }
+        }
+        if (bestBtn) return bestBtn;
+
+        // 策略3：class 含 send 且可见
+        var sendBtns = document.querySelectorAll('button[class*="send"]:not([disabled]), button[class*="Send"]:not([disabled])');
+        for (var si = 0; si < sendBtns.length; si++) {
+            var r = sendBtns[si].getBoundingClientRect();
+            if (r.width > 10 && r.height > 10) return sendBtns[si];
+        }
+
+        // 策略4：诊断 — 输出所有可见按钮特征（仅一次）
+        if (!_sendBtnDiagLogged) {
+            _sendBtnDiagLogged = true;
+            setTimeout(function() {
+                var allBtns = document.querySelectorAll('button');
+                var info = [];
+                for (var i = 0; i < allBtns.length; i++) {
+                    var b = allBtns[i];
+                    var r = b.getBoundingClientRect();
+                    if (r.width < 5 || r.height < 5) continue;
+                    info.push({
+                        label: b.getAttribute('aria-label') || '',
+                        dis: b.disabled,
+                        cls: (b.className || '').substring(0, 40),
+                        rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+                        svg: b.querySelector('svg') ? (b.querySelector('svg').getAttribute('class') || '') : ''
+                    });
+                }
+                // findSendButton 诊断日志已移除（避免污染 Qwen 页面 DOM）
+            }, 0);
         }
         return null;
     }
 
     // 查找"停止回答"按钮（正在输出中）
+    // Qwen 有 aria-label="停止回答"（已确认），回答中显示，答完消失
     function findStopButton() {
         var btns = document.querySelectorAll('button');
         for (var i = 0; i < btns.length; i++) {
-            var label = (btns[i].getAttribute('aria-label') || '').toLowerCase();
-            if (label.indexOf('停止') !== -1 && !btns[i].disabled) {
+            var label = (btns[i].getAttribute('aria-label') || '');
+            if (label === '停止回答' || label.indexOf('停止') !== -1) {
                 return btns[i];
             }
         }
+        // 兜底：class 含 stop（旧版兼容）
+        for (var i = 0; i < btns.length; i++) {
+            var cls = (btns[i].className || '').toLowerCase();
+            if (cls.indexOf('stop') >= 0) return btns[i];
+        }
         return null;
+    }
+
+    // 检测 Qwen 是否正在生成
+    // 唯一可靠信号：停止按钮存在 = 回答中；不存在 = 答完
+    // 注意：发送按钮 disabled 不能作为生成信号——空输入时发送按钮也 disabled（待发送态）
+    function isGeneratingNow() {
+        return findStopButton() !== null;
     }
 
     // 查找可见的 Slate.js 编辑器（排除隐藏的测量克隆体）
@@ -213,10 +286,26 @@
     }
 
     // 发送消息
-    Q.sendMessage = function(text) {
+    // 等待编辑器就绪（最长 10 秒），抗 SPA 导航/视图切换
+    function waitForEditorReady(timeoutMs) {
+        timeoutMs = timeoutMs || 10000;
         return new Promise(function(resolve) {
-            // 1. 查找输入框（优先 contenteditable，Qwen 使用 Slate.js）
-            var input = findVisibleEditor();
+            var start = Date.now();
+            function check() {
+                var ed = findVisibleEditor();
+                if (ed) { resolve(ed); return; }
+                if (Date.now() - start > timeoutMs) { resolve(null); return; }
+                setTimeout(check, 200);
+            }
+            check();
+        });
+    }
+
+    Q.sendMessage = function(text) {
+        // P3: 模型微调指令（Qwen → 中文输出锁定，由 prompt-builder 兜底此处）
+        return new Promise(function(resolve) {
+            // 0. 先等编辑器就绪（newChat 已确保就绪，此处仅兜底，3s 足够）
+            waitForEditorReady(3000).then(function(input) {
             if (!input) {
                 // 未找到可见编辑器：遍历所有 contenteditable，排除测量克隆体
                 // 取最后一个非测量的（真实编辑器通常在测量克隆之后）
@@ -280,17 +369,33 @@
             input.focus();
             input.click();
 
-            // 3. 清空占位符（先清除已有内容）
+            // 3. 清空占位符（先清除已有内容）+ 插入文本
             if (input.isContentEditable) {
                 var sel = window.getSelection();
                 var range = document.createRange();
                 range.selectNodeContents(input);
                 range.deleteContents();
-                // 再插入文本
                 sel.removeAllRanges();
                 sel.addRange(range);
-                document.execCommand('insertText', false, text || '');
-                // 额外触发 input 事件，确保 Slate.js 感知到变化
+
+                // 离屏视图（Agent 模式 x:-10000）下 execCommand('insertText') 不可靠：
+                // Slate.js 原生支持 ClipboardEvent('paste')，不依赖焦点/可见性
+                var _inserted = false;
+                try {
+                    var dt = new DataTransfer();
+                    dt.setData('text/plain', text || '');
+                    input.dispatchEvent(new ClipboardEvent('paste', {
+                        clipboardData: dt, bubbles: true, cancelable: true
+                    }));
+                    _inserted = true;
+                } catch(e) { /* DataTransfer 不支持时回退 */ }
+
+                // 兜底：execCommand insertText（可见视图下有效）
+                try {
+                    document.execCommand('insertText', false, text || '');
+                } catch(e) {}
+
+                // 触发 input 事件，确保 Slate.js 感知到变化
                 input.dispatchEvent(new Event('input', { bubbles: true }));
             } else if (input.tagName === 'TEXTAREA') {
                 var nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
@@ -305,34 +410,49 @@
                 input.dispatchEvent(new Event('input', { bubbles: true }));
             }
 
-            // 4. 等待发送按钮就绪并点击
+            // 4. 发送：优先用 Enter 键（Slate 编辑器原生支持），失败立即回退按钮点击
             var start = Date.now();
+            function tryEnterKey() {
+                try { input.focus(); } catch(e) {}
+                var ke = new KeyboardEvent('keydown', {
+                    key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+                    bubbles: true, cancelable: true
+                });
+                input.dispatchEvent(ke);
+                // 验证：200ms 后检查生成态（缩短等待）
+                setTimeout(function() {
+                    if (isGeneratingNow() || findStopButton()) {
+                        resolve({ success: true, method: 'enter-key' });
+                    } else {
+                        waitAndClick();
+                    }
+                }, 200);
+            }
             function waitAndClick() {
                 var sendBtn = findSendButton();
                 if (sendBtn && !sendBtn.disabled) {
                     sendBtn.click();
-                    // 5. 验证：1秒后检查是否出现"停止回答"按钮
+                    // 验证：250ms 后检查生成态
                     setTimeout(function() {
-                        if (findStopButton()) {
+                        if (isGeneratingNow() || findStopButton()) {
                             resolve({ success: true, method: 'click-send' });
                         } else {
-                            // 未出现停止按钮 → 再试一次
+                            // 立即再点一次（不等待）
                             var btn2 = findSendButton();
-                            if (btn2 && !btn2.disabled) {
-                                btn2.click();
-                                resolve({ success: true, method: 'click-send-retry' });
-                            } else {
-                                resolve({ success: true, method: 'click-send-unknown' });
-                            }
+                            if (btn2 && !btn2.disabled) { btn2.click(); resolve({ success: true, method: 'click-send-retry' }); }
+                            else { resolve({ success: true, method: 'click-send-unknown' }); }
                         }
-                    }, 1000);
-                } else if (Date.now() - start > 5000) {
-                    resolve({ success: false, error: 'Send button not ready after timeout' });
+                    }, 250);
+                } else if (Date.now() - start > 6000) {
+                    resolve({ success: false, error: 'Send button not ready after 6s' });
                 } else {
-                    setTimeout(waitAndClick, 200);
+                    setTimeout(waitAndClick, 100);
                 }
             }
-            waitAndClick();
+            tryEnterKey();
+            // 发送后预期进入 SPA 导航，置 navigating=true 阻止 MutationObserver 在过渡期 .click()
+            if (typeof Q._navigating !== 'undefined') Q._navigating = true;
+            });  // 闭合 waitForEditorReady().then()
         });
     };
 
@@ -513,6 +633,11 @@
     // 暴露 isResponding 给外部检查
     Q.isResponding = function() {
         return { responding: isResponding() };
+    };
+
+    // 暴露 isGeneratingNow（多信号生成状态检测）给 server 层调用
+    Q.isGeneratingNow = function() {
+        return { generating: isGeneratingNow() };
     };
 
     // 当前图片生成的阶段（用于 debug 显示）
@@ -860,6 +985,292 @@
         return (clone.textContent || '').trim();
     };
 
+    // 检测最后一条回复的"复制按钮"是否已出现（渲染完成信号）
+    // 复用 copyLastResponse 的 tryFindButton 定位逻辑，但只返回 bool，不点击、不等待
+    Q.hasCopyButton = function() {
+        // 方案1：复制图标 SVG 路径
+        var copySvg = document.querySelector('svg path[d*="M832 64"]');
+        if (copySvg) {
+            var btn = copySvg.closest('[class*="hover:bg-tag"][class*="cursor-pointer"]') || copySvg.parentElement;
+            if (btn) {
+                var rect = btn.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) return { success: true, has: true };
+            }
+        }
+        // 方案2：hover:bg-tag + cursor-pointer + 复制图标
+        var tagBtns = document.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
+        for (var i = 0; i < tagBtns.length; i++) {
+            if (tagBtns[i].querySelector('svg path[d*="M832 64"]')) {
+                var r2 = tagBtns[i].getBoundingClientRect();
+                if (r2.width > 0 && r2.height > 0) return { success: true, has: true };
+            }
+        }
+        // 方案3：最后一条消息工具栏内
+        var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
+        if (messages.length > 0) {
+            var lastMsg = messages[messages.length - 1];
+            var msgBtns = lastMsg.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
+            for (var i = 0; i < msgBtns.length; i++) {
+                if (msgBtns[i].querySelector('svg path[d*="M832 64"]')) return { success: true, has: true };
+            }
+        }
+        return { success: true, has: false };
+    };
+
+    // 通过点击复制按钮 + 读剪贴板提取 AI 回复（拿到原始 markdown，不丢格式）
+    // 模仿 DeepSeek 的提取链路：保存剪贴板 → 找复制按钮 → 点击 → 读剪贴板 → 恢复剪贴板
+    // 找复制按钮坐标（不点击）——供主进程用 sendInputEvent 真实鼠标点击
+    // 精准定位：最后一条消息内的 div.cursor-pointer + svg path[d^="M832 64"]
+    // 最多等 10s，找到返回 {success:true, x, y}，找不到返回 {success:false}
+    Q.findCopyButtonCoord = async function() {
+        function findBtn() {
+            var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
+            if (messages.length === 0) return null;
+            var lastMsg = messages[messages.length - 1];
+            var divs = lastMsg.querySelectorAll('div[class*="cursor-pointer"]');
+            for (var i = 0; i < divs.length; i++) {
+                var path = divs[i].querySelector('svg path[d^="M832 64"]');
+                if (!path) continue;
+                var rect = divs[i].getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) return divs[i];
+            }
+            return null;
+        }
+        var btnStart = Date.now();
+        while (Date.now() - btnStart < 10000) {
+            var btn = findBtn();
+            if (btn) {
+                var r = btn.getBoundingClientRect();
+                return { success: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+            }
+            await new Promise(function(res){ setTimeout(res, 200); });
+        }
+        return { success: false, error: 'copy button not found' };
+    };
+
+    // 读剪贴板并恢复原内容（点击复制按钮后调用）
+    // 先保存原剪贴板 → 读剪贴板(重试5次) → 恢复原剪贴板
+    // 返回 {markdown, source, error?}
+    Q.readClipboardAndRestore = async function() {
+        var savedClipboard = null;
+        try {
+            try {
+                if (window.electronAPI && window.electronAPI.clipboardSave) {
+                    savedClipboard = await window.electronAPI.clipboardSave();
+                }
+            } catch(e) {}
+
+            var markdown = '';
+            for (var retry = 0; retry < 5; retry++) {
+                try {
+                    if (window.electronAPI && window.electronAPI.clipboardReadText) {
+                        markdown = await window.electronAPI.clipboardReadText();
+                    }
+                } catch(e) {}
+                if (markdown && markdown.length > 0) break;
+                await new Promise(function(r){ setTimeout(r, 200); });
+            }
+
+            if (!markdown) {
+                return { markdown: '', source: 'dom-fallback', error: 'clipboard empty' };
+            }
+            return { markdown: markdown, source: 'clipboard' };
+        } catch(e) {
+            return { markdown: '', source: 'dom-fallback', error: e.message };
+        } finally {
+            if (savedClipboard && savedClipboard.text !== undefined) {
+                try {
+                    if (window.electronAPI && window.electronAPI.clipboardRestore) {
+                        await window.electronAPI.clipboardRestore(savedClipboard.text);
+                    }
+                } catch(e) {}
+            }
+        }
+    };
+
+    // 通过两步菜单提取完整 Markdown：点击右侧箭头 → 点击"复制为Markdown"
+    // 避免直接点复制按钮漏掉代码框；返回 markdown 文本
+    Q.extractViaCopyAsMarkdown = async function() {
+        var savedClipboard = null;
+        try {
+            try {
+                if (window.electronAPI && window.electronAPI.clipboardSave) {
+                    savedClipboard = await window.electronAPI.clipboardSave();
+                }
+            } catch(e) {}
+
+            // 1. 找到最后一条消息中的右侧箭头按钮（旋转90度的右箭头，菜单展开器）
+            function findMenuArrowBtn() {
+                var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
+                if (messages.length === 0) return null;
+                var lastMsg = messages[messages.length - 1];
+                // 找 path[d="M7.475 14.558..."] 的右箭头（菜单展开按钮）
+                var paths = lastMsg.querySelectorAll('svg path[d^="M7.475"]');
+                for (var i = 0; i < paths.length; i++) {
+                    var btn = paths[i].closest('button');
+                    if (btn) {
+                        var rect = btn.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) return btn;
+                    }
+                }
+                return null;
+            }
+
+            var arrowBtn = null;
+            var start = Date.now();
+            while (Date.now() - start < 10000) {
+                arrowBtn = findMenuArrowBtn();
+                if (arrowBtn) break;
+                await new Promise(function(r){ setTimeout(r, 200); });
+            }
+            if (!arrowBtn) {
+                // 兜底：旧复制按钮
+                var fb = Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
+                return { markdown: fb.markdown || '', images: fb.images || [], source: 'dom-fallback', error: 'menu arrow not found' };
+            }
+
+            // 2. 点击箭头展开菜单（dispatchEvent 兼容 Radix UI）
+            arrowBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+            arrowBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            arrowBtn.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
+            arrowBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            arrowBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+
+            // 3. 等待"复制为Markdown"菜单项出现并点击
+            var mdBtn = null;
+            var menuStart = Date.now();
+            while (Date.now() - menuStart < 5000) {
+                // 查找复制的菜单项：包含"复制为Markdown"文本的按钮或菜单项
+                var allBtns = document.querySelectorAll('button, [role="menuitem"], [role="option"], [class*="menu"] button, [class*="dropdown"] *');
+                for (var i = 0; i < allBtns.length; i++) {
+                    var txt = allBtns[i].textContent.trim();
+                    if (txt === '复制为Markdown' || txt === '复制为 Markdown' || txt.indexOf('复制为Markdown') !== -1 || txt === 'Copy as Markdown') {
+                        mdBtn = allBtns[i];
+                        break;
+                    }
+                }
+                if (mdBtn) break;
+                await new Promise(function(r){ setTimeout(r, 100); });
+            }
+
+            if (mdBtn) {
+                mdBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+                mdBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                mdBtn.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
+                mdBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                mdBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            } else {
+                // 兜底：没找到菜单项，直接点原始复制按钮
+                var copyBtn = arrowBtn.parentElement ? arrowBtn.parentElement.querySelector('[class*="cursor-pointer"] svg path[d^="M832 64"]') : null;
+                if (copyBtn) {
+                    var realBtn = copyBtn.closest('[class*="cursor-pointer"]');
+                    if (realBtn) {
+                        try { realBtn.click(); } catch(e) {}
+                    }
+                }
+            }
+
+            // 4. 读剪贴板
+            var markdown = '';
+            for (var retry = 0; retry < 5; retry++) {
+                try {
+                    if (window.electronAPI && window.electronAPI.clipboardReadText) {
+                        markdown = await window.electronAPI.clipboardReadText();
+                    }
+                } catch(e) {}
+                if (markdown && markdown.length > 0) break;
+                await new Promise(function(r){ setTimeout(r, 200); });
+            }
+
+            if (!markdown) {
+                var fb2 = Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
+                return { markdown: fb2.markdown || '', images: fb2.images || [], source: 'dom-fallback', error: 'clipboard empty after menu click' };
+            }
+
+            return { markdown: markdown, images: [], source: 'clipboard-menu' };
+        } catch(e) {
+            var fb3 = Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
+            return { markdown: fb3.markdown || '', images: fb3.images || [], source: 'dom-fallback', error: e.message };
+        } finally {
+            if (savedClipboard && savedClipboard.text !== undefined) {
+                try {
+                    if (window.electronAPI && window.electronAPI.clipboardRestore) {
+                        await window.electronAPI.clipboardRestore(savedClipboard.text);
+                    }
+                } catch(e) {}
+            }
+        }
+    };
+
+    // 兼容旧调用：一次性剪贴板提取（合成点击，Qwen 的 div 复制按钮不可靠，已废弃）
+    // 保留仅供 fallback 或 DeepSeek 风格调用，Qwen 实际走 findCopyButtonCoord + 真实点击 + readClipboardAndRestore
+    Q.extractViaClipboard = async function() {
+        var savedClipboard = null;
+        try {
+            try {
+                if (window.electronAPI && window.electronAPI.clipboardSave) {
+                    savedClipboard = await window.electronAPI.clipboardSave();
+                }
+            } catch(e) {}
+
+            function findCopyBtnInLastMsg() {
+                var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
+                if (messages.length === 0) return null;
+                var lastMsg = messages[messages.length - 1];
+                var divs = lastMsg.querySelectorAll('div[class*="cursor-pointer"]');
+                for (var i = 0; i < divs.length; i++) {
+                    var path = divs[i].querySelector('svg path[d^="M832 64"]');
+                    if (!path) continue;
+                    var rect = divs[i].getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) return divs[i];
+                }
+                return null;
+            }
+            var btn = null;
+            var btnStart = Date.now();
+            while (Date.now() - btnStart < 10000) {
+                btn = findCopyBtnInLastMsg();
+                if (btn) break;
+                await new Promise(function(r){ setTimeout(r, 200); });
+            }
+            if (!btn) {
+                var fb = Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
+                return { markdown: fb.markdown || '', images: fb.images || [], source: 'dom-fallback', error: 'copy button not found' };
+            }
+
+            try { btn.click(); } catch(e) {}
+
+            var markdown = '';
+            for (var retry = 0; retry < 5; retry++) {
+                try {
+                    if (window.electronAPI && window.electronAPI.clipboardReadText) {
+                        markdown = await window.electronAPI.clipboardReadText();
+                    }
+                } catch(e) {}
+                if (markdown && markdown.length > 0) break;
+                await new Promise(function(r){ setTimeout(r, 200); });
+            }
+
+            if (!markdown) {
+                var fb2 = Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
+                return { markdown: fb2.markdown || '', images: fb2.images || [], source: 'dom-fallback', error: 'clipboard empty' };
+            }
+
+            return { markdown: markdown, images: [], source: 'clipboard' };
+        } catch(e) {
+            var fb3 = Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
+            return { markdown: fb3.markdown || '', images: fb3.images || [], source: 'dom-fallback', error: e.message };
+        } finally {
+            if (savedClipboard && savedClipboard.text !== undefined) {
+                try {
+                    if (window.electronAPI && window.electronAPI.clipboardRestore) {
+                        await window.electronAPI.clipboardRestore(savedClipboard.text);
+                    }
+                } catch(e) {}
+            }
+        }
+    };
+
     // 查找 Qwen 回复中的复制按钮，返回其中心坐标（不点击）
     // 由 inject.js 通过 Electron 真实鼠标事件点击，确保 navigator.clipboard 触发
     Q.copyLastResponse = async function() {
@@ -927,15 +1338,12 @@
 
     // 获取当前页面 URL（对话专属 URL，比标题更可靠）
     Q.getCurrentUrl = function() {
-        var href = window.location.href;
-        console.log('[Qwen DEBUG] getCurrentUrl =', href);
-        return { success: true, url: href };
+        return { success: true, url: window.location.href };
     };
 
     // 直接导航到指定 URL（用于切回之前发送的对话）
     Q.navigateToUrl = function(url) {
         if (!url) return { success: false, error: 'No URL' };
-        console.log('[Qwen DEBUG] navigateToUrl: 导航到', url);
         window.location.href = url;
         return { success: true };
     };
@@ -944,19 +1352,14 @@
     Q.waitForConversationUrl = function(timeout) {
         timeout = timeout || 10000;
         var start = Date.now();
-        var checkCount = 0;
-        console.log('[Qwen DEBUG] waitForConversationUrl: 开始等待, timeout=' + timeout + ', 当前URL=' + window.location.href);
         return new Promise(function(resolve) {
             function check() {
-                checkCount++;
                 var href = window.location.href;
                 if (href.indexOf('/chat/') >= 0) {
-                    console.log('[Qwen DEBUG] waitForConversationUrl: 成功! 第' + checkCount + '次检查, URL=' + href);
                     resolve({ success: true, url: href });
                     return;
                 }
                 if (Date.now() - start > timeout) {
-                    console.log('[Qwen DEBUG] waitForConversationUrl: 超时! 第' + checkCount + '次检查, 最终URL=' + href);
                     resolve({ success: false, url: href });
                     return;
                 }
@@ -1029,6 +1432,34 @@
                 resolve(result);
             }
 
+            // 0. 确保侧边栏已展开：查找 sidebarRight（展开）按钮，存在则侧边栏已折叠，需先展开
+            //    Qwen 侧边栏折叠后对话列表 DOM 不可见，delete 找不到对话会静默失败
+            var _needExpand = false;
+            try {
+                var expandBtn = document.querySelector(
+                    'button[data-icon-type*="sidebarRight"], ' +
+                    'button span[data-icon-type*="sidebarRight"], ' +
+                    '[data-icon-type*="sidebarRight"]'
+                );
+                if (expandBtn) {
+                    var realBtn = expandBtn.tagName === 'BUTTON' ? expandBtn : expandBtn.closest('button');
+                    if (realBtn) {
+                        var isVisible = realBtn.offsetParent !== null;
+                        var isClosed = realBtn.getAttribute('data-state') === 'closed' || !realBtn.getAttribute('data-state');
+                        if (isVisible && isClosed) {
+                            _needExpand = true;
+                            realBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+                            realBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                            realBtn.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
+                            realBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                            realBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                        }
+                    }
+                }
+            } catch(e) { /* 非关键：展开失败不影响后续尝试 */ }
+
+            // 将主体逻辑定义为内部函数，以便延迟执行（等待侧边栏展开动画完毕）
+            function doDelete() {
             // 查找对话框中的确认按钮
             function findDialogConfirmBtn() {
                 var dialogs = document.querySelectorAll('[class*="modal"], [class*="dialog"], [class*="popup"], [class*="overlay"]');
@@ -1170,7 +1601,15 @@
                     setTimeout(pollMenu, 300);
                 }
             })();
-        });
+            } // ← doDelete() 函数体结束
+
+            // 6. 执行：如果展开了侧边栏，等待动画完成后执行删除；否则立即执行
+            if (_needExpand) {
+                setTimeout(doDelete, 800);
+            } else {
+                doDelete();
+            }
+        }); // ← Promise 闭合
     };
 
     // 发送修改建议到当前对话（用于二次修正图片）
@@ -1265,6 +1704,105 @@
             return result.segments || [];
         }
         return [{ type: 'text', content: text }];
+    };
+
+    // ==================== Server 层所需接口 ====================
+
+    // 提取最后一条 AI 回复（结构化）
+    Q.extractLastResponse = function() {
+        try {
+            var text = Q.getLastResponseText ? Q.getLastResponseText() : '';
+            return { markdown: text, images: [] };
+        } catch (e) {
+            return { markdown: '', images: [], error: e.message };
+        }
+    };
+
+    // 停止生成
+    Q.stopGeneration = function() {
+        var stopBtn = findStopButton();
+        if (stopBtn) { stopBtn.click(); return { success: true }; }
+        return { success: false, error: 'Stop button not found' };
+    };
+
+    // ==================== 统一 invoke 协议（供 server-qwen.js 调用） ====================
+
+    // 检测回复类型：text / image / ppt
+    Q.detectResponseType = function() {
+        // 图片生成卡片特征：data-card-type="ai_generate_image_list"
+        var imgCard = document.querySelector('[data-card-type="ai_generate_image_list"]');
+        if (imgCard) return { type: 'image' };
+        // PPT 卡片特征：data-ppt-id
+        var pptCard = document.querySelector('[data-ppt-id]');
+        if (pptCard) return { type: 'ppt' };
+        // 默认文本
+        return { type: 'text' };
+    };
+
+    // 等待图片生成完成：等所有图片加载完毕（loading 类消失 / 图片 URL 稳定）
+    Q.waitForImageDone = function(timeout) {
+        return Q.waitForDrawResponse(timeout || 300000);
+    };
+
+    // 提取图片回复：文字 + 图片 URL 列表
+    Q.extractImageResponse = function() {
+        try {
+            var text = Q.getLastResponseText ? Q.getLastResponseText() : '';
+            var images = Q.getLastImageUrls ? Q.getLastImageUrls() : [];
+            return { markdown: text, images: images };
+        } catch (e) {
+            return { markdown: '', images: [], error: e.message };
+        }
+    };
+
+    Q.invoke = async function(op, args) {
+        args = args || {};
+        try {
+            switch (op) {
+                case 'newChat':
+                    return await Q.newConversation();
+                case 'sendMessage':
+                    return Q.sendMessage(args.text || '');
+                case 'waitForDone':
+                    // Qwen 的 waitForDone 由 server-qwen.js 通过轮询实现，此处仅占位
+                    return { success: true };
+                case 'extractResponse':
+                    // Qwen 复制按钮是 div，合成 click 不可靠，由 server 层编排真实鼠标点击
+                    // 此处仅作 fallback：直接 DOM 提取
+                    return Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
+                case 'detectResponseType':
+                    return Q.detectResponseType ? Q.detectResponseType() : { type: 'text' };
+                case 'waitForImageDone':
+                    return await Q.waitForImageDone(args.timeout || 300000);
+                case 'extractImageResponse':
+                    return Q.extractImageResponse ? Q.extractImageResponse() : { markdown: '', images: [] };
+                case 'findCopyButtonCoord':
+                    return await Q.findCopyButtonCoord();
+                case 'extractViaCopyAsMarkdown':
+                    return await Q.extractViaCopyAsMarkdown();
+                case 'readClipboardAndRestore':
+                    return await Q.readClipboardAndRestore();
+                case 'deleteConversation':
+                    return Q.deleteConversation(args.convIndex || undefined);
+                case 'stopGeneration':
+                    return Q.stopGeneration();
+                case 'uploadImage':
+                    return await Q.uploadImage();
+                case 'copyLastResponse':
+                    return await Q.copyLastResponse();
+                case 'checkReady':
+                    return { ready: !!(Q.ready && Q.sendMessage) };
+                case 'getCurrentUrl':
+                    return { url: window.location.href };
+                case 'navigateToUrl':
+                    window.location.href = args.url || '';
+                    return { success: true };
+                default:
+                    return { success: false, error: 'Unknown op: ' + op };
+            }
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
     };
 
 })();

@@ -31,6 +31,12 @@
             }
 
             if (!filePath) return makeResult(false, null, 'Missing path');
+            // P1: 文件快照 — 编辑前备份
+            try {
+                if (typeof window.__dsagent_fileHistoryBackup === 'function') {
+                    window.__dsagent_fileHistoryBackup(filePath.trim());
+                }
+            } catch(e) {}
             var res = await window.electronAPI.agentEdit(filePath.trim(), find, regex, replace);
             if (!res.success) return makeResult(false, null, res.error);
             return makeResult(true, res.message + (res.changed ? ' (Modified)' : ' (No match)'));

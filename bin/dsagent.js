@@ -9,7 +9,7 @@ const path = require('path');
 const electronPath = require('electron');
 const appDir = path.join(__dirname, '..');
 
-const proc = spawn(electronPath, [appDir, '--no-sandbox'], {
+const proc = spawn(electronPath, [appDir, '--no-sandbox', '--disable-logging'], {
     stdio: 'inherit',
     windowsHide: false
 });

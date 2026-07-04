@@ -56,6 +56,14 @@ class McpClient {
 
     async listTools() { var r = await this._sendRequest('tools/list', {}); this.tools = r.tools || []; return this.tools; }
     async callTool(toolName, args) { return await this._sendRequest('tools/call', { name: toolName, arguments: args || {} }); }
+    // Resources protocol
+    async listResources() { var r = await this._sendRequest('resources/list', {}); this.resources = r.resources || []; return this.resources; }
+    async readResource(uri) { return await this._sendRequest('resources/read', { uri: uri }); }
+    async subscribeResource(uri) { return await this._sendRequest('resources/subscribe', { uri: uri }); }
+    async unsubscribeResource(uri) { return await this._sendRequest('resources/unsubscribe', { uri: uri }); }
+    // Prompts protocol
+    async listPrompts() { var r = await this._sendRequest('prompts/list', {}); this.prompts = r.prompts || []; return this.prompts; }
+    async getPrompt(name, args) { return await this._sendRequest('prompts/get', { name: name, arguments: args || {} }); }
     async stop() { if (this.process) { this.process.kill(); this.process = null; } this.connected = false; }
     onClose(cb) { this._onClose = cb; }
 
@@ -297,6 +305,14 @@ class McpSseClient extends EventEmitter {
 
     async listTools() { var r = await this._rpc('tools/list', {}); this.tools = r.tools || []; return this.tools; }
     async callTool(toolName, args) { return await this._rpc('tools/call', { name: toolName, arguments: args || {} }); }
+    // Resources protocol
+    async listResources() { var r = await this._rpc('resources/list', {}); this.resources = r.resources || []; return this.resources; }
+    async readResource(uri) { return await this._rpc('resources/read', { uri: uri }); }
+    async subscribeResource(uri) { return await this._rpc('resources/subscribe', { uri: uri }); }
+    async unsubscribeResource(uri) { return await this._rpc('resources/unsubscribe', { uri: uri }); }
+    // Prompts protocol
+    async listPrompts() { var r = await this._rpc('prompts/list', {}); this.prompts = r.prompts || []; return this.prompts; }
+    async getPrompt(name, args) { return await this._rpc('prompts/get', { name: name, arguments: args || {} }); }
 
     async stop() {
         this.connected = false;
@@ -309,13 +325,19 @@ class McpSseClient extends EventEmitter {
 
 // ==================== MCP 管理器 ====================
 class McpManager {
-    constructor() { this.clients = new Map(); this.allTools = []; this.toolStates = {}; }
+    constructor() {
+        this.clients = new Map();
+        this.allTools = [];
+        this.allResources = [];   // Resources protocol
+        this.allPrompts = [];     // Prompts protocol
+        this.toolStates = {};
+        this.resourceCache = {};  // URI → content (for subscribed resources)
+    }
 
     // 工具状态管理：key = "serverName/toolName"
     _toolKey(server, tool) { return server + '/' + tool; }
     isToolEnabled(server, tool) {
         var key = this._toolKey(server, tool);
-        // 默认启用（未配置过的工具默认可用）
         return this.toolStates[key] !== false;
     }
     setToolEnabled(server, tool, enabled) {
@@ -327,6 +349,8 @@ class McpManager {
 
     async initFromConfig(mcpServers) {
         this.allTools = [];
+        this.allResources = [];
+        this.allPrompts = [];
         var results = [];
         for (var i = 0; i < mcpServers.length; i++) {
             var cfg = mcpServers[i];
@@ -338,11 +362,30 @@ class McpManager {
             try {
                 var client = cfg.url ? new McpSseClient(cfg) : new McpClient(cfg);
                 await client.start();
+                // Tools
                 var tools = await client.listTools();
                 this.clients.set(cfg.name, client);
                 tools.forEach(function(t) { t._mcpServer = cfg.name; });
                 this.allTools = this.allTools.concat(tools);
                 console.log('[MCP] ' + cfg.name + ': ' + tools.length + ' tools');
+                // Resources（可选能力）
+                try {
+                    var resources = await client.listResources();
+                    if (resources && resources.length > 0) {
+                        resources.forEach(function(r) { r._mcpServer = cfg.name; });
+                        this.allResources = this.allResources.concat(resources);
+                        console.log('[MCP] ' + cfg.name + ': ' + resources.length + ' resources');
+                    }
+                } catch (e) { /* resources 不是必备能力 */ }
+                // Prompts（可选能力）
+                try {
+                    var prompts = await client.listPrompts();
+                    if (prompts && prompts.length > 0) {
+                        prompts.forEach(function(p) { p._mcpServer = cfg.name; });
+                        this.allPrompts = this.allPrompts.concat(prompts);
+                        console.log('[MCP] ' + cfg.name + ': ' + prompts.length + ' prompts');
+                    }
+                } catch (e) { /* prompts 不是必备能力 */ }
                 results.push({ name: cfg.name, success: true, toolCount: tools.length });
             } catch (e) {
                 console.error('[MCP] ' + cfg.name + ' FAILED:', e.message);
@@ -352,7 +395,6 @@ class McpManager {
         return results;
     }
 
-    // 获取已启用的工具（过滤掉用户禁用的）
     getEnabledTools() {
         var self = this;
         return this.allTools.filter(function(t) {
@@ -360,6 +402,9 @@ class McpManager {
         });
     }
     getAllTools() { return this.allTools; }
+    getAllResources() { return this.allResources; }
+    getAllPrompts() { return this.allPrompts; }
+
     async callTool(serverName, toolName, args) {
         if (!this.isToolEnabled(serverName, toolName)) {
             throw new Error('MCP 工具已被禁用: ' + serverName + '/' + toolName);
@@ -368,21 +413,89 @@ class McpManager {
         if (!client) throw new Error('MCP server not found: ' + serverName);
         return await client.callTool(toolName, args);
     }
+
+    async readResource(serverName, uri) {
+        var client = this.clients.get(serverName);
+        if (!client) throw new Error('MCP server not found: ' + serverName);
+        if (!client.readResource) throw new Error('MCP server does not support resources');
+        var result = await client.readResource(uri);
+        // 缓存到内存供后续引用
+        this.resourceCache[uri] = result;
+        return result;
+    }
+
+    async getPrompt(serverName, name, args) {
+        var client = this.clients.get(serverName);
+        if (!client) throw new Error('MCP server not found: ' + serverName);
+        if (!client.getPrompt) throw new Error('MCP server does not support prompts');
+        return await client.getPrompt(name, args);
+    }
+
     generateToolsPrompt() {
         var enabledTools = this.getEnabledTools();
-        if (enabledTools.length === 0) return '';
-        var prompt = '\n\n## MCP 服务器工具\n\n以下是通过 MCP 协议连接的外部工具。使用 `mcp` 调用。\n\n';
-        var byServer = {};
-        enabledTools.forEach(function(t) { var s = t._mcpServer || 'unknown'; if (!byServer[s]) byServer[s] = []; byServer[s].push(t); });
-        for (var server in byServer) {
-            prompt += '### ' + server + '\n\n';
-            byServer[server].forEach(function(t) { prompt += '- **`' + t.name + '`**'; if (t.description) prompt += ': ' + t.description; prompt += '\n'; });
-            prompt += '\n';
+        var parts = [];
+        if (enabledTools.length > 0) {
+            var toolPrompt = '\n\n## MCP 服务器工具\n\n以下是通过 MCP 协议连接的外部工具。使用 `mcp` 调用。\n\n';
+            var byServer = {};
+            enabledTools.forEach(function(t) { var s = t._mcpServer || 'unknown'; if (!byServer[s]) byServer[s] = []; byServer[s].push(t); });
+            for (var server in byServer) {
+                toolPrompt += '### ' + server + '\n\n';
+                byServer[server].forEach(function(t) { toolPrompt += '- **`' + t.name + '`**'; if (t.description) toolPrompt += ': ' + t.description; toolPrompt += '\n'; });
+                toolPrompt += '\n';
+            }
+            toolPrompt += '> 使用 `mcp`（`{"tool": "mcp", "params": {"server": "服务器名", "tool": "工具名", "args": {...}}}`）调用。\n';
+            parts.push(toolPrompt);
         }
-        prompt += '> 使用 `mcp`（`{"tool": "mcp", "params": {"server": "服务器名", "tool": "工具名"}}`）调用。\n';
-        return prompt;
+        // Resources prompt
+        if (this.allResources.length > 0) {
+            var resPrompt = '\n## MCP 服务器资源\n\n以下 MCP 服务器暴露了可读取的资源（文件/数据）。使用 `mcp_read_resource` 读取。\n\n';
+            var resByServer = {};
+            this.allResources.forEach(function(r) { var s = r._mcpServer || 'unknown'; if (!resByServer[s]) resByServer[s] = []; resByServer[s].push(r); });
+            for (var server in resByServer) {
+                resPrompt += '### ' + server + '\n\n';
+                resByServer[server].forEach(function(r) {
+                    resPrompt += '- `' + r.uri + '`';
+                    if (r.name) resPrompt += ' (' + r.name + ')';
+                    if (r.description) resPrompt += ': ' + r.description;
+                    if (r.mimeType) resPrompt += ' [' + r.mimeType + ']';
+                    resPrompt += '\n';
+                });
+                resPrompt += '\n';
+            }
+            resPrompt += '> 使用 `{"tool": "mcp_read_resource", "params": {"server": "服务器名", "uri": "资源URI"}}` 读取。\n';
+            parts.push(resPrompt);
+        }
+        // Prompts prompt
+        if (this.allPrompts.length > 0) {
+            var promptSection = '\n## MCP 服务器提示词\n\n以下 MCP 服务器暴露了可用的提示词模板。使用 `mcp_get_prompt` 获取。\n\n';
+            var pByServer = {};
+            this.allPrompts.forEach(function(p) { var s = p._mcpServer || 'unknown'; if (!pByServer[s]) pByServer[s] = []; pByServer[s].push(p); });
+            for (var server in pByServer) {
+                promptSection += '### ' + server + '\n\n';
+                pByServer[server].forEach(function(p) {
+                    promptSection += '- **`' + p.name + '`**';
+                    if (p.description) promptSection += ': ' + p.description;
+                    if (p.arguments && p.arguments.length > 0) {
+                        promptSection += ' 参数: ' + p.arguments.map(function(a) { return a.name + (a.required ? '*' : ''); }).join(', ');
+                    }
+                    promptSection += '\n';
+                });
+                promptSection += '\n';
+            }
+            promptSection += '> 使用 `{"tool": "mcp_get_prompt", "params": {"server": "服务器名", "name": "提示词名称", "args": {...}}}` 获取。\n';
+            parts.push(promptSection);
+        }
+        return parts.join('\n');
     }
-    async shutdown() { for (var [n, c] of this.clients) { try { await c.stop(); } catch (e) {} } this.clients.clear(); this.allTools = []; }
+
+    async shutdown() {
+        for (var [n, c] of this.clients) { try { await c.stop(); } catch (e) {} }
+        this.clients.clear();
+        this.allTools = [];
+        this.allResources = [];
+        this.allPrompts = [];
+        this.resourceCache = {};
+    }
 }
 
 var manager = new McpManager();

@@ -240,6 +240,15 @@
             var result;
             try {
                 var rawResult = await tool.handler(params, body, toolContext);
+                // P0: Loop Guard 循环检测
+                try {
+                    if (typeof window.__dsagent_loopGuardCheck === 'function') {
+                        var lc = window.__dsagent_loopGuardCheck(name, JSON.stringify(params), rawResult, true);
+                        if (lc && lc.blocked) {
+                            return makeResult(true, null, null, { tool: name, warning: lc.reason, block: true });
+                        }
+                    }
+                } catch(le) {}
                 // 如果 handler 已经返回标准 JSON 格式，直接使用
                 if (rawResult && typeof rawResult === 'object' && 'success' in rawResult) {
                     result = rawResult;
@@ -257,6 +266,15 @@
 
         try {
             var rawResult = await tool.handler(params, body, toolContext);
+            // P0: Loop Guard 循环检测
+            try {
+                if (typeof window.__dsagent_loopGuardCheck === 'function') {
+                    var lc2 = window.__dsagent_loopGuardCheck(name, JSON.stringify(params), rawResult, true);
+                    if (lc2 && lc2.blocked) {
+                        return makeResult(true, null, null, { tool: name, warning: lc2.reason, block: true });
+                    }
+                }
+            } catch(le) {}
             if (rawResult && typeof rawResult === 'object' && 'success' in rawResult) {
                 return rawResult;
             }

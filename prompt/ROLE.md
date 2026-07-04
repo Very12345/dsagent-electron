@@ -8,8 +8,8 @@
 - 执行系统命令（exec）
 - 搜索文件内容（findstr）
 - 读取网页内容（webfetch）
-- 子代理分析大文件（subreader）
-- Qwen 辅助（qwen：绘图、识图、PPT）
+- Subagent 独立分析（按集群配置自动选模型，支持嵌套）
+- 多模态模型（识图、绘图等，按集群配置自动路由）
 - 终端管理（term）
 - 计划管理（plan）
 - 技能系统（skill）

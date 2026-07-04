@@ -1,13 +1,20 @@
 // 历史对话管理器 - 管理 .dsa/histories/ 目录
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const HISTORIES_DIR = '.dsa';
 const SUBDIR = 'histories';
+const CLI_SUBDIR = 'cli-sessions';  // CLI TUI 会话专用子目录（全局，不跟项目走）
 
 function getBaseDir(rootDir) {
     if (!rootDir) return null;
     return path.join(rootDir, HISTORIES_DIR, SUBDIR);
+}
+
+// CLI 会话全局目录：~/.dsa/cli-sessions/（无项目根目录时使用）
+function getCliBaseDir() {
+    return path.join(os.homedir(), HISTORIES_DIR, CLI_SUBDIR);
 }
 
 function ensureDir(dir) {
@@ -35,6 +42,8 @@ function listHistories(rootDir) {
                     id: data.id,
                     mode: data.mode,
                     deepthink: data.deepthink,
+                    modelId: data.modelId || null,           // 新增：模型 ID
+                    conversationUrl: data.conversationUrl || null,  // 新增：网页对话 URL
                     createdAt: data.createdAt,
                     updatedAt: data.updatedAt,
                     messageCount: (data.messages || []).length,
@@ -52,6 +61,43 @@ function listHistories(rootDir) {
         console.warn('[History] Failed to list histories:', e.message);
         return [];
     }
+}
+
+// 按 modelId + conversationUrl 查找历史（用于历史注入缓存命中判断）
+function findByConversation(rootDir, modelId, conversationUrl) {
+    if (!modelId || !conversationUrl) return null;
+    const dir = getBaseDir(rootDir);
+    if (!dir || !fs.existsSync(dir)) return null;
+    try {
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+        for (const f of files) {
+            try {
+                const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
+                if (data.modelId === modelId && data.conversationUrl === conversationUrl) {
+                    return data;
+                }
+            } catch (e) { /* skip */ }
+        }
+        return null;
+    } catch (e) { return null; }
+}
+
+// 查找同模型的所有历史（用于历史注入缓存复用）
+function findByModel(rootDir, modelId) {
+    if (!modelId) return [];
+    const dir = getBaseDir(rootDir);
+    if (!dir || !fs.existsSync(dir)) return [];
+    try {
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+        const results = [];
+        for (const f of files) {
+            try {
+                const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
+                if (data.modelId === modelId) results.push(data);
+            } catch (e) { /* skip */ }
+        }
+        return results;
+    } catch (e) { return []; }
 }
 
 function loadHistory(rootDir, id) {
@@ -110,10 +156,67 @@ function renameHistory(rootDir, id, newTitle) {
     }
 }
 
+// ===== CLI TUI 会话持久化（消除 bin/dsagent-cli.js 的 cli-session.json 独立实现） =====
+// CLI 存的是 TUI 渲染状态（body 数组带 ANSI、goal、turn、status），和 agentview 的 messages 语义不同，
+// 但复用 history-manager 的文件 I/O 逻辑，统一在 ~/.dsa/ 下管理。
+// 存储位置：~/.dsa/cli-sessions/<sessionId>.json（单文件，每次 saveCliSession 覆盖最近一条）
+const CLI_SESSION_FILE = 'last-session.json';  // 固定文件名，CLI 只保留最近一次会话
+
+function saveCliSession(state) {
+    const dir = getCliBaseDir();
+    if (!ensureDir(dir)) return { success: false, error: 'Cannot create CLI session dir' };
+    try {
+        const filePath = path.join(dir, CLI_SESSION_FILE);
+        fs.writeFileSync(filePath, JSON.stringify({
+            sessionId: state.sessionId,
+            hasHistory: state.hasHistory,
+            modelId: state.modelId,
+            deepThink: state.deepThink,
+            body: state.body,
+            goal: state.goal,
+            turn: state.turn,
+            status: { model: state.status.model, cwd: state.status.cwd },
+            savedAt: new Date().toISOString()
+        }, null, 2), 'utf-8');
+        return { success: true };
+    } catch (e) {
+        console.warn('[History] Failed to save CLI session:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+function loadCliSession() {
+    const dir = getCliBaseDir();
+    try {
+        const filePath = path.join(dir, CLI_SESSION_FILE);
+        if (!fs.existsSync(filePath)) return null;
+        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    } catch (e) {
+        console.warn('[History] Failed to load CLI session:', e.message);
+        return null;
+    }
+}
+
+function deleteCliSession() {
+    const dir = getCliBaseDir();
+    try {
+        const filePath = path.join(dir, CLI_SESSION_FILE);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
 module.exports = {
     listHistories,
     loadHistory,
     saveHistory,
     deleteHistory,
-    renameHistory
+    renameHistory,
+    findByConversation,
+    findByModel,
+    saveCliSession,
+    loadCliSession,
+    deleteCliSession
 };

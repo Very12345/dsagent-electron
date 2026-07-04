@@ -51,7 +51,7 @@
       "id": "preferences",
       "label": "偏好设置",
       "items": [
-        { "id": "skills-storage-path", "label": "技能存储路径...", "action": "skills-storage-path" }
+        { "id": "skills-storage-path", "label": "大文件存储路径...", "action": "skills-storage-path" }
       ]
     },
     {
