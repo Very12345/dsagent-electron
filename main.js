@@ -505,6 +505,30 @@ function setupAgentIPC() {
         }
     });
 
+    // ==================== P0: 子代理调用（注册为工具，让 AI 看得到） ====================
+    // subagent-manager.js 有完整实现但未注册为 tool, AI 看不到这个工具.
+    // 新建 tools/tool-subagent.js 注入侧工具 + 此 IPC 桥接主进程 subagentManager.
+    ipcMain.handle('subagent-invoke', async (event, payload) => {
+        try {
+            if (!subagentManager) {
+                return { success: false, error: '子代理管理器未初始化' };
+            }
+            var template = (payload && payload.template) || '';
+            var task = (payload && payload.task) || '';
+            if (!template || !task) {
+                return { success: false, error: '缺少必填参数: template 或 task' };
+            }
+            // 调 subagentManager.invoke(template, task, opts)
+            var opts = {};
+            if (payload.files) opts.files = payload.files;
+            if (payload.batchId) opts.batchId = payload.batchId;
+            var result = await subagentManager.invoke(template, task, opts);
+            return { success: true, summary: result.summary || result, result: result };
+        } catch (e) {
+            return { success: false, error: 'subagent-invoke 异常: ' + (e.message || e) };
+        }
+    });
+
     ipcMain.handle('agent-list', async (event, dirPath) => {
         return agent.listDir(dirPath);
     });

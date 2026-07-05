@@ -2389,8 +2389,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 // 有工具调用时：工具行和中间文本已在 stream 期间实时推入，不需额外处理
                 state.hasHistory = true;
                 setStatus(state.status.model, '/help 查看命令', '');
-                // D-1: Turn 分隔线
-                var sep = C.gray + C.dim + '─── turn #' + state.turn + ' ───' + C.reset;
+                // D-1: Turn 分隔线（用 ··· 而非 ───，避免与输入框边框混淆）
+                var sep = C.gray + C.dim + '··· turn #' + state.turn + ' ···' + C.reset;
                 pushBodyRow(sep);
                 // 重绘 body 区域，让用户消息 + AI 回复回到可见区
                 redrawBodyContent();

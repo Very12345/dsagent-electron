@@ -234,6 +234,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     agentSyntaxCheck: (filePath, ext) => ipcRenderer.invoke('agent-syntax-check', filePath, ext),
     // P2: 并行多文件编辑
     parallelEdit: (payload) => ipcRenderer.invoke('parallel-edit', payload),
+    // P0: 子代理调用（注入侧工具桥接主进程 subagentManager）
+    subagentInvoke: (payload) => ipcRenderer.invoke('subagent-invoke', payload),
     // 插件管理（CC 生态兼容）
     pluginList: () => ipcRenderer.invoke('plugin-list'),
     pluginInstall: (params) => ipcRenderer.invoke('plugin-install', params),
