@@ -10,14 +10,14 @@
         scope: '读取文件内容到当前对话中',
         description: '读取本地文件的内容。\n'
             + '默认读取文本文件，使用 `mode: "image"` 可读取图片/PDF 并上传到对话中。\n'
-            + '超过 2MB 的文件请改用 subreader。',
+            + '超过 2MB 的文件请改用 readslice 切片读取。',
         params: [
             { name: 'path', type: '字符串', default: '—', required: true, description: '文件路径（必填），支持绝对路径和相对路径' },
             { name: 'mode', type: '字符串', default: 'text', required: false, description: 'image 模式可读取图片/PDF 上传到对话' },
             { name: 'force', type: '布尔', default: 'false', required: false, description: '强制读取大文件（超过 10KB）' }
         ],
         usage: '<tool:read>{"path": "D:\\\\project\\\\main.js"}</tool:read>\n\n<tool:read>{"path": "screenshot.png", "mode": "image"}</tool:read>',
-        notes: '默认仅支持文本文件。mode=image 可读取图片/PDF 上传到对话。大文件请用 subreader。',
+        notes: '默认仅支持文本文件。mode=image 可读取图片/PDF 上传到对话。大文件请用 readslice。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
             var filePath = params.path || '';
@@ -72,19 +72,19 @@
 
             // 其他二进制文件：拒绝
             if (BINARY_EXTS.indexOf(ext) !== -1) {
-                return makeResult(false, null, '文件 .' + ext + ' 是二进制格式，read 不支持。请使用 subreader 工具读取。');
+                return makeResult(false, null, '文件 .' + ext + ' 是二进制格式，read 不支持。请使用 readslice 切片读取。');
             }
             
             // 文本文件：正常读取
             var infoRes = await window.electronAPI.agentInfo(filePath);
             if (infoRes.success && infoRes.size !== undefined) {
                 if (infoRes.size > 2 * 1024 * 1024) {
-                    return makeResult(false, null, '文件 ' + (infoRes.size / 1024 / 1024).toFixed(1) + 'MB 超过 2MB，read 无法处理。请使用 subreader 工具读取。');
+                    return makeResult(false, null, '文件 ' + (infoRes.size / 1024 / 1024).toFixed(1) + 'MB 超过 2MB，read 无法处理。请使用 readslice 切片读取。');
                 }
                 if (infoRes.size > 10 * 1024) {
                     var sizeKB = Math.round(infoRes.size / 1024);
                     if (!force) {
-                        return makeResult(true, '⚠️ 文件大小警告：该文件 ' + sizeKB + 'KB（超过 10KB），可能会占用大量上下文。\n如需读取完整内容，请在 params 中添加 "force": true。\n\n> 建议使用 subreader 并添加分析指令来获取摘要。');
+                        return makeResult(true, '⚠️ 文件大小警告：该文件 ' + sizeKB + 'KB（超过 10KB），可能会占用大量上下文。\n如需读取完整内容，请在 params 中添加 "force": true。\n\n> 建议使用 readslice 切片读取来获取摘要。');
                     }
                 }
             }

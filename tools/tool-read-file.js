@@ -13,7 +13,7 @@
         description: '读取本地文件的内容，返回带行号的前缀（`<n>\\t<content>`）。' +
             '对于大文件，使用 `offset` 和 `limit` 切片读取。' +
             '使用 `mode: "image"` 可读取图片/PDF 并上传到对话中。' +
-            '超过 2MB 的文件请改用 subreader。',
+            '超过 2MB 的文件请改用 readslice 切片读取。',
         params: [
             { name: 'file_path', type: '字符串', default: '—', required: true, description: '文件路径，支持绝对路径和相对路径' },
             { name: 'offset', type: '数字', default: '—', required: false, description: '起始行号（1-based），省略则从开头读取' },
@@ -22,7 +22,7 @@
             { name: 'force', type: '布尔', default: 'false', required: false, description: '强制读取大文件（超过 10KB）' }
         ],
         usage: '{"file_path": "src/main.js"}\n\n{"file_path": "server.log", "offset": 100, "limit": 50}\n\n{"file_path": "screenshot.png", "mode": "image"}',
-        notes: 'offset 和 limit 是行级切片。mode=image 可读取图片/PDF 上传到对话。大文件请用 subreader。',
+        notes: 'offset 和 limit 是行级切片。mode=image 可读取图片/PDF 上传到对话。大文件请用 readslice。',
         handler: async function(params, body) {
             var makeResult = window.__dsagent_tools.makeResult;
             var filePath = params.file_path || params.path || '';

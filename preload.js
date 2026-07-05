@@ -10,7 +10,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getInitialDir: () => ipcRenderer.invoke('get-initial-dir'),
     getDownloadsPath: () => ipcRenderer.invoke('get-downloads-path'),
     getInitPrompt: (mode) => ipcRenderer.invoke('get-init-prompt', mode || 'quick'),
-    getSubreaderStrategy: () => ipcRenderer.invoke('get-subreader-strategy'),
 
     // Agent 操作
     agentExec: (cmd, timeout) => ipcRenderer.invoke('agent-exec', cmd, timeout),

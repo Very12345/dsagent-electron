@@ -27,7 +27,7 @@ const DEFAULT_CONFIG = {
         'powershell remove-item', 'rm -rf', 'rm -r', 'dd if=/dev/zero',
         'move ', 'ren ', 'rename '
     ],
-    safeOperations: ['read', 'list', 'info', 'exists', 'subreader', 'interval', 'interval-list'],
+    safeOperations: ['read', 'list', 'info', 'exists', 'interval', 'interval-list'],
     confirmMode: 'smart',
     commandWhitelist: [],    // 用户信任的命令列表（如 python xxx、node xxx）
     mcpServers: [],          // MCP 服务器配置列表

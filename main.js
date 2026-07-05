@@ -3411,20 +3411,6 @@ function setupIpcHandlers() {
         }
     });
 
-    // 加载 subreader 通用策略
-    ipcMain.handle('get-subreader-strategy', async () => {
-        try {
-            var text = '';
-            const commonFile = path.join(__dirname, 'prompt', 'subreader', 'common.md');
-            if (fs.existsSync(commonFile)) {
-                text = fs.readFileSync(commonFile, 'utf-8');
-            }
-            return { success: true, text: text };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
-    });
-
     // 获取指令文本（P0: 模块化提示词拼接，P5: 会话级缓存）
     // 由 prompt-builder.js 从多个 section 拼装，替代原来的文件直接读取
     ipcMain.handle('get-instruction-text', async (event, payload) => {

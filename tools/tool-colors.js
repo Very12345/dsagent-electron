@@ -15,7 +15,7 @@
         'read':              { ansi: 'green',   hex: '#3fb950' },
         'readfile':          { ansi: 'green',   hex: '#3fb950' },
         'readslice':         { ansi: 'green',   hex: '#3fb950' },
-        'subreader':         { ansi: 'green',   hex: '#7ee787' },
+        'readslice':         { ansi: 'green',   hex: '#3fb950' },
         'open':              { ansi: 'green',   hex: '#3fb950' },
         'openfile':          { ansi: 'green',   hex: '#3fb950' },
         'save':              { ansi: 'green',   hex: '#3fb950' },

@@ -79,15 +79,9 @@
         });
     };
 
-    // ==================== subreader 已废弃（保留兼容 shim，由 subagent 架构替代） ====================
-
-    // buildSubreaderPrompt 保留为兼容 shim：旧 subreader 命令降级串行执行时仍可能调用
-    E.buildSubreaderPrompt = async function(fileListStr, extraPrompt) {
-        var parts = ['你是一个子代理(sub-agent)，负责分析文件。请直接返回结果，使用中文。'];
-        if (extraPrompt) parts.push('【用户额外要求】\n' + extraPrompt);
-        parts.push('请阅读以下文件：' + fileListStr);
-        return parts.join('\n\n');
-    };
+    // ==================== subreader 已废弃（由 subagent 架构替代） ====================
+    // buildSubreaderPrompt shim 已删除：AI 若仍调 subreader 工具，会走 tool-system 的
+    // 「工具不存在」分支返回错误提示，引导 AI 改用 readslice/subagent，不再报缺 paths。
 
     E.parseSingleReadParams = function(content) {
         var trimmed = content.trim();
@@ -147,7 +141,7 @@
             var sizeKB = Math.round(infoRes.size / 1024);
             var sizeMB = (infoRes.size / 1024 / 1024).toFixed(1);
             if (infoRes.size > 2 * 1024 * 1024) {
-                throw new Error('文件 ' + sizeMB + 'MB 超过 2MB，请使用 subreader mode=quick');
+                throw new Error('文件 ' + sizeMB + 'MB 超过 2MB，请使用 readslice 切片读取');
             }
             if (mode !== 'quick' && infoRes.size > 10 * 1024) {
                 if (!force) {
@@ -379,7 +373,7 @@
             'powershell remove-item', 'rm -rf', 'rm -r', 'dd if=/dev/zero',
             'move ', 'ren ', 'rename '
         ],
-        safeOperations: ['read', 'list', 'info', 'exists', 'save', 'edit', 'mkdir', 'subreader', 'interval', 'interval-list', 'break', 'help', 'winapi', 'skill'],
+        safeOperations: ['read', 'list', 'info', 'exists', 'save', 'edit', 'mkdir', 'interval', 'interval-list', 'break', 'help', 'winapi', 'skill'],
         confirmMode: 'smart',   // 'strict' | 'smart' | 'loose' | 'readonly' | 'custom:...'
         contextCompressThreshold: 100 * 1024
     };
@@ -717,19 +711,17 @@
         return prompt;
     };
 
-    // 按 lang 分类命令
+    // 按 lang 分类命令（subreader 已废弃，不再单独分类）
     E.classifyCommands = function(commands) {
-        var sr = [], qw = [], normal = [];
+        var qw = [], normal = [];
         for (var i = 0; i < commands.length; i++) {
-            if (commands[i].lang === 'subreader') {
-                sr.push(commands[i]);
-            } else if (commands[i].lang === 'qwen') {
+            if (commands[i].lang === 'qwen') {
                 qw.push(commands[i]);
             } else {
                 normal.push(commands[i]);
             }
         }
-        return { sr: sr, qw: qw, normal: normal };
+        return { qw: qw, normal: normal };
     };
 
     // ==================== P0: 循环检测（Loop Guard） ====================

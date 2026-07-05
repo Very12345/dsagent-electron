@@ -1007,20 +1007,8 @@ async function deleteCurrentConversation() {
 
             // 5a. 分类命令（所有命令统一串行执行，并发由 server 层管理）
             var classified = E.classifyCommands(commands);
-            var srCommands = classified.sr;       // 旧分类保留兼容
             var qwCommands = classified.qw;
             var normalCommands = classified.normal;
-
-            // 5b. 旧 subreader 命令：降级为普通串行执行
-            if (srCommands.length > 0) {
-                showToast('命令 ' + srCommands.length + ' 个（串行执行）...');
-                for (var si = 0; si < srCommands.length; si++) {
-                    var result = await E.execOneCommand(srCommands[si], cmdMap);
-                    if (result) { results.push(result); E.forwardResult(result); }
-                    if (stopRequested) break;
-                    if (si < srCommands.length - 1) await new Promise(function(r) { setTimeout(r, 300); });
-                }
-            }
 
             // 5b2. qwen 命令：串行执行（并发由 server-qwen 槽位管理）
             if (qwCommands.length > 0) {
@@ -1036,7 +1024,7 @@ async function deleteCurrentConversation() {
             // 5c. 普通命令串行执行
             for (var i = 0; i < normalCommands.length; i++) {
                 var c = normalCommands[i];
-                showToast((i + 1 + srCommands.length + qwCommands.length) + '/' + commands.length + ' ' + c.lang + '...');
+                showToast((i + 1 + qwCommands.length) + '/' + commands.length + ' ' + c.lang + '...');
                 var result = await E.execOneCommand(c, cmdMap);
                 if (result) {
                     results.push(result);
