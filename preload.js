@@ -119,4 +119,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 切换工作目录（影响 exec 等工具的相对路径解析）
     changeDir: (path) => ipcRenderer.invoke('change-dir', path),
+
+    // P0: 工具 schema 缓存上传 + 子代理调用（DeepSeek BrowserView 注入侧需要）
+    toolDocsCache: (docs) => ipcRenderer.send('tool-docs-cache', docs),
+    subagentInvoke: (payload) => ipcRenderer.invoke('subagent-invoke', payload),
+    parallelEdit: (payload) => ipcRenderer.invoke('parallel-edit', payload),
+    agentSyntaxCheck: (filePath, ext) => ipcRenderer.invoke('agent-syntax-check', filePath, ext),
 });

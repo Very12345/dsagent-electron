@@ -4661,6 +4661,21 @@ function createWindow() {
     mainWindow.on('closed', () => {
         mainWindow = null;
     });
+    // P0: 调试窗口闪退——监听主渲染进程崩溃和 console 日志
+    mainWindow.webContents.on('render-process-gone', (event, details) => {
+        console.error('[Main:renderer] render-process-gone:', details && details.reason, JSON.stringify(details));
+    });
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+        if (level >= 2 && message) {
+            console.error('[Main:renderer console L' + level + ']', message, '(@' + sourceId + ':' + line + ')');
+        }
+    });
+    mainWindow.webContents.on('preload-error', (event, preloadPath, error) => {
+        console.error('[Main:preload-error]', preloadPath, error && (error.stack || error.message));
+    });
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+        console.error('[Main:did-fail-load]', errorCode, errorDescription, validatedURL);
+    });
 
     // Agent 模式焦点保护：防止后台 BrowserView 劫持键盘焦点
     mainWindow.on('focus', () => {
@@ -5106,9 +5121,18 @@ app.on('before-quit', async () => {
 });
 
 app.on('window-all-closed', () => {
+    console.log('[Quit] window-all-closed triggered, mainWindow=' + (mainWindow ? 'exists' : 'null'));
     if (process.platform !== 'darwin') {
         app.quit();
     }
+});
+
+// P0: 调试窗口闪退——追 quit 责任
+app.on('before-quit', (event) => {
+    console.log('[Quit] before-quit triggered', new Error().stack);
+});
+app.on('will-quit', (event) => {
+    console.log('[Quit] will-quit triggered');
 });
 
 app.on('activate', () => {
