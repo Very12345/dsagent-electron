@@ -527,8 +527,9 @@ function setupAgentIPC() {
             };
             var result = await subagentManager.invoke(subParams);
             // invoke 返回 {success, agentId, data}, data 是 handleSubagentRequest 的 result
-            // handleSubagentRequest 返回 {success, data: {markdown, conversationUrl, ...}}
-            var markdown = result && result.data && result.data.data && (result.data.data.markdown || result.data.data.text) || '';
+            // handleSubagentRequest 调 handleRequest 返回 {success, data: {markdown, conversationUrl, ...}}
+            // handleSubagentRequest 直接透传 handleRequest 的 result, 故 markdown 在 result.data.markdown
+            var markdown = result && result.data && (result.data.markdown || result.data.text) || '';
             return { success: true, summary: markdown || '子代理执行完成（无文本输出）', result: result };
         } catch (e) {
             return { success: false, error: 'subagent-invoke 异常: ' + (e.message || e) };
