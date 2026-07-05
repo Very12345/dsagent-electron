@@ -62,9 +62,17 @@ function toolsSection() {
 }
 
 // 4. 分层指令（global → project → user）
+// 支持 atomcode/AGENTS.md 开放标准 + dsagent 自有 .dsa/instructions/ 目录
 function instructionsSection(rootDir) {
     var parts = [];
-    // global: ~/.dsa/instructions/
+    // global: ~/.atomcode/ATOMCODE.md（atomcode 标准） + ~/.dsa/instructions/（dsagent 自有）
+    var atomcodeGlobal = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.atomcode', 'ATOMCODE.md');
+    if (fs.existsSync(atomcodeGlobal)) {
+        try {
+            var content = fs.readFileSync(atomcodeGlobal, 'utf-8').trim();
+            if (content) parts.push('【全局指令】\n' + content);
+        } catch(e) {}
+    }
     var globalDir = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.dsa', 'instructions');
     if (fs.existsSync(globalDir)) {
         try {
@@ -75,8 +83,19 @@ function instructionsSection(rootDir) {
             });
         } catch(e) {}
     }
-    // project: .dsa/instructions/
+    // project: .atomcode.md / AGENTS.md / CLAUDE.md（开放标准） + .dsa/instructions/（dsagent 自有）
     if (rootDir) {
+        var standardFiles = ['.atomcode.md', 'AGENTS.md', 'CLAUD.md', 'claude.md', 'ATOMCODE.md'];
+        for (var si = 0; si < standardFiles.length; si++) {
+            var sf = path.join(rootDir, standardFiles[si]);
+            if (fs.existsSync(sf)) {
+                try {
+                    var sc = fs.readFileSync(sf, 'utf-8').trim();
+                    if (sc) parts.push('【项目指令: ' + standardFiles[si] + '】\n' + sc);
+                    break;  // 首个命中即可
+                } catch(e) {}
+            }
+        }
         var projDir = path.join(rootDir, '.dsa', 'instructions');
         if (fs.existsSync(projDir)) {
             try {

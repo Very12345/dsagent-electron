@@ -905,6 +905,7 @@ async function runInteractive(token, timeout, raw, continueSession) {
         { name:'/copy',     desc:'复制代码块',     match:['copy'] },
         { name:'/view',     desc:'预览文件内容',   match:['view','cat'] },
         { name:'/rename',   desc:'重命名会话',     match:['rename'] },
+        { name:'/upgrade',  desc:'检查更新（git pull）', match:['upgrade','update'] },
         { name:'/keys',     desc:'键盘快捷键',     match:['keys'] },
         { name:'/theme',    desc:'切换颜色主题',   match:['theme'] },
         { name:'/find',     desc:'搜索对话历史',   match:['find','search'] },
@@ -2352,6 +2353,7 @@ async function runInteractive(token, timeout, raw, continueSession) {
             echoSystem('  /goal clear             清除目标');
             echoSystem('  /resume                 恢复历史会话');
             echoSystem('  /session                新建/切换会话');
+            echoSystem('  /upgrade                检查更新（git pull 拉取最新代码）');
             echoSystem('  /undo                   撤销上一轮');
             echoSystem('  /keys                   键盘快捷键');
             echoSystem(C.cyan + '──' + C.reset);
@@ -2417,6 +2419,21 @@ async function runInteractive(token, timeout, raw, continueSession) {
             } else {
                 echoSystem('没有可撤销的操作');
             }
+        } else if (name === '/upgrade') {
+            // 检查更新：git fetch + 比较本地 vs 远程
+            echoSystem('正在检查更新...');
+            try {
+                var fetchRes = await execSync('git fetch origin 2>&1', { timeout: 30000 });
+                var statusRes = await execSync('git log HEAD..origin/main --oneline 2>&1', { timeout: 10000 });
+                if (statusRes && statusRes.stdout && statusRes.stdout.trim()) {
+                    var logLines = statusRes.stdout.trim().split('\n');
+                    echoSystem('发现 ' + logLines.length + ' 个新提交:');
+                    logLines.forEach(function(l) { echoSystem('  ' + l); });
+                    echoSystem('\\n运行 git pull 更新。');
+                } else {
+                    echoError('已是最新或非 Git 仓库');
+                }
+            } catch(e) { echoError('检查失败: ' + (e.message || e)); }
         } else if (name === '/theme') {
             // 主题切换命令
             if (!arg) {
@@ -2479,24 +2496,49 @@ async function runInteractive(token, timeout, raw, continueSession) {
             echoSystem(C.cyan + '──' + C.reset);
             state.foldBlocks.push({ start: foldIdx, count: 15, label: '快捷键' });
         } else if (name === '/cost') {
-            // 统计 token 用量（从 goal 行汇总）
+            // 统计 token 用量（从 datalog 读取，兼用 body 行粗估）
             var totalTok = 0;
             var roundCount = state.turn;
-            for (var bi = 0; bi < state.body.length; bi++) {
-                var bl = state.body[bi];
-                if (typeof bl === 'string' && bl.indexOf('tok') > 0) {
-                    var tm = bl.match(/([\d.]+[kKmM]?)\s*tok/);
-                    if (tm) {
-                        var v = tm[1];
-                        if (v.indexOf('k') > 0) totalTok += parseFloat(v) * 1000;
-                        else if (v.indexOf('m') > 0) totalTok += parseFloat(v) * 1000000;
-                        else totalTok += parseFloat(v);
+            // 先尝试从 datalog 读精确值
+            try {
+                var dl = require('../lib/datalog.js');
+                var turns = dl.readTurns(state.sessionId);
+                if (turns.length > 0) {
+                    var userToks = 0, asstToks = 0, durMs = 0;
+                    turns.forEach(function(t) {
+                        userToks += t.estimatedUserTokens || 0;
+                        asstToks += t.estimatedAssistantTokens || 0;
+                        durMs += t.durationMs || 0;
+                    });
+                    totalTok = userToks + asstToks;
+                    var tokStr2 = totalTok > 1000000 ? (totalTok / 1000000).toFixed(1) + 'M' :
+                        totalTok > 1000 ? (totalTok / 1000).toFixed(1) + 'k' : String(totalTok);
+                    var userStr = userToks > 1000 ? (userToks / 1000).toFixed(1) + 'k' : String(userToks);
+                    var asstStr = asstToks > 1000 ? (asstToks / 1000).toFixed(1) + 'k' : String(asstToks);
+                    var durSecs = (durMs / 1000).toFixed(0);
+                    echoSystem('Token 用量: ' + tokStr2 + ' (用户→AI: ' + userStr + ' / AI→用户: ' + asstStr + ')');
+                    echoSystem('回合: ' + turns.length + ' | 总耗时: ' + durSecs + 's');
+                } else {
+                    // fallback：从 body 行粗估
+                    for (var bi = 0; bi < state.body.length; bi++) {
+                        var bl = state.body[bi];
+                        if (typeof bl === 'string' && bl.indexOf('tok') > 0) {
+                            var tm = bl.match(/([\d.]+[kKmM]?)\s*tok/);
+                            if (tm) {
+                                var v = tm[1];
+                                if (v.indexOf('k') > 0) totalTok += parseFloat(v) * 1000;
+                                else if (v.indexOf('m') > 0) totalTok += parseFloat(v) * 1000000;
+                                else totalTok += parseFloat(v);
+                            }
+                        }
                     }
+                    var tokStr = totalTok > 1000000 ? (totalTok / 1000000).toFixed(1) + 'M' :
+                        totalTok > 1000 ? (totalTok / 1000).toFixed(1) + 'k' : String(totalTok);
+                    echoSystem('Token 用量: ' + tokStr + ' tok / ' + roundCount + ' rounds');
                 }
+            } catch(e) {
+                echoSystem('Token 用量: (datalog 不可用)');
             }
-            var tokStr = totalTok > 1000000 ? (totalTok / 1000000).toFixed(1) + 'M' :
-                totalTok > 1000 ? (totalTok / 1000).toFixed(1) + 'k' : String(totalTok);
-            echoSystem('Token 用量: ' + tokStr + ' tok / ' + roundCount + ' rounds');
         } else if (name === '/diff') {
             // 调用 git diff
             try {
@@ -2681,6 +2723,10 @@ async function runInteractive(token, timeout, raw, continueSession) {
             }
         } else if (name === '/language' || name === '/lang') {
             state.language = state.language === 'zh' ? 'en' : 'zh';
+            try {
+                var i18n = require('../lib/i18n.js');
+                i18n.setLanguage(state.language);
+            } catch(e) {}
             echoSystem('语言: ' + (state.language === 'zh' ? '中文' : 'English'));
         } else if (name === '/skills') {
             try {

@@ -454,12 +454,16 @@ function createOrchestrator(deps) {
             // P1: Turn 级 Datalog — 写结构化 turn 记录（参考 atomcode turn/datalog.rs）
             try {
                 var datalog = require('./lib/datalog.js');
+                var userText = payload.message && payload.message.text || '';
+                var assistantText = ctx.lastResponse || '';
                 var turnRecord = {
                     turn: ctx.turnCount,
                     modelId: modelId,
                     conversationUrl: ctx.conversationUrl,
-                    userText: (payload.message && payload.message.text || '').substring(0, 500),
-                    assistantText: (ctx.lastResponse || '').substring(0, 1000),
+                    userText: userText.substring(0, 500),
+                    assistantText: assistantText.substring(0, 1000),
+                    estimatedUserTokens: datalog.estimateTokens(userText),
+                    estimatedAssistantTokens: datalog.estimateTokens(assistantText),
                     durationMs: ctx._turnStartTime ? (Date.now() - ctx._turnStartTime) : 0,
                     error: null
                 };

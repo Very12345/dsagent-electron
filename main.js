@@ -5041,6 +5041,39 @@ function startContentServer() {
     });
 }
 
+// ===== P3: 崩溃日志（最小集，参考 atomcode install_panic_hook） =====
+// 仅写本地文件 ~/.dsa/crash-<timestamp>.log，无网络上报
+var CRASH_LOG_DIR = path.join(os.homedir(), '.dsa');
+function writeCrashLog(type, err) {
+    try {
+        if (!fs.existsSync(CRASH_LOG_DIR)) fs.mkdirSync(CRASH_LOG_DIR, { recursive: true });
+        var time = new Date().toISOString().replace(/[:]/g, '-');
+        var fp = path.join(CRASH_LOG_DIR, 'crash-' + time + '.log');
+        var stack = err && (err.stack || err.message || String(err)) || 'unknown error';
+        var pkg = require('./package.json');
+        fs.writeFileSync(fp,
+            '=== Crash Report ===\n' +
+            'Type: ' + type + '\n' +
+            'Time: ' + new Date().toISOString() + '\n' +
+            'Version: ' + pkg.version + '\n' +
+            'Platform: ' + process.platform + ' ' + process.arch + '\n' +
+            'Stack:\n' + stack + '\n'
+        );
+        console.error('[Crash] written to ' + fp);
+    } catch(e) { /* 无法写文件时也尽力 */ }
+}
+// 注册全局异常处理
+process.on('uncaughtException', function(err) {
+    writeCrashLog('uncaughtException', err);
+    console.error('[Crash] uncaughtException:', err && (err.stack || err.message));
+    // 不 process.exit，让 Electron 默认行为处理
+});
+process.on('unhandledRejection', function(reason) {
+    // 不写文件（太频繁），仅日志
+    if (reason && reason.message && reason.message.indexOf('abort') >= 0) return; // 忽略取消操作的 rejection
+    console.warn('[Crash] unhandledRejection:', reason && (reason.message || String(reason)));
+});
+
 app.on('before-quit', async () => {
     try { if (apiServer) apiServer.close(); } catch(e) {}
     try { await agent.shutdownMcp(); } catch (e) {
