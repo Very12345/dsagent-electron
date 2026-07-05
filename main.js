@@ -1765,6 +1765,14 @@ function setupControlBarIPC() {
         shellSend('ctrl-notify', msg);
     });
 
+    // P0: 工具文档缓存（注入侧 allDocs 上传，prompt-builder 读取）
+    // 解决 AI 频繁调工具缺必填参数：启动时把工具 schema 注入 prompt
+    global.__toolDocsCache = '';
+    ipcMain.on('tool-docs-cache', (event, docs) => {
+        global.__toolDocsCache = docs || '';
+        console.log('[ToolDocs] cached ' + (docs ? docs.length : 0) + ' chars');
+    });
+
     // Qwen 页面状态消息转发到 controlbar
     ipcMain.on('qwen-notify-status', (event, msg) => {
         shellSend('ctrl-agent-status', { msg: msg, type: 'qwen' });

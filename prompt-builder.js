@@ -42,7 +42,7 @@ function environmentSection(rootDir) {
 
 // 3. 工具列表
 function toolsSection() {
-    return '## 能力范围\n'
+    var s = '## 能力范围\n'
         + '- 读写本地文件（read/save/edit/delete）\n'
         + '- 执行系统命令（exec）\n'
         + '- 搜索文件内容（findstr）\n'
@@ -59,6 +59,15 @@ function toolsSection() {
         + '- Git 自动提交（git_checkpoint）\n'
         + '- Git Worktree 隔离（git_worktree：独立工作目录，AI 改代码不污染主分支，支持 create/list/cleanup）\n'
         + '- 持久化记忆（memory_read/memory_append）\n';
+    // P0: 注入工具 schema 全集，让 AI 知道每个工具的必填参数名
+    // 避免 AI 频繁调工具缺必填参数（如 read 缺 file_path）
+    try {
+        var cached = global.__toolDocsCache || '';
+        if (cached) {
+            s += '\n## 工具调用说明（必填参数必须传，否则工具报错）\n' + cached + '\n';
+        }
+    } catch(e) {}
+    return s;
 }
 
 // 4. 分层指令（global → project → user）

@@ -298,6 +298,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     intervalAddFromUI: (params) => ipcRenderer.invoke('interval-add-from-ui', params),
     intervalStopFromUI: (taskName) => ipcRenderer.invoke('interval-stop-from-ui', taskName),
     intervalStopAll: () => ipcRenderer.send('interval-stop-all'),
+    // P0: 工具文档缓存上传（注入侧 allDocs → 主进程缓存 → prompt-builder 读取）
+    toolDocsCache: (docs) => ipcRenderer.send('tool-docs-cache', docs),
     intervalStopAllForce: () => ipcRenderer.send('interval-stop-all-force'),
     intervalGetSaved: () => ipcRenderer.invoke('interval-get-saved'),
     intervalRestoreSaved: () => ipcRenderer.invoke('interval-restore-saved'),

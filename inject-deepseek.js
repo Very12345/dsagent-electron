@@ -1474,6 +1474,14 @@ async function deleteCurrentConversation() {
             if (SUPPORTED_LANGS.indexOf('local') === -1) {
                 SUPPORTED_LANGS.push('local');
             }
+            // P0: 启动时把工具 schema 全集上传到主进程缓存，供 prompt-builder 注入
+            // 避免 AI 频繁调工具缺必填参数（如 read 缺 file_path）
+            try {
+                var allDocs = window.__dsagent_tools.allDocs();
+                if (allDocs && window.electronAPI && typeof window.electronAPI.toolDocsCache === 'function') {
+                    window.electronAPI.toolDocsCache(allDocs);
+                }
+            } catch(e) { console.warn('[ToolDocs] upload failed:', e.message); }
         }
 
         // 暴露控制接口给主进程
