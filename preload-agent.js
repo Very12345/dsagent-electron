@@ -232,6 +232,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fileHistoryBackup: (filePath) => ipcRenderer.invoke('file-history-backup', filePath),
     // P0: 编辑后强制语法验证
     agentSyntaxCheck: (filePath, ext) => ipcRenderer.invoke('agent-syntax-check', filePath, ext),
+    // P2: 并行多文件编辑
+    parallelEdit: (payload) => ipcRenderer.invoke('parallel-edit', payload),
     // 插件管理（CC 生态兼容）
     pluginList: () => ipcRenderer.invoke('plugin-list'),
     pluginInstall: (params) => ipcRenderer.invoke('plugin-install', params),

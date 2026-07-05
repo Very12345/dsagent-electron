@@ -447,6 +447,62 @@ function setupAgentIPC() {
         return agent.editFile(filePath, find, regex, replace);
     });
 
+    // ==================== P2: 并行多文件编辑（参考 atomcode tool/parallel_edit.rs） ====================
+    // 接收 {files:[{path,find,replace,regex?}], contract} 在主进程内并行 fan-out 调 agent.editFile
+    // 各文件独立执行，失败不影响其他，汇总返回成功/失败统计 + 逐条结果
+    ipcMain.handle('parallel-edit', async (event, payload) => {
+        try {
+            var files = (payload && payload.files) || [];
+            if (!Array.isArray(files) || files.length < 2 || files.length > 12) {
+                return { success: false, error: 'files 数组长度须在 2-12 之间' };
+            }
+            // 并行 fan-out：每个文件一个 Promise，互不阻塞
+            var tasks = files.map(function(f) {
+                return (async function() {
+                    try {
+                        // 编辑前备份（与单文件 edit 一致）
+                        try { fileHistory.backupBeforeWrite(f.path); } catch(e) {}
+                        var r = await agent.editFile(f.path, f.find, !!f.regex, f.replace || '');
+                        var result = {
+                            path: f.path,
+                            success: !!r.success,
+                            message: r.message || '',
+                            error: r.error || null,
+                            changed: !!r.changed,
+                            syntaxError: null
+                        };
+                        // 编辑成功后跑语法检查（参考 atomcode auto_fix.rs）
+                        if (result.success && result.changed) {
+                            try {
+                                var sc = await runSyntaxCheck(f.path);
+                                if (sc && sc.error) {
+                                    result.syntaxError = sc.error;
+                                    // 把语法错误追加到 message，让 LLM 看到并继续修
+                                    result.message = (result.message || '') + '\n⚠ SYNTAX ERROR: ' + sc.error;
+                                }
+                            } catch(e) {}
+                        }
+                        return result;
+                    } catch(e) {
+                        return { path: f.path, success: false, message: '', error: e.message || String(e), changed: false, syntaxError: null };
+                    }
+                })();
+            });
+            var results = await Promise.all(tasks);
+            var succeeded = results.filter(function(r) { return r.success; }).length;
+            var failed = results.length - succeeded;
+            return {
+                success: true,
+                total: results.length,
+                succeeded: succeeded,
+                failed: failed,
+                results: results
+            };
+        } catch (e) {
+            return { success: false, error: 'parallel-edit 异常: ' + (e.message || e) };
+        }
+    });
+
     ipcMain.handle('agent-list', async (event, dirPath) => {
         return agent.listDir(dirPath);
     });
@@ -1387,71 +1443,55 @@ function setupAgentIPC() {
     // ==================== P0: 编辑后强制语法验证（参考 atomcode auto_fix.rs） ====================
     // 主进程跑磁盘语法检查（node --check / python -m py_compile / tsc --noEmit / json parse）
     // 返回 { success: true, error: '' } 表示无问题；error 非空表示语法错误文本（前 3 行）
-    ipcMain.handle('agent-syntax-check', async (event, filePath, ext) => {
-        try {
-            if (!filePath || !fs.existsSync(filePath)) return { success: true, error: '' };
+    // 抽为独立函数 runSyntaxCheck 供 agent-syntax-check IPC 与 parallel-edit 复用
+    function runSyntaxCheck(filePath, ext) {
+        return new Promise(function(resolve) {
+            if (!filePath || !fs.existsSync(filePath)) return resolve({ success: true, error: '' });
             var lowerExt = (ext || (filePath.split('.').pop() || '')).toLowerCase();
             var { execFile } = require('child_process');
-            // JSON：纯解析，无外部命令
             if (lowerExt === 'json') {
                 try {
                     var content = fs.readFileSync(filePath, 'utf-8');
                     JSON.parse(content);
-                    return { success: true, error: '' };
+                    return resolve({ success: true, error: '' });
                 } catch (e) {
-                    return { success: true, error: filePath + ' is not valid JSON: ' + e.message };
+                    return resolve({ success: true, error: filePath + ' is not valid JSON: ' + e.message });
                 }
             }
-            // JS/MJS/CJS: node --check
             if (lowerExt === 'js' || lowerExt === 'mjs' || lowerExt === 'cjs') {
-                return await new Promise(function(resolve) {
-                    execFile('node', ['--check', filePath], { timeout: 15000, windowsHide: true }, function(err, stdout, stderr) {
-                        if (err) {
-                            var firstLines = (stderr || err.message || '').split('\n').slice(0, 3).join('\n');
-                            resolve({ success: true, error: firstLines });
-                        } else {
-                            resolve({ success: true, error: '' });
-                        }
-                    });
+                return execFile('node', ['--check', filePath], { timeout: 15000, windowsHide: true }, function(err, stdout, stderr) {
+                    if (err) {
+                        resolve({ success: true, error: (stderr || err.message || '').split('\n').slice(0, 3).join('\n') });
+                    } else { resolve({ success: true, error: '' }); }
                 });
             }
-            // Python: python -m py_compile
             if (lowerExt === 'py') {
-                return await new Promise(function(resolve) {
-                    var py = process.platform === 'win32' ? 'python' : 'python3';
-                    execFile(py, ['-m', 'py_compile', filePath], { timeout: 30000, windowsHide: true }, function(err, stdout, stderr) {
-                        if (err) {
-                            var firstLines = (stderr || err.message || '').split('\n').slice(0, 3).join('\n');
-                            resolve({ success: true, error: firstLines });
-                        } else {
-                            resolve({ success: true, error: '' });
-                        }
-                    });
+                var py = process.platform === 'win32' ? 'python' : 'python3';
+                return execFile(py, ['-m', 'py_compile', filePath], { timeout: 30000, windowsHide: true }, function(err, stdout, stderr) {
+                    if (err) {
+                        resolve({ success: true, error: (stderr || err.message || '').split('\n').slice(0, 3).join('\n') });
+                    } else { resolve({ success: true, error: '' }); }
                 });
             }
-            // TS/TSX/JSX/Vue: tsc --noEmit（若环境有 tsc）
             if (lowerExt === 'ts' || lowerExt === 'tsx' || lowerExt === 'jsx' || lowerExt === 'vue') {
-                return await new Promise(function(resolve) {
-                    execFile('npx', ['--no-install', 'tsc', '--noEmit', '--skipLibCheck', filePath], { timeout: 60000, windowsHide: true }, function(err, stdout, stderr) {
-                        if (err) {
-                            // tsc 不存在或非 0 退出。npx --no-install 找不到 tsc 时也视为不可检查（不报错）
-                            var msg = (stderr || '') + (stdout || '');
-                            if (/not found|ENOENT|command not found|no-install/i.test(msg)) {
-                                resolve({ success: true, error: '' });  // 无 tsc 环境，跳过
-                            } else {
-                                var firstLines = msg.split('\n').filter(function(l) { return l.trim(); }).slice(0, 3).join('\n');
-                                resolve({ success: true, error: firstLines });
-                            }
-                        } else {
+                return execFile('npx', ['--no-install', 'tsc', '--noEmit', '--skipLibCheck', filePath], { timeout: 60000, windowsHide: true }, function(err, stdout, stderr) {
+                    if (err) {
+                        var msg = (stderr || '') + (stdout || '');
+                        if (/not found|ENOENT|command not found|no-install/i.test(msg)) {
                             resolve({ success: true, error: '' });
+                        } else {
+                            resolve({ success: true, error: msg.split('\n').filter(function(l) { return l.trim(); }).slice(0, 3).join('\n') });
                         }
-                    });
+                    } else { resolve({ success: true, error: '' }); }
                 });
             }
-            return { success: true, error: '' };  // 未识别扩展名，跳过
-        } catch (e) {
-            return { success: true, error: '' };  // 检查失败不阻塞工具返回
-        }
+            resolve({ success: true, error: '' });
+        });
+    }
+
+    ipcMain.handle('agent-syntax-check', async (event, filePath, ext) => {
+        try { return await runSyntaxCheck(filePath, ext); }
+        catch (e) { return { success: true, error: '' }; }
     });
 
     // 计划管理

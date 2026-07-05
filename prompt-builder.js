@@ -47,6 +47,7 @@ function toolsSection() {
         + '- 执行系统命令（exec）\n'
         + '- 搜索文件内容（findstr）\n'
         + '- 读取网页内容（webfetch）\n'
+        + '- 并行多文件编辑（parallel_edit：一次性改 2-12 个文件，重构场景用，带 contract 描述跨文件不变量）\n'
         + '- Subagent 独立分析（按集群配置自动选模型，支持嵌套）\n'
         + '- 多模态模型（识图、绘图等，按集群配置自动路由）\n'
         + '- 终端管理（term）\n'
