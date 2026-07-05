@@ -2184,6 +2184,12 @@ async function runInteractive(token, timeout, raw, continueSession) {
 
             var hasStreamedToolCall = false;
             function onStreamLine(msg) {
+                // P0: 兜底——服务端有时把完整回复当作 {message: "..."} 一行推过来
+                // (而非 type:'text' 的流式分行). 没有此分支时整坨 JSON 原样渲染到屏幕.
+                // 把它拆为文本行送入与 type:'text' 相同的处理路径.
+                if (!msg.type && msg.message && typeof msg.message === 'string') {
+                    msg = { type: 'text', content: msg.message };
+                }
                 // B-2: 并行工具分组 — 检测 batchId
                 var batchId = msg.batchId || (msg.meta && msg.meta.batchId);
                 if (msg.type === 'tool-call') {
