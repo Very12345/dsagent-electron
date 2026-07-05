@@ -1323,6 +1323,27 @@ async function runInteractive(token, timeout, raw, continueSession) {
     // footerTop = visibleBodyLen（可直接在 body 下一行画 footer）。
     // 当 body+footer >= h 时，overflow 循环让 body 向上滚入 scrollback，
     // footer 自然保持在屏幕底部。
+    // ── 重绘 body 区域（在 stream 结束后调用，把对话内容重新写回可见区） ──
+    function redrawBodyContent() {
+        var w = state.cols, h = state.rows;
+        var layout = computeFooterLayout();
+        var cap = Math.max(1, h - layout.totalFooterRows);
+        // 重置 scrolledOff，让最后 cap 行 body 可见
+        _scrolledOff = Math.max(0, state.body.length - cap);
+        var startIdx = _scrolledOff;
+        var count = Math.min(state.body.length - startIdx, cap);
+        for (var rbi = 0; rbi < count; rbi++) {
+            var line = state.body[startIdx + rbi] || '';
+            var display = truncateToWidth(line, w);
+            process.stdout.write(pos(rbi + 1, 1) + C.EL + display);
+        }
+        // 若 body 不足 cap 行，清空剩余行
+        for (var clr = count; clr < cap; clr++) {
+            process.stdout.write(pos(clr + 1, 1) + C.EL);
+        }
+        state._lastFooterTop = undefined;  // 强制 redraw 重画 footer
+    }
+
     function redraw() {
         updateTerminalTitle();
         var w = state.cols, h = state.rows;
@@ -2323,6 +2344,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 // D-1: Turn 分隔线
                 var sep = C.gray + C.dim + '─── turn #' + state.turn + ' ───' + C.reset;
                 pushBodyRow(sep);
+                // 重绘 body 区域，让用户消息 + AI 回复回到可见区
+                redrawBodyContent();
                 saveSession(state);
             } else {
                 echoError(C.red + '╰─ 错误: ' + C.reset + 'HTTP ' + streamStatus);
