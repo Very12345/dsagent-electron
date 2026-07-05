@@ -530,7 +530,12 @@ function setupAgentIPC() {
     });
 
     ipcMain.handle('agent-list', async (event, dirPath) => {
-        return agent.listDir(dirPath);
+        // P0: 缺 path 或传 '.' 时, 用 global.__requestCwd (CLI 发请求时存) 拼绝对路径
+        var actualPath = dirPath;
+        if ((!actualPath || actualPath === '.' || actualPath === './') && global.__requestCwd) {
+            actualPath = global.__requestCwd;
+        }
+        return agent.listDir(actualPath);
     });
 
     ipcMain.handle('agent-delete', async (event, filePath) => {

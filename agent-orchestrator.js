@@ -108,10 +108,10 @@ function createOrchestrator(deps) {
     async function handleRequest(payload) {
         // payload: { agentId, clusterConfig?, history, message, files, cwd?, rootDir?, subagent? }
         const agentId = payload.agentId || 'main';
-        // P0: CLI 传 cwd/rootDir, 主进程 agent.listDir('.') 不再用 Electron cwd
-        const requestCwd = payload.cwd || payload.rootDir || null;
-        if (requestCwd) {
-            try { process.chdir(requestCwd); } catch(e) { console.warn('[Orch] chdir failed:', e.message); }
+        // P0: CLI 传 cwd/rootDir, 存全局供 agent-list IPC handler 缺 path 时拼绝对路径
+        // (不切主进程 cwd, 避免影响其他 IPC handler 的相对路径)
+        if (payload.cwd || payload.rootDir) {
+            global.__requestCwd = payload.cwd || payload.rootDir;
         }
         const clusterConfig = payload.clusterConfig || (getClusterConfigFn ? getClusterConfigFn() : null);
         console.log('[Orch] handleRequest agentId=%s clusterConfig=%j', agentId, clusterConfig);
