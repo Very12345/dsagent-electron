@@ -106,8 +106,13 @@ function createOrchestrator(deps) {
 
     // ===== 核心入口：处理 agentRequest =====
     async function handleRequest(payload) {
-        // payload: { agentId, clusterConfig?, history, message, files, subagent? }
+        // payload: { agentId, clusterConfig?, history, message, files, cwd?, rootDir?, subagent? }
         const agentId = payload.agentId || 'main';
+        // P0: CLI 传 cwd/rootDir, 主进程 agent.listDir('.') 不再用 Electron cwd
+        const requestCwd = payload.cwd || payload.rootDir || null;
+        if (requestCwd) {
+            try { process.chdir(requestCwd); } catch(e) { console.warn('[Orch] chdir failed:', e.message); }
+        }
         const clusterConfig = payload.clusterConfig || (getClusterConfigFn ? getClusterConfigFn() : null);
         console.log('[Orch] handleRequest agentId=%s clusterConfig=%j', agentId, clusterConfig);
         if (!clusterConfig) {

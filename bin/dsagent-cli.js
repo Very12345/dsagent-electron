@@ -3180,6 +3180,9 @@ async function main() {
     if (files.length > 0) payload.files = files;
     if (images.length > 0) payload.images = images;
     if (role) payload.role = role;
+    // P0: 传 CLI 用户工作目录给主进程，否则 agent.listDir('.') 用主进程 cwd 列出空目录
+    if (state.cwd) payload.cwd = state.cwd;
+    if (state.cwd) payload.rootDir = state.cwd;
     if (modelId || templateId) {
         payload.clusterConfig = {
             templateId: templateId || 'minimal',
