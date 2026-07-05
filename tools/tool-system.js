@@ -225,8 +225,13 @@
                 }
             }
             if (missing.length > 0) {
-                var doc = generateToolDoc(name);
-                return makeResult(false, null, '缺少必填参数: ' + missing.join(', ') + '\n\n' + doc);
+                // P0: 错误回灌用精简参数提示而非完整 markdown doc,
+                // 避免表格框线 │ 撑满宽度与 UI footer 粘连.
+                var requiredHints = (tool.params || [])
+                    .filter(function(p) { return p.required; })
+                    .map(function(p) { return p.name + ' (' + (p.type || '字符串') + ')'; })
+                    .join(', ');
+                return makeResult(false, null, '缺少必填参数: ' + missing.join(', ') + '。必填参数: ' + requiredHints + '。示例: ' + (tool.usage || '{}'));
             }
         }
 

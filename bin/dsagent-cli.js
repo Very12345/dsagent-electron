@@ -2268,6 +2268,13 @@ async function runInteractive(token, timeout, raw, continueSession) {
                     var success = msg.success !== false;
                     var summary = msg.summary || '';
                     if (!summary && msg.content) summary = msg.content.substring(0, 80);
+                    // P0: 错误回灌含 tool doc markdown (### 标题 + 表格框线 │)，
+                    // 被当作一行渲染时表格框线撑满宽度与 UI footer 粘连。
+                    // 剥离 markdown 标题/表格框线，只留首行错误提示。
+                    if (summary && typeof summary === 'string' && summary.indexOf('缺少必填参数') >= 0) {
+                        var firstLine = summary.split('\n')[0];
+                        summary = firstLine + '（/help 查看完整工具说明）';
+                    }
                     if (summary) {
                         clearSpinner();
                         var resultColor = success ? C.green : C.red;
