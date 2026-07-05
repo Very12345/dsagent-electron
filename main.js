@@ -3048,10 +3048,7 @@ function setupIpcHandlers() {
         if (!subagentManager) return { success: false };
         return { success: true, templates: subagentManager.listTemplates() };
     });
-    ipcMain.handle('subagent-invoke', async (event, params) => {
-        if (!subagentManager) return { success: false };
-        return await subagentManager.invoke(params);
-    });
+    // subagent-invoke 已在行 511 注册（P0: 子代理工具桥接），此处不再重复注册
 
     // cwd 变更 IPC（CLI /cd 时通知桌面版）
     ipcMain.handle('cwd-changed', async (event, path) => {
