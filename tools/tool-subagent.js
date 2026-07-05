@@ -37,8 +37,9 @@
                 if (!res || !res.success) {
                     return makeResult(false, null, (res && res.error) || '子代理调用失败');
                 }
-                var summary = '【子代理·' + template + '】\n' + (res.summary || res.result || '');
-                return makeResult(true, summary);
+                // res.summary 已由 main.js subagent-invoke handler 从 result.data.data.markdown 提取
+                var summary = (res && res.summary) || '子代理执行完成（无文本输出）';
+                return makeResult(true, '【子代理·' + template + '】\n' + summary);
             } catch (e) {
                 return makeResult(false, null, 'subagent 错误: ' + (e.message || e));
             }

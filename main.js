@@ -518,12 +518,18 @@ function setupAgentIPC() {
             if (!template || !task) {
                 return { success: false, error: '缺少必填参数: template 或 task' };
             }
-            // 调 subagentManager.invoke(template, task, opts)
-            var opts = {};
-            if (payload.files) opts.files = payload.files;
-            if (payload.batchId) opts.batchId = payload.batchId;
-            var result = await subagentManager.invoke(template, task, opts);
-            return { success: true, summary: result.summary || result, result: result };
+            // 调 subagentManager.invoke(params) —— 接收单个 params 对象，字段名是 prompt（不是 task）
+            var subParams = {
+                template: template,
+                prompt: task,  // 字段名对齐 subagent-manager.js 期望的 prompt
+                files: payload.files || null,
+                batchId: payload.batchId || null
+            };
+            var result = await subagentManager.invoke(subParams);
+            // invoke 返回 {success, agentId, data}, data 是 handleSubagentRequest 的 result
+            // handleSubagentRequest 返回 {success, data: {markdown, conversationUrl, ...}}
+            var markdown = result && result.data && result.data.data && (result.data.data.markdown || result.data.data.text) || '';
+            return { success: true, summary: markdown || '子代理执行完成（无文本输出）', result: result };
         } catch (e) {
             return { success: false, error: 'subagent-invoke 异常: ' + (e.message || e) };
         }

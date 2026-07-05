@@ -73,7 +73,12 @@ function createSubagentManager(orchestratorRef) {
 
     // 触发一个 subagent
     // params: { template, prompt, modelOverride?, parentAgentId?, depth?, files? }
+    // 防御性兜底：容忍 task 字段名错位（tool-subagent.js/main.js 旧版传 task 而非 prompt）
     async function invoke(params) {
+        if (!params || typeof params !== 'object') {
+            return { success: false, error: 'invoke 参数须为对象 {template, prompt}' };
+        }
+        if (!params.prompt && params.task) params.prompt = params.task;
         const tpl = getTemplate(params.template);
         if (!tpl) return { success: false, error: 'Unknown subagent template: ' + params.template };
 
