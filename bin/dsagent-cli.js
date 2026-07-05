@@ -385,7 +385,7 @@ async function runInteractive(token, timeout, raw, continueSession) {
         'atomcode': {
             name:'AtomCode',
             reset:'\x1b[0m', bold:'\x1b[1m', dim:'\x1b[2m',
-            cyan:'\x1b[34m', magenta:'\x1b[95m', gray:'\x1b[90m',
+            cyan:'\x1b[96m', magenta:'\x1b[95m', gray:'\x1b[90m',
             red:'\x1b[91m', green:'\x1b[92m', yellow:'\x1b[93m',
             rev:'\x1b[7m',
         },
@@ -648,20 +648,6 @@ async function runInteractive(token, timeout, raw, continueSession) {
             }
         }
 
-        // ── 冲刷表格缓冲（回复以表格结尾时使用） ──
-        function flushTableAccum() {
-            if (state._tableAccum && state._tableAccum.length > 0) {
-                var tbl = flushTable(state._tableAccum, state.cols || 80);
-                state._tableAccum = [];
-                if (tbl) {
-                    var tblLines = tbl.split('\n');
-                    for (var tbi = 0; tbi < tblLines.length; tbi++) {
-                        pushBodyRow(tblLines[tbi]);
-                    }
-                }
-            }
-        }
-
         // 水平线 ---
         if (/^[-*_]{3,}$/.test(trimmed)) {
             return { line: '', skip: false };
@@ -697,6 +683,20 @@ async function runInteractive(token, timeout, raw, continueSession) {
 
         // 默认：行内渲染
         return { line: renderMdInline(line), skip: false };
+    }
+
+    // ── 冲刷表格缓冲（回复以表格结尾时使用） ──
+    function flushTableAccum() {
+        if (state._tableAccum && state._tableAccum.length > 0) {
+            var tbl = flushTable(state._tableAccum, state.cols || 80);
+            state._tableAccum = [];
+            if (tbl) {
+                var tblLines = tbl.split('\n');
+                for (var tbi = 0; tbi < tblLines.length; tbi++) {
+                    pushBodyRow(tblLines[tbi]);
+                }
+            }
+        }
     }
 
     // A-2: 跨行表格对齐刷出
@@ -1294,11 +1294,6 @@ async function runInteractive(token, timeout, raw, continueSession) {
         var bodyRowsOnScreen = Math.min(visibleBodyLen, Math.max(0, h - totalFooterRows));
         var footerTop = bodyRowsOnScreen;
 
-        process.stdout.write('\x1b[?2026l\x1b[?25l');
-
-        var sep = '';
-        for (var ci = 0; ci < w; ci++) sep += '─';
-
         // Footer 从 footerTop 下一行开始
         var topRuleRow = footerTop + 1;
         var inputRow = topRuleRow + 1;
@@ -1307,7 +1302,20 @@ async function runInteractive(token, timeout, raw, continueSession) {
         var goalRow = hasGoal ? (menuStartRow + menuRows) : -1;
         var statusRow = hasGoal ? (goalRow + 1) : (menuStartRow + menuRows);
 
-        process.stdout.write(pos(topRuleRow, 1) + C.EL + C.cyan + sep + C.reset);
+        // 预清除：从旧 footer 顶部到屏幕底，确保菜单关闭后残影被擦净
+        var oldFooterTop = state._lastFooterTop;
+        state._lastFooterTop = footerTop;
+        var clearFrom = oldFooterTop !== undefined ? Math.min(oldFooterTop + 1, topRuleRow) : topRuleRow;
+        for (var cr = clearFrom; cr <= h; cr++) {
+            process.stdout.write(pos(cr, 1) + C.EL);
+        }
+
+        process.stdout.write('\x1b[?2026l\x1b[?25l');
+
+        var sep = '';
+        for (var ci = 0; ci < w; ci++) sep += '─';
+
+        process.stdout.write(pos(topRuleRow, 1) + C.cyan + sep + C.reset);
 
         var slicedMiddle = inputLines.slice(inputViewStart, inputViewStart + middleRows);
         for (var i = 0; i < slicedMiddle.length; i++) {
@@ -1481,8 +1489,6 @@ async function runInteractive(token, timeout, raw, continueSession) {
     // 3. welcome push 到 body（仅数组，不 emit）
     state.body.push('');
     state.body.push(C.bold + 'dsagent-electron' + C.reset + C.gray + ' v' + require('../package.json').version + C.reset);
-    state.body.push(C.gray + state.status.cwd + C.reset);
-    state.body.push(C.gray + (state.modelId || 'deepseek') + C.reset);
     state.body.push('');
     state.body.push(C.gray + 'type something, or press / to browse commands' + C.reset);
     state.body.push(C.gray + '/help  to view all commands' + C.reset);
@@ -1622,6 +1628,13 @@ async function runInteractive(token, timeout, raw, continueSession) {
             // Ctrl+Shift+C (keyCode=67, modifier=6) → 复制选中文本/代码块到剪贴板
             if (keyCode === 67 && modifier === 6) {
                 copySelectedToClipboard();
+                return;
+            }
+            // Ctrl+Tab (keyCode=9, modifier=5) → 切换 Plan/Build 模式
+            if (keyCode === 9 && modifier === 5) {
+                state.mode = state.mode === 'plan' ? 'build' : 'plan';
+                setStatus(state.status.model, '/help 查看命令', state.status.ctx);
+                echoSystem('模式: ' + (state.mode === 'plan' ? 'Plan（只读探索）' : 'Build（完整执行）'));
                 return;
             }
             return;

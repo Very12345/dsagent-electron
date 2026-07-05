@@ -21,11 +21,33 @@ function createOrchestrator(deps) {
         return _subagentManager || (orchestratorInstance && orchestratorInstance.subagentManager);
     }
 
-    // 对话上下文缓存：{ agentId → { modelId, conversationUrl, historyInjected, lastResponse } }
+    // 对话上下文缓存：{ agentId → { modelId, conversationUrl, historyInjected, lastResponse, turnCount, lastCompressAt } }
     const contexts = new Map();
 
-    // 历史注入分段长度（按字符估算，超过 inputMaxLen 一定比例就分段）
-    const INJECT_SEGMENT_RATIO = 0.4;  // 每段 = inputMaxLen * 0.4
+    // 历史注入分段长度（按字符估算，超过 effectiveWindow 一定比例就分段）
+    const INJECT_SEGMENT_RATIO = 0.4;  // 每段 = effectiveWindow * 0.4
+
+    // ===== 网页滑动窗口估算（P0: 窗口校准） =====
+    // 网页侧（DeepSeek/Qwen 服务器）真实上下文窗口无法直接观测，
+    // inputMaxLen 是模型标称值，服务端实际保留的有效上下文通常更小。
+    // 用 effectiveWindow 作为保守估算，所有压缩/注入阈值都基于它而非 inputMaxLen。
+    // 用户可在 model.capabilities.effectiveWindow 中显式配置；否则取 inputMaxLen * 0.6。
+    const DEFAULT_WINDOW_RATIO = 0.6;
+
+    function getEffectiveWindow(model) {
+        const cap = (model && model.model && model.model.capabilities) || {};
+        if (cap.effectiveWindow && cap.effectiveWindow > 0) return cap.effectiveWindow;
+        const inputMaxLen = cap.inputMaxLen || 32768;
+        return Math.floor(inputMaxLen * DEFAULT_WINDOW_RATIO);
+    }
+
+    // 持续对话压缩触发阈值：当本地累计消息字符数超过 effectiveWindow 的 70% 时，
+    // 认为网页侧最早上下文可能已被滑动出窗口，需要给当前 userText 追加"近期关键事实"前缀。
+    const CONTINUOUS_COMPRESS_RATIO = 0.7;
+    // 触发压缩后保留近多少条消息作为"近期"全量
+    const CONTINUOUS_KEEP_LATEST = 5;
+    // 同一会话两次压缩之间的最小轮次间隔，避免每轮都重算摘要
+    const COMPRESS_MIN_TURN_GAP = 3;
 
     // ===== 工具函数：剥离 system-reminder（不存入历史） =====
     function stripSystemReminder(text) {
@@ -103,11 +125,28 @@ function createOrchestrator(deps) {
         if (!model) return { success: false, error: 'Model not found: ' + modelId };
 
         const cap = model.model.capabilities || {};
-        const inputMaxLen = cap.inputMaxLen || 32768;
+        const effectiveWindow = getEffectiveWindow(model);
 
         try {
             // 1. 获取或创建上下文
             let ctx = contexts.get(agentId);
+            // L2 缓存丢失兜底：从 L1 历史反查 conversationUrl 重建 ctx（避免重启后误建新对话）
+            if (!ctx && payload.history && payload.history.id && payload.history.conversationUrl) {
+                ctx = {
+                    agentId: agentId,
+                    modelId: modelId,
+                    conversationUrl: payload.history.conversationUrl,
+                    historyInjected: true,  // L1 已有的历史，网页侧也已有，不必重灌
+                    injectedSegments: 0,
+                    lastResponse: '',
+                    turnCount: (payload.history.messages || []).length,
+                    lastCompressAt: 0,
+                    _messageAlreadySent: false,
+                    _recoveredFromL1: true
+                };
+                contexts.set(agentId, ctx);
+                console.log('[Orch] ctx recovered from L1 history, convUrl=' + ctx.conversationUrl.substring(0, 60));
+            }
             const isNewConversation = !ctx || !ctx.conversationUrl || payload.forceNew;
 
             // 2. 决定是否需要新建对话 / 历史注入
@@ -127,18 +166,21 @@ function createOrchestrator(deps) {
                     historyInjected: false,
                     injectedSegments: 0,
                     lastResponse: '',
+                    turnCount: 0,
+                    lastCompressAt: 0,
                     _messageAlreadySent: !!(initialUserText)  // 如果 userText 已随 newChat 发送，标记跳过后续 sendMessage
                 };
                 contexts.set(agentId, ctx);
 
-                // 历史注入（如果带了 history 且超长）
+                // 历史注入（如果带了 history 且超长）— 阈值用 effectiveWindow 而非 inputMaxLen
                 if (payload.history && payload.history.messages && payload.history.messages.length > 0) {
-                    const injectResult = await injectHistory(modelId, payload.history.messages, inputMaxLen, ctx && ctx.conversationUrl);
+                    const injectResult = await injectHistory(modelId, payload.history.messages, effectiveWindow, ctx && ctx.conversationUrl);
                     if (!injectResult.success) {
                         return { success: false, error: 'History injection failed: ' + injectResult.error, partial: true };
                     }
                     ctx.historyInjected = true;
                     ctx.injectedSegments = injectResult.segments;
+                    ctx.turnCount = (payload.history.messages || []).length;
                 }
             } else {
                 // 已有对话：导航回去（网页版需要）
@@ -161,6 +203,34 @@ function createOrchestrator(deps) {
                     } catch (e) { console.warn('[Orch] mode sync error:', e.message); }
                     await new Promise(r => setTimeout(r, 500)); // 等待 UI 切换生效
                 }
+
+                // P0: 持续对话压缩触发——同一 URL 聊久了，网页侧最早上下文会被滑出窗口，
+                // 本地以为 AI 还记得的内容实际已丢。这里在 userText 前追加"近期关键事实"前缀，
+                // 让 AI 知道哪些早期内容可能已不可见，引用时需重新说明。
+                // 不重灌历史（避免和网页侧已有内容重复），只追加一份本地生成的摘要。
+                if (payload.history && payload.history.messages && payload.history.messages.length > 0) {
+                    const histMessages = payload.history.messages;
+                    const totalChars = histMessages.reduce(function(s, m) { return s + (m.content || '').length; }, 0);
+                    const compressThreshold = Math.floor(effectiveWindow * CONTINUOUS_COMPRESS_RATIO);
+                    const turnsSinceLastCompress = ctx.turnCount - (ctx.lastCompressAt || 0);
+                    if (totalChars > compressThreshold
+                        && histMessages.length > CONTINUOUS_KEEP_LATEST * 2
+                        && turnsSinceLastCompress >= COMPRESS_MIN_TURN_GAP) {
+                        const compressMessages = histMessages.slice(0, -CONTINUOUS_KEEP_LATEST * 2);
+                        const summaryLines = compressMessages.map(function(m) {
+                            var role = m.role === 'assistant' ? 'AI' : '用户';
+                            var content = (m.content || '').replace(/<[^>]*>/g, '');
+                            var preview = content.substring(0, 150);
+                            return role + ': ' + preview + (content.length > 150 ? '...' : '');
+                        }).join('\n');
+                        ctx._continuousCompressPrefix = '【⚠️ 网页侧滑动窗口提示】\n'
+                            + '以下早期内容（共 ' + compressMessages.length + ' 条消息）可能已超出网页侧有效上下文窗口，'
+                            + '你或许不再可见原文。若需引用，请向用户重新说明，不要假设你记得细节：\n'
+                            + summaryLines + '\n\n---\n\n';
+                        ctx.lastCompressAt = ctx.turnCount;
+                        console.log('[Orch] continuous compress triggered: ' + compressMessages.length + ' msgs summarized, totalChars=' + totalChars + ' threshold=' + compressThreshold);
+                    }
+                }
             }
 
             // 3. 文件能力校验
@@ -174,9 +244,14 @@ function createOrchestrator(deps) {
             // 4. 发送消息（如果 newChat 已附带 userText 发送，则跳过）
             if (!ctx._messageAlreadySent) {
                 var userText = payload.message && payload.message.text || '';
+                // 持续对话压缩前缀（P0: 网页滑动窗口对齐）——在用户消息前追加早期摘要
+                var continuousPrefix = ctx._continuousCompressPrefix || '';
+                if (continuousPrefix) {
+                    ctx._continuousCompressPrefix = '';  // 用完即清，避免下轮重复
+                }
                 // 压缩后状态恢复：注入 TASK + FILES EDITED/READ
                 var compressReminder = buildCompressStateReminder();
-                var finalText = compressReminder ? userText + compressReminder : userText;
+                var finalText = (continuousPrefix ? continuousPrefix : '') + userText + (compressReminder ? compressReminder : '');
                 const sendArgs = {
                     text: finalText,
                     files: payload.files || [],
@@ -373,6 +448,9 @@ function createOrchestrator(deps) {
                 } catch (e) { /* 非关键 */ }
             }
 
+            // P0: 本轮 turn 结束，递增 turnCount（用于持续对话压缩触发间隔控制）
+            ctx.turnCount = (ctx.turnCount || 0) + 1;
+
             return {
                 success: true,
                 data: {
@@ -391,7 +469,8 @@ function createOrchestrator(deps) {
     }
 
     // ===== 历史注入：分段发送 =====
-    async function injectHistory(modelId, messages, inputMaxLen, conversationUrl) {
+    // windowBudget 为有效窗口估算值（effectiveWindow），非模型标称 inputMaxLen
+    async function injectHistory(modelId, messages, windowBudget, conversationUrl) {
         // Compaction UX: 标记开始
         console.log('[Compaction] Starting history compaction...');
         // 把 messages 拼成文本
@@ -401,9 +480,9 @@ function createOrchestrator(deps) {
         }).join('\n\n---\n\n');
 
         // P4: 上下文压缩（参考 atomcode 冷区设计）
-        // 当文本超过 70% inputMaxLen 时，压缩旧轮次为摘要，保留最近 5 轮全量
-        const COMPRESS_THRESHOLD = Math.floor(inputMaxLen * 0.7);
-        const OVERFLOW_THRESHOLD = Math.floor(inputMaxLen * 0.85);
+        // 当文本超过 70% windowBudget 时，压缩旧轮次为摘要，保留最近 5 轮全量
+        const COMPRESS_THRESHOLD = Math.floor(windowBudget * 0.7);
+        const OVERFLOW_THRESHOLD = Math.floor(windowBudget * 0.85);
         const KEEP_LATEST = 5;
         let finalText = text;
         let compressed = false;
@@ -454,7 +533,7 @@ function createOrchestrator(deps) {
                 + '\n\n请基于以上历史继续对话。';
         }
 
-        const segLen = Math.floor(inputMaxLen * INJECT_SEGMENT_RATIO);
+        const segLen = Math.floor(windowBudget * INJECT_SEGMENT_RATIO);
         const segments = [];
         if (finalText.length <= segLen) {
             // 不超长：单段注入
