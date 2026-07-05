@@ -643,11 +643,20 @@ async function runInteractive(token, timeout, raw, continueSession) {
         // A-2: 非表格行到达时刷出缓冲的表格
         if (state._tableAccum && state._tableAccum.length > 0) {
             var tbl = flushTable(state._tableAccum, state.cols || 80);
+            var rowsToRender = state._tableAccum;
             state._tableAccum = [];
             if (tbl) {
                 var tblLines = tbl.split('\n');
                 for (var tbi = 0; tbi < tblLines.length; tbi++) {
                     pushBodyRow(tblLines[tbi]);
+                }
+            } else {
+                // P0: flushTable 返回空时 fallback → 原始行作为纯文本渲染
+                for (var rfi = 0; rfi < rowsToRender.length; rfi++) {
+                    var rawLine = rowsToRender[rfi];
+                    if (/^[-:|\s]+$/.test(rawLine.replace(/\|/g, '').trim())) continue;
+                    var clean = rawLine.replace(/^\||\|$/g, '').split('|').map(function(c) { return c.trim(); }).join('  ');
+                    pushBodyRow('  ' + clean);
                 }
             }
         }
@@ -693,11 +702,20 @@ async function runInteractive(token, timeout, raw, continueSession) {
     function flushTableAccum() {
         if (state._tableAccum && state._tableAccum.length > 0) {
             var tbl = flushTable(state._tableAccum, state.cols || 80);
+            var rowsToRender = state._tableAccum;
             state._tableAccum = [];
             if (tbl) {
                 var tblLines = tbl.split('\n');
                 for (var tbi = 0; tbi < tblLines.length; tbi++) {
                     pushBodyRow(tblLines[tbi]);
+                }
+            } else {
+                // P0: flushTable 返回空时 fallback → 原始行作为纯文本渲染
+                for (var rfi = 0; rfi < rowsToRender.length; rfi++) {
+                    var rawLine = rowsToRender[rfi];
+                    if (/^[-:|\s]+$/.test(rawLine.replace(/\|/g, '').trim())) continue;
+                    var clean = rawLine.replace(/^\||\|$/g, '').split('|').map(function(c) { return c.trim(); }).join('  ');
+                    pushBodyRow('  ' + clean);
                 }
             }
         }
@@ -726,7 +744,14 @@ async function runInteractive(token, timeout, raw, continueSession) {
                     if (w > maxW) maxW = w;
                 }
             });
-            colWidths.push(Math.min(maxW, Math.floor((termWidth - maxCols * 3 - 2) / Math.max(1, maxCols))));
+            colWidths.push(Math.min(maxW, Math.max(1, Math.floor((termWidth - maxCols * 3 - 2) / Math.max(1, maxCols)))));
+        }
+        // 调试：列宽为 0 或负数时报警
+        for (var dwi = 0; dwi < colWidths.length; dwi++) {
+            if (colWidths[dwi] <= 0) {
+                console.warn('[Table] colWidths[' + dwi + ']=' + colWidths[dwi] + ' termWidth=' + termWidth + ' maxCols=' + maxCols);
+                colWidths[dwi] = Math.max(1, termWidth > 0 ? Math.floor(termWidth / Math.max(1, maxCols) / 2) : 10);
+            }
         }
         // 组装输出
         var out = '';
