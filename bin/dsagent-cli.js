@@ -2138,6 +2138,13 @@ async function runInteractive(token, timeout, raw, continueSession) {
                     var lines = (collectedTextLines[tli] || '').split('\n');
                     for (var lni = 0; lni < lines.length; lni++) {
                         if (!lines[lni]) { pushBodyRow(''); continue; }
+                        // P0: 表格行不 visualWrap (会割裂超长行导致后续割裂行
+                        // 不被识别为表格, 触发提前刷出残表). 整行原样累积到
+                        // _tableAccum, flushTable 内部 colWidths 已支持超宽列硬截.
+                        if (lines[lni].trim().startsWith('|')) {
+                            renderMdLine(lines[lni]);
+                            continue;
+                        }
                         var wrapped = visualWrap(lines[lni], maxTW);
                         if (wrapped.length === 0) wrapped = [''];
                         for (var wi = 0; wi < wrapped.length; wi++) {
@@ -2318,6 +2325,14 @@ async function runInteractive(token, timeout, raw, continueSession) {
                         for (var tli = 0; tli < textLines.length; tli++) {
                             if (!textLines[tli]) {
                                 pushBodyRow('');
+                                continue;
+                            }
+                            // P0: 表格行不 visualWrap (会割裂超长行导致 renderMdLine
+                            // 不识别后续割裂行, 触发提前刷出残表). 整行原样累积到
+                            // _tableAccum, flushTable 内部 colWidths 已支持超宽列硬截.
+                            if (textLines[tli].trim().startsWith('|')) {
+                                var mdT = renderMdLine(textLines[tli]);
+                                redraw();
                                 continue;
                             }
                             var wrapped = visualWrap(textLines[tli], maxTW);
