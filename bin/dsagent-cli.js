@@ -758,15 +758,23 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 var share = Math.floor(extra * naturalWidths[ei] / sumNatural);
                 colWidths.push(Math.max(1, naturalWidths[ei] + share));
             }
-            // 收尾误差给最后一列
+            // 收尾误差：补到末列（正数加，负数扣，但保证列宽 ≥ 1）
             var sumAllocated = colWidths.reduce(function(a, b) { return a + b; }, 0);
             var diff = availWidth - sumAllocated;
-            if (diff > 0 && colWidths.length > 0) colWidths[colWidths.length - 1] += diff;
+            if (diff !== 0 && colWidths.length > 0) {
+                colWidths[colWidths.length - 1] = Math.max(1, colWidths[colWidths.length - 1] + diff);
+            }
         } else {
             // 超宽或空表：等宽分配，最小 1
             var evenWidth = Math.max(1, Math.floor(availWidth / Math.max(1, maxCols)));
             for (var ei2 = 0; ei2 < maxCols; ei2++) {
                 colWidths.push(Math.min(naturalWidths[ei2], evenWidth));
+            }
+            // 误差补到末列，确保 ΣcolWidths = availWidth
+            var sumAlloc = colWidths.reduce(function(a, b) { return a + b; }, 0);
+            var diff2 = availWidth - sumAlloc;
+            if (diff2 !== 0 && colWidths.length > 0) {
+                colWidths[colWidths.length - 1] = Math.max(1, colWidths[colWidths.length - 1] + diff2);
             }
         }
         // 组装输出
@@ -2025,6 +2033,8 @@ async function runInteractive(token, timeout, raw, continueSession) {
 
         // 显示用户消息
         echoUser(text);
+        // 立即重绘 body 区，让用户消息在 streaming 开始前就可见
+        redrawBodyContent();
         // 用户主动发送消息时跳回最新
         state.scrollOffset = 0;
         // 计数会话轮次
