@@ -765,10 +765,26 @@ async function runInteractive(token, timeout, raw, continueSession) {
                 colWidths[colWidths.length - 1] = Math.max(1, colWidths[colWidths.length - 1] + diff);
             }
         } else {
-            // 超宽或空表：等宽分配，最小 1
-            var evenWidth = Math.max(1, Math.floor(availWidth / Math.max(1, maxCols)));
+            // 超宽或空表：窄列保留自然宽度，超宽列按比例分配剩余空间
+            // 第一步：窄列（natural <= evenWidth）直接用 natural
+            var remainingWidth = availWidth;
+            var overflowCols = [];  // 超宽列的索引
+            var overflowNaturalSum = 0;
             for (var ei2 = 0; ei2 < maxCols; ei2++) {
-                colWidths.push(Math.min(naturalWidths[ei2], evenWidth));
+                if (naturalWidths[ei2] <= evenWidth) {
+                    colWidths.push(naturalWidths[ei2]);
+                    remainingWidth -= naturalWidths[ei2];
+                } else {
+                    colWidths.push(null);  // 占位，待填
+                    overflowCols.push(ei2);
+                    overflowNaturalSum += naturalWidths[ei2];
+                }
+            }
+            // 第二步：超宽列按自然宽度比例分配 remainingWidth
+            for (var oi = 0; oi < overflowCols.length; oi++) {
+                var idx = overflowCols[oi];
+                var alloc = Math.max(1, Math.floor(remainingWidth * naturalWidths[idx] / Math.max(1, overflowNaturalSum)));
+                colWidths[idx] = alloc;
             }
             // 误差补到末列，确保 ΣcolWidths = availWidth
             var sumAlloc = colWidths.reduce(function(a, b) { return a + b; }, 0);
