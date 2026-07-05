@@ -249,6 +249,31 @@
                         }
                     }
                 } catch(le) {}
+                // P0: 动态步长预算 + 停滞检测
+                try {
+                    if (typeof window.__dsagent_disciplineCheck === 'function') {
+                        var dc = window.__dsagent_disciplineCheck(name, JSON.stringify(params), rawResult && rawResult.success);
+                        if (dc && dc.blocked) {
+                            return makeResult(true, null, null, { tool: name, warning: dc.reason, block: true });
+                        }
+                        if (dc && dc.warning && rawResult && typeof rawResult === 'object') {
+                            rawResult._disciplineWarning = dc.warning;
+                        }
+                    }
+                } catch(de) {}
+                // P0: 写类工具成功后强制语法验证
+                if (rawResult && rawResult.success && WRITE_TOOLS.indexOf(name) >= 0) {
+                    var editedPath2 = getEditedFilePath(name, params, body);
+                    var syntaxErr2 = await postEditSyntaxCheck(editedPath2);
+                    if (syntaxErr2) {
+                        if (typeof rawResult.data === 'string') {
+                            rawResult.data = rawResult.data + syntaxErr2;
+                        } else {
+                            rawResult._syntaxWarning = syntaxErr2;
+                        }
+                        console.warn('[SyntaxCheck] ' + name + ' on ' + editedPath2 + ' reported:' + syntaxErr2.substring(0, 200));
+                    }
+                }
                 // 如果 handler 已经返回标准 JSON 格式，直接使用
                 if (rawResult && typeof rawResult === 'object' && 'success' in rawResult) {
                     result = rawResult;
@@ -275,13 +300,81 @@
                     }
                 }
             } catch(le) {}
+            // P0: 动态步长预算 + 停滞检测（参考 atomcode DisciplineState）
+            try {
+                if (typeof window.__dsagent_disciplineCheck === 'function') {
+                    var dc = window.__dsagent_disciplineCheck(name, JSON.stringify(params), rawResult && rawResult.success);
+                    if (dc && dc.blocked) {
+                        return makeResult(true, null, null, { tool: name, warning: dc.reason, block: true });
+                    }
+                    if (dc && dc.warning) {
+                        // 不阻塞，但把警告附到结果上让 LLM 看到
+                        if (rawResult && typeof rawResult === 'object' && 'success' in rawResult) {
+                            rawResult._disciplineWarning = dc.warning;
+                        }
+                    }
+                }
+            } catch(de) {}
             if (rawResult && typeof rawResult === 'object' && 'success' in rawResult) {
+                // P0: 写类工具成功后强制语法验证
+                if (rawResult.success && WRITE_TOOLS.indexOf(name) >= 0) {
+                    var editedPath = getEditedFilePath(name, params, body);
+                    var syntaxErr = await postEditSyntaxCheck(editedPath);
+                    if (syntaxErr) {
+                        // 把语法错误追加到返回数据，让 LLM 看到并继续修
+                        var origData = rawResult.data;
+                        var warnText = (typeof origData === 'string' ? origData : (origData && origData.message ? origData.message : '')) + syntaxErr;
+                        if (typeof origData === 'string') {
+                            rawResult.data = warnText;
+                        } else {
+                            rawResult.data = origData;
+                            rawResult._syntaxWarning = syntaxErr;
+                        }
+                        console.warn('[SyntaxCheck] ' + name + ' on ' + editedPath + ' reported:' + syntaxErr.substring(0, 200));
+                    }
+                }
                 return rawResult;
             }
             return makeResult(true, rawResult, null, { tool: name });
         } catch (e) {
             return makeResult(false, null, e.message || '执行失败', { tool: name });
         }
+    }
+
+    // ==================== P0: 编辑后强制语法验证（参考 atomcode auto_fix.rs） ====================
+    // 写类工具成功后，框架层强制跑一次语法检查（node --check / python -m py_compile / tsc --noEmit / json parse）
+    // 失败把错误回灌给 LLM 继续修。把"模型自觉验证"变成"框架强制验证"，杜绝 AI 谎报完成。
+    var WRITE_TOOLS = ['edit', 'edit_file', 'save', 'write', 'write_file', 'search_replace', 'search-replace'];
+
+    function getEditedFilePath(name, params, body) {
+        // 不同工具用不同字段名承载路径
+        if (name === 'save' || name === 'write' || name === 'write_file') {
+            return params.path || params.file || params.file_path || '';
+        }
+        if (name === 'edit' || name === 'edit_file') {
+            return params.path || params.file || params.file_path || '';
+        }
+        if (name === 'search_replace' || name === 'search-replace') {
+            return params.path || params.file || params.file_path || '';
+        }
+        return params.path || params.file || params.file_path || '';
+    }
+
+    // 通过 electronAPI 调用主进程做磁盘语法检查（主进程有 node 子进程权限）
+    // 返回 '' 表示无问题，否则是错误提示文本
+    async function postEditSyntaxCheck(filePath) {
+        if (!filePath) return '';
+        var ext = (filePath.split('.').pop() || '').toLowerCase();
+        // 仅对常见可静态检查的扩展名做检查，避免对未知类型瞎跑
+        var checkable = ['js', 'mjs', 'cjs', 'py', 'json', 'ts', 'tsx', 'jsx', 'vue'];
+        if (checkable.indexOf(ext) < 0) return '';
+        try {
+            if (window.electronAPI && typeof window.electronAPI.agentSyntaxCheck === 'function') {
+                var res = await window.electronAPI.agentSyntaxCheck(filePath, ext);
+                if (res && res.success && res.error) return '\n⚠ SYNTAX ERROR: ' + res.error;
+            }
+        } catch (e) { /* 非关键，静默 */ }
+        return '';
     }
 
     // ==================== 初始化 ====================
@@ -304,6 +397,9 @@
         makeResult: makeResult,
         clearReadHistory: function() { readTools = new Set(); },
         getReadHistory: function() { return Array.from(readTools); },
-        setReadHistory: function(arr) { readTools = new Set(arr || []); }
+        setReadHistory: function(arr) { readTools = new Set(arr || []); },
+        // 暴露给外部测试/复用
+        _postEditSyntaxCheck: postEditSyntaxCheck,
+        _WRITE_TOOLS: WRITE_TOOLS
     };
 })();

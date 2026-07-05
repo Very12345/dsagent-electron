@@ -230,6 +230,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fileHistoryVersions: (filePath, sessionId) => ipcRenderer.invoke('file-history-versions', filePath, sessionId),
     fileHistoryRestore: (filePath, version, sessionId) => ipcRenderer.invoke('file-history-restore', filePath, version, sessionId),
     fileHistoryBackup: (filePath) => ipcRenderer.invoke('file-history-backup', filePath),
+    // P0: 编辑后强制语法验证
+    agentSyntaxCheck: (filePath, ext) => ipcRenderer.invoke('agent-syntax-check', filePath, ext),
     // 插件管理（CC 生态兼容）
     pluginList: () => ipcRenderer.invoke('plugin-list'),
     pluginInstall: (params) => ipcRenderer.invoke('plugin-install', params),

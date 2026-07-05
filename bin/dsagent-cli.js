@@ -302,7 +302,11 @@ function httpPostStream(path, data, onLine, signal) {
                     var line = buffer.substring(0, nlIdx).trim();
                     buffer = buffer.substring(nlIdx + 1);
                     if (line && onLine) {
-                        try { onLine(JSON.parse(line)); } catch(e) { /* ignore malformed line */ }
+                        // P0: JSON 修复链复用（参考 atomcode json_repair.rs）
+                        // 旧实现 try/catch 静默吞坏行 → 工具调用丢失 → AI 卡死
+                        // 现改用 lib/json-repair.js 的 5 层修复，仍解析失败时记录可调试信息
+                        var parsed = require('../lib/json-repair.js').parseLine(line);
+                        if (parsed && onLine) onLine(parsed);
                     }
                 }
             });

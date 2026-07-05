@@ -1384,6 +1384,76 @@ function setupAgentIPC() {
         return { success: !!fileHistory.backupBeforeWrite(filePath) };
     });
 
+    // ==================== P0: 编辑后强制语法验证（参考 atomcode auto_fix.rs） ====================
+    // 主进程跑磁盘语法检查（node --check / python -m py_compile / tsc --noEmit / json parse）
+    // 返回 { success: true, error: '' } 表示无问题；error 非空表示语法错误文本（前 3 行）
+    ipcMain.handle('agent-syntax-check', async (event, filePath, ext) => {
+        try {
+            if (!filePath || !fs.existsSync(filePath)) return { success: true, error: '' };
+            var lowerExt = (ext || (filePath.split('.').pop() || '')).toLowerCase();
+            var { execFile } = require('child_process');
+            // JSON：纯解析，无外部命令
+            if (lowerExt === 'json') {
+                try {
+                    var content = fs.readFileSync(filePath, 'utf-8');
+                    JSON.parse(content);
+                    return { success: true, error: '' };
+                } catch (e) {
+                    return { success: true, error: filePath + ' is not valid JSON: ' + e.message };
+                }
+            }
+            // JS/MJS/CJS: node --check
+            if (lowerExt === 'js' || lowerExt === 'mjs' || lowerExt === 'cjs') {
+                return await new Promise(function(resolve) {
+                    execFile('node', ['--check', filePath], { timeout: 15000, windowsHide: true }, function(err, stdout, stderr) {
+                        if (err) {
+                            var firstLines = (stderr || err.message || '').split('\n').slice(0, 3).join('\n');
+                            resolve({ success: true, error: firstLines });
+                        } else {
+                            resolve({ success: true, error: '' });
+                        }
+                    });
+                });
+            }
+            // Python: python -m py_compile
+            if (lowerExt === 'py') {
+                return await new Promise(function(resolve) {
+                    var py = process.platform === 'win32' ? 'python' : 'python3';
+                    execFile(py, ['-m', 'py_compile', filePath], { timeout: 30000, windowsHide: true }, function(err, stdout, stderr) {
+                        if (err) {
+                            var firstLines = (stderr || err.message || '').split('\n').slice(0, 3).join('\n');
+                            resolve({ success: true, error: firstLines });
+                        } else {
+                            resolve({ success: true, error: '' });
+                        }
+                    });
+                });
+            }
+            // TS/TSX/JSX/Vue: tsc --noEmit（若环境有 tsc）
+            if (lowerExt === 'ts' || lowerExt === 'tsx' || lowerExt === 'jsx' || lowerExt === 'vue') {
+                return await new Promise(function(resolve) {
+                    execFile('npx', ['--no-install', 'tsc', '--noEmit', '--skipLibCheck', filePath], { timeout: 60000, windowsHide: true }, function(err, stdout, stderr) {
+                        if (err) {
+                            // tsc 不存在或非 0 退出。npx --no-install 找不到 tsc 时也视为不可检查（不报错）
+                            var msg = (stderr || '') + (stdout || '');
+                            if (/not found|ENOENT|command not found|no-install/i.test(msg)) {
+                                resolve({ success: true, error: '' });  // 无 tsc 环境，跳过
+                            } else {
+                                var firstLines = msg.split('\n').filter(function(l) { return l.trim(); }).slice(0, 3).join('\n');
+                                resolve({ success: true, error: firstLines });
+                            }
+                        } else {
+                            resolve({ success: true, error: '' });
+                        }
+                    });
+                });
+            }
+            return { success: true, error: '' };  // 未识别扩展名，跳过
+        } catch (e) {
+            return { success: true, error: '' };  // 检查失败不阻塞工具返回
+        }
+    });
+
     // 计划管理
     ipcMain.handle('agent-plan-load', async () => {
         return agent.planLoad();

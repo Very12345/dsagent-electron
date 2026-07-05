@@ -434,16 +434,19 @@
 
     // ==================== P1: JSON 修复（5层修复链） ====================
     // 参考 atomcode 的 json_repair.rs 设计
+    // 核心逻辑抽到 lib/json-repair.js（供 CLI 与 inject 共用），此处仅做 window 适配
     // 处理：Windows 路径误转义、trailing comma、unquoted key、markdown fence、单引号
 
+    // 尝试加载 Node 模块（CLI/主进程环境有 require）；注入环境无 require 时回退到本地实现
+    var _nodeRepair = null;
+    try { _nodeRepair = require('../lib/json-repair.js'); } catch(e) { _nodeRepair = null; }
+
     // 第0层：Windows 路径预逃逸
-    // 检测 "D:\test\foo.py" 中的 \t/\f 等，防止它们被 JSON.parse 解码
     function preEscapeWindowsPaths(str) {
+        if (_nodeRepair) return _nodeRepair.preEscapeWindowsPaths(str);
         return str.replace(/"([A-Za-z]:[^"]*)"/g, function(match, path) {
             if (!path) return match;
-            // 只处理包含反斜杠的路径
             if (path.indexOf('\\') < 0) return match;
-            // 只处理第一个字符是字母且第二个字符是冒号的（盘符）
             var escaped = path.replace(/\\([tbnrf])/g, '\\\\$1');
             return '"' + escaped + '"';
         });
@@ -451,40 +454,28 @@
 
     // 第2层：通用 JSON 修复
     function repairJson(str) {
+        if (_nodeRepair) return _nodeRepair.repairJson(str);
         if (!str || str.trim() === '') return '';
         var s = str.trim();
-
-        // 移除 Markdown 代码围栏
         s = s.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
-
-        // 替换单引号为双引号（但保留字符串内的单引号）
-        // 简单做法：将键和字符串值外的单引号替换
-        s = s.replace(/'(true|false|null|\d+)'/g, '$1'); // 布尔/数字的单引号
-        s = s.replace(/'([^']*?)'\s*:/g, '"$1":'); // key 的单引号
+        s = s.replace(/'(true|false|null|\d+)'/g, '$1');
+        s = s.replace(/'([^']*?)'\s*:/g, '"$1":');
         s = s.replace(/:\s*'([^']*?)'/g, function(m, content) {
-            // 如果内容包含双引号则不处理
             if (content.indexOf('"') >= 0) return m;
             return ': "' + content.replace(/"/g, '\\"') + '"';
         });
-
-        // 补全未加引号的 key（只补简单字母数字 key）
         s = s.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:/g, '$1"$2":');
-
-        // 移除 trailing comma
         s = s.replace(/,\s*([}\]])/g, '$1');
-        // 修正连续的逗号
         s = s.replace(/,+/g, ',');
-        // 移除对象/数组尾部的多余点
         s = s.replace(/\.\s*([}\]])/g, '$1');
-
         return s;
     }
 
-    // 第4层：兜底 Key-Value 提取（当 JSON 完全无法修复时）
+    // 第4层：兜底 Key-Value 提取
     function extractJsonFields(str) {
+        if (_nodeRepair) return _nodeRepair.extractJsonFields(str);
         if (!str) return {};
         var result = {};
-        // 匹配 key="value" 或 key='value' 或 key=value（无空格的值）
         var kvRegex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+?))(?:\s|$)/g;
         var match;
         while ((match = kvRegex.exec(str)) !== null) {
@@ -496,21 +487,13 @@
 
     // 主修复函数：5层修复链
     function repairToolArgs(toolName, args) {
+        if (_nodeRepair) return _nodeRepair.repairToolArgs(toolName, args);
         if (!args || args.trim() === '') return args;
-
-        // 第0层：Windows 路径预逃移
         var pre = preEscapeWindowsPaths(args);
-
-        // 第1层：快速路径 — 已经是合法 JSON
         try { JSON.parse(pre); return pre; } catch(e) {}
-
-        // 第2层：通用 JSON 修复
         var repaired = repairJson(pre);
         try { JSON.parse(repaired); return repaired; } catch(e) {}
-
-        // 第3层：专属修复 — edit_file 包含源代码，引号/换行可能未转义
         if (toolName === 'edit' || toolName === 'edit_file') {
-            // 尝试将参数按必填字段重组
             var fields = extractJsonFields(repaired || pre);
             if (fields.file || fields.file_path || fields.old_string) {
                 try {
@@ -524,16 +507,11 @@
                 } catch(e) {}
             }
         }
-
-        // 第4层：兜底 — Key-Value 提取
         var extracted = extractJsonFields(repaired || pre);
         var keys = Object.keys(extracted);
         if (keys.length > 0) {
-            // 至少提取到了有效字段，尝试组装为 JSON
             try { return JSON.stringify(extracted); } catch(e) {}
         }
-
-        // 全部失败，返回原值
         return args;
     }
 

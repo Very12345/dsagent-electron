@@ -522,20 +522,59 @@
     };
 
     // 异步确认：如不需要确认则直接返回 true，否则弹出确认对话框
+    // P1: Permission Store — 会话级授权缓存（参考 atomcode PermissionStore）
+    // 用户对某工具/命令模式 approve once 后，同会话内同 pattern 不再询问，消除 approve fatigue
+    E._permissionStore = { alwaysAllow: {}, deniedOnce: {} };  // key → true
+
+    function _permissionKey(lang, cmd) {
+        // 命令类：归一化为首词 + 危险标记，避免同模式不同参数重复问
+        if (lang === 'exec' || lang === 'cmd') {
+            var firstWord = (cmd || '').trim().split(/\s+/)[0].toLowerCase();
+            var isDangerous = E.isDangerousCommand(cmd);
+            return lang + '\0' + firstWord + '\0' + (isDangerous ? 'danger' : 'safe');
+        }
+        return lang;
+    }
+
     E.confirmCommand = async function(lang, cmd) {
         if (!E.needsConfirmation(lang, cmd)) return true;
+        var pkey = _permissionKey(lang, cmd);
+        // 会话级"始终允许"命中 → 直接放行
+        if (E._permissionStore.alwaysAllow[pkey]) {
+            console.log('[Perm] session-level always-allow hit: ' + pkey);
+            return true;
+        }
+        // 会话级"本次拒绝"标记（仅对当前调用有效，不持久化，但同 key 不再弹窗烦扰）
+        if (E._permissionStore.deniedOnce[pkey]) {
+            return false;
+        }
         var cmdDisplay = cmd && cmd.length > 200 ? cmd.substring(0, 200) + '...' : cmd;
         try {
             var result = await window.electronAPI.agentRequestConfirm({
                 lang: lang,
                 cmd: cmd,
-                cmdDisplay: cmdDisplay
+                cmdDisplay: cmdDisplay,
+                offerAlwaysAllow: true  // 告知 UI 可展示"本次会话不再询问"按钮
             });
-            return result && result.confirmed;
+            if (result && result.confirmed) {
+                // 用户选择"始终允许" → 缓存
+                if (result.alwaysAllow) {
+                    E._permissionStore.alwaysAllow[pkey] = true;
+                    console.log('[Perm] always-allow cached: ' + pkey);
+                }
+                return true;
+            }
+            // 拒绝 → 标记本次会话不再为同 key 弹窗（避免反复打扰）
+            E._permissionStore.deniedOnce[pkey] = true;
+            return false;
         } catch (e) {
             console.warn('Confirm dialog failed:', e);
             return false;
         }
+    };
+
+    E.clearPermissionStore = function() {
+        E._permissionStore = { alwaysAllow: {}, deniedOnce: {} };
     };
 
     // ==================== 命令执行引擎 ====================
@@ -782,13 +821,104 @@
 
     function loopGuardReset() {
         _loopRecent = [];
+        _turnToolCallCount = 0;
+        _turnNoEditRuns = 0;
+        _turnStartTime = Date.now();
+    }
+
+    // ==================== P0: 动态步长预算 + 停滞检测（参考 atomcode DisciplineState） ====================
+    // 现有 LoopGuard 仅检测"同调用重复"，无法识别"读文件→读文件→读文件"这种不同调用但无进展的停滞。
+    // 这里追加两个互补机制：
+    // 1. 动态步长预算：单 turn 内工具调用上限，按编辑文件数缩放（编辑越多预算越大）
+    // 2. 停滞检测：连续 N 次非 STATE_CHANGING 工具调用且无编辑 → 警告/打断
+
+    var MAX_TOOL_CALLS_PER_TURN = 200;       // 硬上限（与 atomcode discipline.rs 对齐）
+    var NO_EDIT_STAGNANT_WARN = 8;           // 连续 8 次无编辑 → 警告
+    var NO_EDIT_STAGNANT_BLOCK = 15;         // 连续 15 次无编辑 → 打断
+    var _turnToolCallCount = 0;              // 本 turn 工具调用计数
+    var _turnNoEditRuns = 0;                 // 本 turn 连续非编辑工具调用计数
+    var _turnEditedFiles = {};               // 本 turn 编辑过的文件（去重）
+    var _turnStartTime = Date.now();         // 本 turn 起始时间
+
+    // 在 loopGuardCheck 之外追加的步长/停滞检测
+    // 返回 { blocked, warning, budgetInfo }
+    function disciplineCheck(name, args, success) {
+        _turnToolCallCount++;
+        var isStateChanging = STATE_CHANGING.indexOf(name) >= 0;
+
+        if (isStateChanging && success) {
+            _turnNoEditRuns = 0;
+            // 记录编辑过的文件
+            try {
+                var parsed = typeof args === 'string' ? JSON.parse(args) : args;
+                var fp = parsed && (parsed.path || parsed.file || parsed.file_path) || '';
+                if (fp) _turnEditedFiles[fp] = true;
+            } catch(e) {}
+        } else {
+            _turnNoEditRuns++;
+        }
+
+        // 1. 硬步长上限
+        if (_turnToolCallCount >= MAX_TOOL_CALLS_PER_TURN) {
+            console.warn('[Discipline] HARD budget: ' + _turnToolCallCount + ' tool calls in one turn');
+            return {
+                blocked: true,
+                reason: '本回合工具调用已达上限 ' + MAX_TOOL_CALLS_PER_TURN + ' 次，已自动打断避免无限循环'
+            };
+        }
+
+        // 2. 动态步长预算警告：编辑文件数多时容忍更多调用，少时更早警告
+        var editedCount = Object.keys(_turnEditedFiles).length;
+        var dynamicBudget = 50 + editedCount * 10;  // 基础 50 + 每编辑一个文件 +10
+        if (_turnToolCallCount === dynamicBudget) {
+            console.log('[Discipline] dynamic budget hit: ' + _turnToolCallCount + ' calls, ' + editedCount + ' files edited');
+        }
+
+        // 3. 停滞检测：连续无编辑调用
+        if (_turnNoEditRuns === NO_EDIT_STAGNANT_WARN) {
+            return {
+                blocked: false,
+                warning: '已连续 ' + _turnNoEditRuns + ' 次未修改任何文件，是否在原地打转？请确认进展或换策略。'
+            };
+        }
+        if (_turnNoEditRuns >= NO_EDIT_STAGNANT_BLOCK) {
+            console.warn('[Discipline] STAGNANT block: ' + _turnNoEditRuns + ' consecutive no-edit calls');
+            return {
+                blocked: true,
+                reason: '已连续 ' + _turnNoEditRuns + ' 次未修改任何文件，疑似停滞，已自动打断。请向用户汇报当前状态。'
+            };
+        }
+
+        return { blocked: false };
+    }
+
+    function disciplineTurnStart() {
+        _turnToolCallCount = 0;
+        _turnNoEditRuns = 0;
+        _turnEditedFiles = {};
+        _turnStartTime = Date.now();
+    }
+
+    function disciplineStats() {
+        return {
+            toolCalls: _turnToolCallCount,
+            noEditRuns: _turnNoEditRuns,
+            editedFiles: Object.keys(_turnEditedFiles).length,
+            elapsedMs: Date.now() - _turnStartTime
+        };
     }
 
     // 导出到 window 供 inject 层调用
     window.__dsagent_loopGuardCheck = loopGuardCheck;
     window.__dsagent_loopGuardReset = loopGuardReset;
+    window.__dsagent_disciplineCheck = disciplineCheck;
+    window.__dsagent_disciplineTurnStart = disciplineTurnStart;
+    window.__dsagent_disciplineStats = disciplineStats;
     E.loopGuardCheck = loopGuardCheck;
     E.loopGuardReset = loopGuardReset;
+    E.disciplineCheck = disciplineCheck;
+    E.disciplineTurnStart = disciplineTurnStart;
+    E.disciplineStats = disciplineStats;
 
     // ==================== P1: 文件快照桥接 ====================
     window.__dsagent_fileHistoryBackup = function(filePath) {

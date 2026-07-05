@@ -451,6 +451,21 @@ function createOrchestrator(deps) {
             // P0: 本轮 turn 结束，递增 turnCount（用于持续对话压缩触发间隔控制）
             ctx.turnCount = (ctx.turnCount || 0) + 1;
 
+            // P1: Turn 级 Datalog — 写结构化 turn 记录（参考 atomcode turn/datalog.rs）
+            try {
+                var datalog = require('./lib/datalog.js');
+                var turnRecord = {
+                    turn: ctx.turnCount,
+                    modelId: modelId,
+                    conversationUrl: ctx.conversationUrl,
+                    userText: (payload.message && payload.message.text || '').substring(0, 500),
+                    assistantText: (ctx.lastResponse || '').substring(0, 1000),
+                    durationMs: ctx._turnStartTime ? (Date.now() - ctx._turnStartTime) : 0,
+                    error: null
+                };
+                datalog.writeTurn(payload.history && payload.history.id || agentId, turnRecord);
+            } catch(e) { /* 非关键 */ }
+
             return {
                 success: true,
                 data: {
