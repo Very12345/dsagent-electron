@@ -63,6 +63,10 @@ function toolsSection() {
     // 避免 AI 频繁调工具缺必填参数（如 read 缺 file_path）
     try {
         var cached = global.__toolDocsCache || '';
+        if (!cached) {
+            // CLI 路径下注入侧未上传，fallback 到静态集
+            cached = require('./lib/tool-docs.js').generateAllDocs();
+        }
         if (cached) {
             s += '\n## 工具调用说明（必填参数必须传，否则工具报错）\n' + cached + '\n';
         }
