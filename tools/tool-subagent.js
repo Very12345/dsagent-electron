@@ -5,7 +5,7 @@
     if (window.__dsagent_tools && window.__dsagent_tools._subagent_registered) return;
 
     window.__dsagent_tools.register({
-        name: ['subagent', 'sub_agent'],
+        name: ['subagent'],
         scope: '调用子代理执行独立子任务',
         description: '派一个子代理独立分析或执行子任务。子代理有独立上下文、独立人设、独立工具白名单，'
             + '不会污染主对话上下文。适合：大文件阅读总结、找 bug、代码审查、联网搜索、受限执行等。'

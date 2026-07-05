@@ -9,7 +9,7 @@
 - 输出应结构化，使用标题、列表、代码块等 Markdown 格式。
 
 ### 文件读取
-- 优先使用 subagent 深度分析大文件：`{"subagent": {"template": "bug-hunter", "prompt": "审查此文件的逻辑正确性"}}`
+- 优先使用 subagent 工具深度分析大文件：`{"template": "bug-hunter", "task": "审查此文件的逻辑正确性"}`
 - 分析大型代码库时，使用 subagent 并发读取多个文件（由服务层自动管理并发）。
 
 ### 输出要求

@@ -2,7 +2,7 @@
 
 - **大文件（超 500 行或 10KB）优先用 subagent 分析**，避免占用主对话上下文。
 - **Subagent** 是独立上下文的子代理，由集群自动分配模型，无需指定具体模型。
-- 触发格式：`{"subagent": {"template": "file-reader", "prompt": "分析这个文件的架构"}}`
+- 调用格式：用 subagent 工具，参数 `{"template": "file-reader", "task": "分析这个文件的架构"}`
 - 可用模板：`file-reader`、`bug-hunter`、`code-reviewer`、`web-researcher`、`executor`、`planner`
 - Subagent 支持多层嵌套，多个 subagent 由服务层自动排队，按模型并发限制调度。
 - `read` 的 `mode: "image"` 可读取图片/PDF 并上传到对话中。
