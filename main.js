@@ -36,6 +36,8 @@ let qwenServer = null;
 // key: requestId, value: { resolve, timer, collected: [segments...] }
 const cliResultWaiters = new Map();
 let _cliRequestIdCounter = 0;
+// P0: 后台任务结果缓存（/bg 异步 fire-and-forget，CLI 通过 /api/bg-result 轮询）
+const bgTaskResults = {};
 let openaiServer = null;
 let anthropicServer = null;
 // 集群配置持久化路径
@@ -4887,6 +4889,16 @@ function startContentServer() {
                     res.end(JSON.stringify({ success: false, error: e.message }));
                 }
             });
+        } else if (req.method === 'GET' && req.url.startsWith('/api/bg-result/')) {
+            // P0: 后台任务状态轮询（/bg list 时 CLI 拉取每个任务的当前状态）
+            var bgTaskId = decodeURIComponent(req.url.substring('/api/bg-result/'.length));
+            var bgRes = bgTaskResults[bgTaskId] || null;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, data: bgRes }));
+        } else if (req.method === 'GET' && req.url === '/api/bg-list') {
+            // P0: 后台任务列表（/bg list 时拉取全部）
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, data: Object.values(bgTaskResults) }));
         } else if (req.method === 'POST' && req.url === '/api/request') {
             var body = '';
             req.on('data', function(chunk) { body += chunk; });
@@ -4902,6 +4914,35 @@ function startContentServer() {
                     if (!orchestrator) {
                         res.writeHead(503);
                         res.end(JSON.stringify({ success: false, error: 'Orchestrator not ready' }));
+                        return;
+                    }
+
+                    // ===== P0: 后台任务（/bg） — 异步 fire-and-forget =====
+                    if (payload.bg) {
+                        var bgTaskId = payload.agentId || ('bg-' + Date.now());
+                        bgTaskResults[bgTaskId] = { status: 'running', taskId: bgTaskId, text: payload.message && payload.message.text || '', createdAt: new Date().toISOString() };
+                        // 异步执行，不等完成
+                        orchestrator.handleRequest(payload).then(function(bgRes) {
+                            bgTaskResults[bgTaskId] = {
+                                status: bgRes && bgRes.success ? 'done' : 'failed',
+                                taskId: bgTaskId,
+                                text: payload.message && payload.message.text || '',
+                                createdAt: bgTaskResults[bgTaskId].createdAt,
+                                completedAt: new Date().toISOString(),
+                                result: bgRes && bgRes.data,
+                                error: bgRes && !bgRes.success ? (bgRes.error || 'unknown') : null
+                            };
+                            console.log('[BG] Task ' + bgTaskId + ' completed: ' + bgTaskResults[bgTaskId].status);
+                        }).catch(function(e) {
+                            bgTaskResults[bgTaskId] = {
+                                status: 'failed', taskId: bgTaskId, error: e.message,
+                                text: payload.message && payload.message.text || '',
+                                createdAt: bgTaskResults[bgTaskId].createdAt, completedAt: new Date().toISOString()
+                            };
+                            console.warn('[BG] Task ' + bgTaskId + ' error:', e.message);
+                        });
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: true, data: { bg: true, taskId: bgTaskId, status: 'running' } }));
                         return;
                     }
                     // 方案 A：DeepSeek CLI 同步模式（waitForComplete 默认 true，非 agentview 异步路径）

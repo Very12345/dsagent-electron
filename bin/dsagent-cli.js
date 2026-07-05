@@ -912,6 +912,7 @@ async function runInteractive(token, timeout, raw, continueSession) {
         { name:'/skills',   desc:'浏览技能',       match:['skills'] },
         { name:'/language', desc:'切换语言',       match:['language','lang'] },
         { name:'/bg',       desc:'后台任务',        match:['bg'] },
+        { name:'/worktree', desc:'Git Worktree 隔离', match:['worktree','wt'] },
         { name:'/goal',     desc:'目标自动循环',    match:['goal'] },
         { name:'/resume',   desc:'恢复历史会话',    match:['resume','re'] },
         { name:'/session',  desc:'新建/切换会话',   match:['session','sess'] },
@@ -2342,6 +2343,10 @@ async function runInteractive(token, timeout, raw, continueSession) {
             echoSystem('  /bg <prompt>            后台任务');
             echoSystem('  /bg list                列出后台任务');
             echoSystem('  /bg drop <N>            删除后台任务');
+            echoSystem('  /bg status [id]         查看后台任务详情');
+            echoSystem('  /worktree create <branch> [base]  创建 worktree');
+            echoSystem('  /worktree list                  列出 worktree');
+            echoSystem('  /worktree cleanup <branch>      清理 worktree');
             echoSystem('  /goal <条件>            设置自动目标');
             echoSystem('  /goal status            查看目标状态');
             echoSystem('  /goal clear             清除目标');
@@ -2701,24 +2706,65 @@ async function runInteractive(token, timeout, raw, continueSession) {
             var bgSub = arg.trim().split(/\s+/)[0];
             var bgArg = arg.trim().substring(bgSub.length).trim();
             if (bgSub === 'list' || !bgSub) {
-                if (state.bgTasks.length === 0) { echoSystem('(无后台任务。使用 /bg <prompt> 创建)'); }
-                else {
-                    echoSystem('后台任务 (' + state.bgTasks.length + '):');
-                    for (var bi = 0; bi < state.bgTasks.length; bi++) {
-                        var bt = state.bgTasks[bi];
-                        echoSystem('  #' + (bi + 1) + ' [' + bt.status + '] ' + (bt.text || '').substring(0, 60));
+                // 从服务端拉取最新状态
+                httpGet('/api/bg-list').then(function(res) {
+                    var serverTasks = (res && res.data) || [];
+                    // 合并本地任务状态（服务端是权威来源）
+                    for (var si = 0; si < serverTasks.length; si++) {
+                        for (var lj = 0; lj < state.bgTasks.length; lj++) {
+                            if (state.bgTasks[lj].taskId === serverTasks[si].taskId) {
+                                state.bgTasks[lj].status = serverTasks[si].status;
+                                state.bgTasks[lj].result = serverTasks[si].result;
+                                state.bgTasks[lj].error = serverTasks[si].error;
+                                break;
+                            }
+                        }
                     }
-                }
+                    if (state.bgTasks.length === 0) { echoSystem('(无后台任务。使用 /bg <prompt> 创建)'); }
+                    else {
+                        echoSystem('后台任务 (' + state.bgTasks.length + '):');
+                        for (var bi = 0; bi < state.bgTasks.length; bi++) {
+                            var bt = state.bgTasks[bi];
+                            echoSystem('  #' + (bi + 1) + ' [' + bt.status + '] ' + (bt.text || '').substring(0, 60));
+                        }
+                    }
+                }).catch(function() {
+                    if (state.bgTasks.length === 0) { echoSystem('(无后台任务)'); }
+                    else {
+                        echoSystem('后台任务 (' + state.bgTasks.length + '):');
+                        for (var bi2 = 0; bi2 < state.bgTasks.length; bi2++) {
+                            var bt2 = state.bgTasks[bi2];
+                            echoSystem('  #' + (bi2 + 1) + ' [' + bt2.status + '] ' + (bt2.text || '').substring(0, 60));
+                        }
+                    }
+                });
             } else if (bgSub === 'drop') {
                 var idx = parseInt(bgArg) - 1;
                 if (idx >= 0 && idx < state.bgTasks.length) {
                     var dropped = state.bgTasks.splice(idx, 1);
                     echoSystem('已删除 #' + (idx + 1) + ': ' + (dropped[0].text || '').substring(0, 40));
                 } else { echoError('无效编号: ' + bgArg); }
+            } else if (bgSub === 'status') {
+                // /bg status：实时查看指定任务状态
+                var targetId = bgArg || (state.bgTasks.length > 0 ? state.bgTasks[state.bgTasks.length - 1].taskId : null);
+                if (!targetId) { echoSystem('(无后台任务)'); }
+                else {
+                    httpGet('/api/bg-result/' + encodeURIComponent(targetId)).then(function(sr) {
+                        var taskData = (sr && sr.data) || null;
+                        if (!taskData) { echoSystem('任务不存在: ' + targetId); return; }
+                        echoSystem('状态: [' + taskData.status + '] ' + (taskData.text || '').substring(0, 60));
+                        echoSystem('创建: ' + (taskData.createdAt || ''));
+                        if (taskData.completedAt) echoSystem('完成: ' + taskData.completedAt);
+                        if (taskData.error) echoSystem('错误: ' + taskData.error);
+                        if (taskData.result && taskData.result.markdown) {
+                            echoSystem('结果: ' + taskData.result.markdown.substring(0, 500));
+                        }
+                    });
+                }
             } else {
                 var bgText = arg;
                 var taskId = 'bg-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
-                state.bgTasks.push({ taskId: taskId, text: bgText, status: 'running', createdAt: new Date().toISOString() });
+                state.bgTasks.push({ taskId: taskId, text: bgText, status: 'pending', createdAt: new Date().toISOString() });
                 try {
                     var bgPayload = {
                         agentId: taskId, token: token, message: { text: bgText },
@@ -2728,10 +2774,12 @@ async function runInteractive(token, timeout, raw, continueSession) {
                     if (state.modelId) { bgPayload.clusterConfig = { templateId: 'minimal', roles: { main: { modelId: state.modelId } }, subagentDefaults: { modelId: state.modelId } }; }
                     echoSystem('⏳ 后台 #' + state.bgTasks.length + ' 已提交...');
                     httpPost('/api/request', bgPayload).then(function(bgRes) {
+                        // 服务端返回 { success: true, data: { bg: true, taskId, status: 'running' } }
+                        // 实际结果在服务端的 bgTaskResults 中，通过 /api/bg-result 轮询
                         for (var bfi = 0; bfi < state.bgTasks.length; bfi++) {
                             if (state.bgTasks[bfi].taskId === taskId) {
-                                state.bgTasks[bfi].status = bgRes && bgRes.data && bgRes.data.success ? 'done' : 'failed';
-                                state.bgTasks[bfi].result = bgRes && bgRes.data; break;
+                                state.bgTasks[bfi].status = 'running';
+                                break;
                             }
                         }
                     }).catch(function(e) {
@@ -2739,9 +2787,40 @@ async function runInteractive(token, timeout, raw, continueSession) {
                             if (state.bgTasks[bfi2].taskId === taskId) { state.bgTasks[bfi2].status = 'failed'; state.bgTasks[bfi2].error = e.message; break; }
                         }
                     });
-                    echoSystem('ID: ' + taskId + '（/bg list 查看）');
-                } catch(e) { echoError('提交失败: ' + (e.message || e)); }
-            }
+                    echoSystem('ID: ' + taskId + '（/bg list 查看，/bg status <id> 查看详情）');
+                 } catch(e) { echoError('提交失败: ' + (e.message || e)); }
+             }
+         } else if (name === '/worktree') {
+             // Git Worktree 隔离管理
+             var wtSub = arg.trim().split(/\s+/)[0];
+             var wtArg = arg.trim().substring(wtSub.length).trim();
+             var wtParts = wtArg.split(/\s+/);
+             var wtBranch = wtParts[0] || '';
+             var wtBase = wtParts[1] || '';
+             if (wtSub === 'list' || !wtSub || wtSub === 'ls') {
+                 execSync('git worktree list', { timeout: 10000 }).then(function(wr) {
+                     echoSystem('Worktree 列表:\n' + (wr.stdout || ''));
+                 }).catch(function(we) { echoError('worktree list 失败: ' + (we.message || we)); });
+             } else if (wtSub === 'create' || wtSub === 'new') {
+                 if (!wtBranch) { echoError('用法: /worktree create <branch> [base]'); return; }
+                 var wtPath = '../' + wtBranch.replace(/[^a-zA-Z0-9_-]/g, '_');
+                 execSync('git worktree add ' + wtPath + ' ' + wtBranch + ' ' + (wtBase || ''), { timeout: 60000 }).then(function(wr) {
+                     if (wr.exitCode === 0) {
+                         echoSystem('✅ Worktree 已创建\n  分支: ' + wtBranch + '\n  路径: ' + wtPath);
+                         echoSystem('  进入: cd ' + wtPath);
+                     } else {
+                         echoError('Worktree 创建失败: ' + (wr.stderr || wr.stdout || ''));
+                     }
+                 }).catch(function(we) { echoError('worktree 创建失败: ' + (we.message || we)); });
+             } else if (wtSub === 'done' || wtSub === 'cleanup' || wtSub === 'rm') {
+                 if (!wtBranch) { echoError('用法: /worktree ' + wtSub + ' <branch>'); return; }
+                 var rmPath = '../' + wtBranch.replace(/[^a-zA-Z0-9_-]/g, '_');
+                 execSync('git worktree remove ' + rmPath + ' 2>/dev/null; git branch -D ' + wtBranch + ' 2>/dev/null', { timeout: 30000 }).then(function(wr) {
+                     echoSystem('✅ Worktree ' + wtBranch + ' 已清理');
+                 }).catch(function(we) { echoError('worktree 清理失败: ' + (we.message || we)); });
+             } else {
+                 echoError('未知操作: ' + wtSub + '（支持: create/list/done/cleanup）');
+             }
         } else if (name === '/goal') {
             var goalSub = arg.trim().split(/\s+/)[0].toLowerCase();
             var goalArg = arg.trim().substring(goalSub.length).trim();

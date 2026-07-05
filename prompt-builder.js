@@ -56,6 +56,8 @@ function toolsSection() {
         + '- MCP 外部工具（mcp）\n'
         + '- 定时任务（interval）\n'
         + '- 表单交互（form）\n'
+        + '- Git 自动提交（git_checkpoint）\n'
+        + '- Git Worktree 隔离（git_worktree：独立工作目录，AI 改代码不污染主分支，支持 create/list/cleanup）\n'
         + '- 持久化记忆（memory_read/memory_append）\n';
 }
 
