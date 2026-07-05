@@ -847,13 +847,14 @@ async function runInteractive(token, timeout, raw, continueSession) {
         return out;
     }
 
-    // ── 辅助：视觉宽度（ASCII=1, CJK=2） ──
+    // ── 辅助：视觉宽度（ASCII=1, CJK=2, box-drawing=1） ──
     function displayWidth(s) {
         var w = 0;
         for (var i = 0; i < s.length; i++) {
             var cc = s.charCodeAt(i);
             if (cc >= 32 && cc < 127) w += 1;
             else if (cc === 10 || cc === 13) ; // 换行不占列
+            else if (cc >= 0x2500 && cc <= 0x257F) w += 1; // box-drawing 字符占 1 列
             else w += 2; // 全角 / CJK
         }
         return w;
