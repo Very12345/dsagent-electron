@@ -736,7 +736,6 @@ async function runInteractive(token, timeout, raw, continueSession) {
         parsed.forEach(function(p) { if (p.length > maxCols) maxCols = p.length; });
         if (maxCols === 0) return '';
         var colWidths = [];
-        var naturalWidths = [];
         for (var ci = 0; ci < maxCols; ci++) {
             var maxW = 0;
             parsed.forEach(function(p) {
@@ -745,28 +744,13 @@ async function runInteractive(token, timeout, raw, continueSession) {
                     if (w > maxW) maxW = w;
                 }
             });
-            naturalWidths.push(maxW);
+            colWidths.push(Math.min(maxW, Math.max(1, Math.floor((termWidth - maxCols * 3 - 2) / Math.max(1, maxCols)))));
         }
-        // 列宽分配：自然宽度优先，剩余空间等比分配"排满"
-        // 可用总宽度 = 终端宽度 - 3*maxCols(列分隔符) - 2(外框)
-        var availWidth = termWidth - maxCols * 3 - 2;
-        var sumNatural = naturalWidths.reduce(function(a, b) { return a + b; }, 0);
-        if (sumNatural < availWidth && sumNatural > 0) {
-            // 剩余空间按自然宽度比例分配
-            var extra = availWidth - sumNatural;
-            for (var ei = 0; ei < maxCols; ei++) {
-                var share = Math.floor(extra * naturalWidths[ei] / sumNatural);
-                colWidths.push(Math.max(1, naturalWidths[ei] + share));
-            }
-            // 收尾误差给最后一列
-            var sumAllocated = colWidths.reduce(function(a, b) { return a + b; }, 0);
-            var diff = availWidth - sumAllocated;
-            if (diff > 0 && colWidths.length > 0) colWidths[colWidths.length - 1] += diff;
-        } else {
-            // 超宽或空表：等宽分配，最小 1
-            var evenWidth = Math.max(1, Math.floor(availWidth / Math.max(1, maxCols)));
-            for (var ei2 = 0; ei2 < maxCols; ei2++) {
-                colWidths.push(Math.min(naturalWidths[ei2], evenWidth));
+        // 调试：列宽为 0 或负数时报警
+        for (var dwi = 0; dwi < colWidths.length; dwi++) {
+            if (colWidths[dwi] <= 0) {
+                console.warn('[Table] colWidths[' + dwi + ']=' + colWidths[dwi] + ' termWidth=' + termWidth + ' maxCols=' + maxCols);
+                colWidths[dwi] = Math.max(1, termWidth > 0 ? Math.floor(termWidth / Math.max(1, maxCols) / 2) : 10);
             }
         }
         // 组装输出
