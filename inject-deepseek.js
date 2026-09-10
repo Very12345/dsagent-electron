@@ -2260,7 +2260,7 @@ async function deleteCurrentConversation() {
         }, CONFIG.START_DELAY);
     }
 
-    // ==================== 对话列表查询（供 QQ Bot /list 使用） ====================
+    // ==================== 对话列表查询（供 Runtime 列出远端会话） ====================
     window.__dsagent_listConversations = function() {
         // 收集侧边栏中所有对话条目及其标题
         var items = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"], [class*="sidebar-item"]');
@@ -2280,22 +2280,6 @@ async function deleteCurrentConversation() {
             results.push({ title: title, href: href });
         }
         return results;
-    };
-
-    // ==================== 切换对话（供 QQ Bot /switch 使用） ====================
-    window.__dsagent_switchToConversation = function(index) {
-        var items = document.querySelectorAll('a[href*="/chat"], [class*="conversation-item"], [class*="chat-item"], [class*="sidebar-item"]');
-        var visible = [];
-        for (var i = 0; i < items.length; i++) {
-            if (items[i].offsetParent !== null || window.getComputedStyle(items[i]).position === 'fixed') {
-                var titleEl = items[i].querySelector('[class*="title"], [class*="name"]') || items[i];
-                var title = (titleEl.textContent || '').trim();
-                if (title) visible.push(items[i]);
-            }
-        }
-        if (index < 0 || index >= visible.length) return { success: false, error: '索引超出范围（0-' + (visible.length - 1) + '）' };
-        visible[index].click();
-        return { success: true, title: (visible[index].textContent || '').trim() };
     };
 
     // ======== 对话健康检查：VPN 切换时 DeepSeek 可能丢失会话显示"对话不存在"，自动恢复 ========
