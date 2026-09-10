@@ -8,4 +8,28 @@ const DEFAULT_AGENT_INSTRUCTIONS = `你是 WebAgent，一个可以使用本地�
 - 多个工具或子代理可以并发执行；最终结论应基于实际工具结果，不虚构执行情况。
 - 面向用户的过程说明保持简短，只描述当前正在做的事情。`;
 
-module.exports = { DEFAULT_AGENT_INSTRUCTIONS };
+// 把真实工具清单交给模型。
+// 旧架构的 lib/tool-docs.js 在 Node 迁移中被删除后没有替代品，模型只能靠猜工具名
+// —— 实测出现 "Unknown tool: list_files" / "Unknown tool: ls"，每次猜测都白白消耗
+// 一轮，而多轮猜测正是长任务滑向卡死的主要入口。同时显式声明本机 shell，避免模型
+// 在 Windows 上反复尝试 ls / find / grep。
+function buildToolManifest(manifests, options) {
+  const items = (Array.isArray(manifests) ? manifests : []).filter((item) => item && item.id);
+  if (!items.length) return '';
+  const platform = (options && options.platform) || process.platform;
+  const lines = items.map((item) => {
+    const risk = item.risk ? ' [' + item.risk + ']' : '';
+    return '- ' + item.id + risk + (item.label ? ' — ' + item.label : '');
+  });
+  return [
+    '可用工具（只允许使用下列名称，不要猜造或臆测其它工具名）:',
+    ...lines,
+    '',
+    '调用格式: {"tool":"工具名","params":{...}}，params 必须是有效 JSON 对象。',
+    platform === 'win32'
+      ? '命令在本机 shell 中执行。当前是 Windows，请使用 PowerShell 语法（如 Get-ChildItem、Select-String、Measure-Object），不要使用 ls、find、grep、wc 等 Unix 命令。'
+      : '命令在本机 shell 中执行，请使用与该 shell 匹配的命令语法。'
+  ].join('\n');
+}
+
+module.exports = { DEFAULT_AGENT_INSTRUCTIONS, buildToolManifest };

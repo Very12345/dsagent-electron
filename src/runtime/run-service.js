@@ -4,7 +4,7 @@ const EventEmitter = require('events');
 const { id } = require('./ids');
 const { parseToolCalls, buildFeedback } = require('../../tool-loop');
 const { createToolExecutor } = require('./tool-executor');
-const { DEFAULT_AGENT_INSTRUCTIONS } = require('./system-prompt');
+const { DEFAULT_AGENT_INSTRUCTIONS, buildToolManifest } = require('./system-prompt');
 const { resolveModePolicy } = require('./mode-policy');
 
 const WORK_INSTRUCTIONS = `You are WebAgent in work mode. Prioritize a fast, practical office result.
@@ -139,7 +139,7 @@ class RunService extends EventEmitter {
         ? ''
         : input.skip_runtime_instructions
           ? String(input.instructions || '')
-          : [policy.mode === 'project' && agentMode ? DEFAULT_AGENT_INSTRUCTIONS : '', policy.mode === 'work' ? WORK_INSTRUCTIONS : '', policy.mode === 'chat' ? CHAT_INSTRUCTIONS : '', memoryContext, input.instructions || ''].filter(Boolean).join('\n\n'),
+          : [policy.mode === 'project' && agentMode ? DEFAULT_AGENT_INSTRUCTIONS : '', policy.mode === 'work' ? WORK_INSTRUCTIONS : '', policy.mode === 'chat' ? CHAT_INSTRUCTIONS : '', policy.tools && this.toolRegistry ? buildToolManifest(this.toolRegistry.list(session.project_id || null)) : '', memoryContext, input.instructions || ''].filter(Boolean).join('\n\n'),
       deep_think: reasoningEffort !== 'none',
       reasoning_effort: reasoningEffort,
       web_search: String(input.model || session.model).startsWith('deepseek.') && !!input.web_search,
