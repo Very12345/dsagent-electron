@@ -8,7 +8,6 @@ const path = require('path');
 const { chromium } = require('playwright-core');
 const packageInfo = require('../../package.json');
 const apiKeyStore = require('../../apikey-store');
-const legacyAgentServices = require('../../server');
 const { createModelRegistry } = require('../../model-registry');
 const { createDeepseekServer } = require('../../server-deepseek');
 const { createQwenServer } = require('../../server-qwen');
@@ -173,7 +172,6 @@ async function main() {
       createChatGPTServer,
       createOpenAIServer,
       createAnthropicServer,
-      legacyAgentServices,
       appVersion: packageInfo.version,
       architecture: 'node-pwa-playwright',
       port: args.port,

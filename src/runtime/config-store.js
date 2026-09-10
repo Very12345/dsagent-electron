@@ -24,8 +24,9 @@ const DEFAULT_SETTINGS = {
   runtime: { qwen_max_workers: 8, chatgpt_max_workers: 2, max_tool_rounds: 20 },
   tools: { policy: 'risk_based', workspace_write: 'allow', command: 'ask', network: 'ask', delete: 'ask', git_write: 'ask' },
   mobile: { enabled: false, port: 5860, tunnel: false },
-  agents: { default_cluster_id: 'code-delivery' }
-  ,web_search: { endpoint: '', api_key: '' }
+  agents: { default_cluster_id: 'code-delivery' },
+  web_search: { endpoint: '', api_key: '' },
+  mcp: { servers: [], tool_states: {} }
 };
 
 function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }

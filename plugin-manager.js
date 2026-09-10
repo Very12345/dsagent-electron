@@ -7,6 +7,7 @@ const path = require('path');
 const manifest = require('./plugin-manifest.js');
 const installer = require('./plugin-installer.js');
 const loader = require('./plugin-loader.js');
+const { brandHome } = require('./lib/paths.js');
 
 // 默认官方市场（Claude Code 兼容插件）
 const DEFAULT_MARKETPLACE = {
@@ -14,29 +15,15 @@ const DEFAULT_MARKETPLACE = {
     source: { type: 'github', repo: 'anthropics/claude-plugins-official' }
 };
 
-// 插件数据目录：优先 BASE_DIR/.dsa/plugins，回退到 app 数据目录
+// 插件数据目录：统一在 ~/.webagent/plugins
 function getPluginsRoot() {
-    try {
-        // 尝试获取 BASE_DIR（由 agent.setBaseDir 设置）
-        var agent = require('./server.js');
-        var baseDir = agent.getBaseDir && agent.getBaseDir();
-        if (baseDir) return path.join(baseDir, '.dsa', 'plugins');
-    } catch(e) {}
-    // 回退到 app 数据目录（与 server.js 的 getDsaPath 一致）
-    var appData;
-    if (process.platform === 'win32') {
-        appData = process.env.LOCALAPPDATA || path.join(process.env.HOME || '.', 'AppData', 'Local');
-    } else {
-        appData = path.join(process.env.HOME || '.', '.local', 'share');
-    }
-    return path.join(appData, 'dsagent-electron', 'dsa-data', 'plugins');
+    return path.join(brandHome(), 'plugins');
 }
 
 const STATE_FILE = 'installed_plugins.json';
 
 function getStatePath() {
-    var home = process.env.HOME || process.env.USERPROFILE || '.';
-    return path.join(home, '.dsa', STATE_FILE);
+    return path.join(brandHome(), STATE_FILE);
 }
 
 // 加载已安装插件状态
@@ -154,6 +141,16 @@ function getAllPluginInfo() {
 function refreshPlugins(hookEngine) {
     var result = loader.initPlugins(hookEngine);
     return result;
+}
+
+// 只读取插件的 MCP 服务器清单（不注册 hooks，无副作用）
+function getAllPluginMcpServers() {
+    try {
+        return loader.getAllPluginMcpServers();
+    } catch(e) {
+        console.warn('[Plugin] MCP manifest scan failed:', e.message);
+        return [];
+    }
 }
 
 // 添加市场（git clone 到 marketplaces/ 目录）
@@ -274,6 +271,7 @@ module.exports = {
     uninstallPlugin,
     listRegistered,
     getAllPluginInfo,
+    getAllPluginMcpServers,
     refreshPlugins,
     addMarketplace,
     listMarketplaces,

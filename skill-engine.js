@@ -23,17 +23,8 @@ const SKILLS_DIR = '.webagent';
 const LEGACY_SKILLS_DIR = '.dsa';
 const SKILL_SUBDIR = 'skills';
 
-// 获取技能存储路径：优先使用配置中的 skillsStoragePath
+// 获取技能存储路径：项目级 .webagent/skills，旧 .dsa 只读兼容
 function getStoragePath(rootDir) {
-    try {
-        var server = require('./server.js');
-        var configRes = server.getSkillsStoragePath && server.getSkillsStoragePath();
-        if (configRes && configRes.success && configRes.path) {
-            var p = configRes.path;
-            if (fs.existsSync(p)) return p;
-        }
-    } catch(e) {}
-    // 回退：项目级 .webagent/skills/，旧 .dsa 只读兼容
     if (rootDir) {
         var proj = path.join(rootDir, SKILLS_DIR, SKILL_SUBDIR);
         if (fs.existsSync(proj)) return proj;

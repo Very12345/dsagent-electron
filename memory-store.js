@@ -5,17 +5,24 @@
 
 const fs = require('fs');
 const path = require('path');
+const { BRAND_DIR, LEGACY_BRAND_DIR, brandHome, legacyBrandHome } = require('./lib/paths.js');
 
-const MEMORY_DIR_GLOBAL = '.dsa';
 const MEMORY_FILE = 'memory.json';
 
 function getGlobalDir() {
-    var home = process.env.HOME || process.env.USERPROFILE || '.';
-    return path.join(home, MEMORY_DIR_GLOBAL);
+    return brandHome();
+}
+
+function getLegacyGlobalDir() {
+    return legacyBrandHome();
 }
 
 function getProjectDir(rootDir) {
-    return rootDir ? path.join(rootDir, MEMORY_DIR_GLOBAL) : null;
+    return rootDir ? path.join(rootDir, BRAND_DIR) : null;
+}
+
+function getLegacyProjectDir(rootDir) {
+    return rootDir ? path.join(rootDir, LEGACY_BRAND_DIR) : null;
 }
 
 function ensureDir(dir) {
@@ -25,12 +32,15 @@ function ensureDir(dir) {
     } catch(e) { return false; }
 }
 
-function loadMemory(dir) {
-    if (!dir) return { entries: [] };
-    var fp = path.join(dir, MEMORY_FILE);
-    try {
-        if (fs.existsSync(fp)) return JSON.parse(fs.readFileSync(fp, 'utf-8'));
-    } catch(e) {}
+// 读取：优先新品牌目录，回退旧 .dsa 目录，保证老数据仍可见
+function loadMemory(dir, legacyDir) {
+    for (const target of [dir, legacyDir]) {
+        if (!target) continue;
+        var fp = path.join(target, MEMORY_FILE);
+        try {
+            if (fs.existsSync(fp)) return JSON.parse(fs.readFileSync(fp, 'utf-8'));
+        } catch(e) {}
+    }
     return { entries: [] };
 }
 
@@ -45,12 +55,11 @@ function saveMemory(dir, data) {
 // ===== 公开 API =====
 
 function global() {
-    return loadMemory(getGlobalDir());
+    return loadMemory(getGlobalDir(), getLegacyGlobalDir());
 }
 
 function project(rootDir) {
-    var pDir = getProjectDir(rootDir);
-    return pDir ? loadMemory(pDir) : { entries: [] };
+    return loadMemory(getProjectDir(rootDir), getLegacyProjectDir(rootDir));
 }
 
 function saveGlobal(data) {
@@ -99,7 +108,7 @@ function mergedForPrompt(globalMem, projectMem, projectName) {
     return parts.length > 0 ? parts.join('\n') : '';
 }
 
-// 供 inject-*.js 调用的接口（通过 electronAPI）
+// 供 Runtime 的 capability-service / tool-executor 调用
 function handleMemoryRead(rootDir) {
     var g = global();
     var p = project(rootDir);

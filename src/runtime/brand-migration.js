@@ -5,6 +5,9 @@ const path = require('path');
 const os = require('os');
 
 const MIGRATION_VERSION = 2;
+// 用户主目录迁移独立版本号：与 runtime-store 迁移解耦，避免因为新增
+// 迁移项而让 migrateRuntimeStores 重跑、复活用户已删除的会话。
+const HOME_MIGRATION_VERSION = 3;
 
 function copyMissing(source, target) {
   if (!fs.existsSync(source) || fs.existsSync(target)) return false;
@@ -27,13 +30,13 @@ function migrateLegacyHome(options) {
   const marker = path.join(newRoot, 'migration.json');
   let previous = null;
   try { previous = JSON.parse(fs.readFileSync(marker, 'utf8')); } catch (_) {}
-  if (previous && Number(previous.version) >= MIGRATION_VERSION) return previous;
+  if (previous && Number(previous.version) >= HOME_MIGRATION_VERSION) return previous;
   fs.mkdirSync(newRoot, { recursive: true });
   const copied = [];
-  for (const name of ['skills', 'memory', 'config.json', 'devices.json', 'work-index.json']) {
+  for (const name of ['skills', 'memory', 'memory.json', 'config.json', 'devices.json', 'work-index.json', 'plugins', 'installed_plugins.json', 'datalog']) {
     if (copyMissing(path.join(oldRoot, name), path.join(newRoot, name))) copied.push(name);
   }
-  const result = { version: MIGRATION_VERSION, source: oldRoot, target: newRoot, copied, completed_at: new Date().toISOString() };
+  const result = { version: HOME_MIGRATION_VERSION, source: oldRoot, target: newRoot, copied, completed_at: new Date().toISOString() };
   atomicJson(marker, result);
   return result;
 }

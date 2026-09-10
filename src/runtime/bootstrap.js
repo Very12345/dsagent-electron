@@ -20,6 +20,7 @@ const { WorkMemoryService } = require('./work-memory-service');
 const { DeepSeekHarnessService } = require('./deepseek-harness-service');
 const { RogatorService, gatewayModels } = require('./rogator-service');
 const { ModelApiService } = require('./model-api-service');
+const { McpService } = require('./mcp-service');
 const { migrateLegacyHome, migrateRuntimeStores } = require('./brand-migration');
 
 function atomicJson(file, value) {
@@ -104,10 +105,17 @@ async function createRuntime(options) {
     getBrowserCredentials: () => providerHost.getBrowserCredentials('qwen-gateway')
   });
 
-  if (options.legacyAgentServices) {
-    options.legacyAgentServices.setBaseDir(root);
-    try { await options.legacyAgentServices.initMcp(); } catch (error) { console.warn('[MCP] initialization failed:', error.message); }
-  }
+  const mcp = new McpService({ config });
+  try {
+    const result = await mcp.init();
+    if (result && result.success === false) console.warn('[MCP] initialization failed:', result.error);
+    else if (result && result.message === 'No MCP servers configured') console.log('[MCP] no servers configured');
+    else if (result && Array.isArray(result.results)) {
+      const failed = result.results.filter((item) => !item.success && item.error !== 'disabled');
+      console.log('[MCP] initialized:', result.results.length - failed.length, '/', result.results.length, 'servers');
+      for (const item of failed) console.warn('[MCP] ' + item.name + ' failed:', item.error);
+    }
+  } catch (error) { console.warn('[MCP] initialization failed:', error.message); }
   const deepseekModels = Object.values(options.createDeepseekServer(() => null).models);
   const qwenModels = Object.values(options.createQwenServer(() => null).models);
   const chatgptModels = Object.values(options.createChatGPTServer(() => null).models);
@@ -149,6 +157,7 @@ async function createRuntime(options) {
   }
   const harness = new DeepSeekHarnessService({ root, runtimePort: address.port, runtimeToken: token, home: paths.harnessHome });
   api.harness = harness;
+  api.mcp = mcp;
   const info = {
     version: 3,
     product: 'WebAgent',
@@ -166,7 +175,7 @@ async function createRuntime(options) {
   if (config.getSettings().mobile.enabled) await mobile.start(config.getSettings().mobile.port);
   return {
     root, paths, store, config, providers, runs, api, tools, approvals, mobile,
-    bots, providerConfigs, contextManager, workMemory, harness, rogator, modelApi,
+    bots, providerConfigs, contextManager, workMemory, harness, rogator, modelApi, mcp,
     providerHost, apiKeyStore, credentialVault: vault, info,
     async close() {
       try { await api.close(); } catch (_) {}
@@ -174,8 +183,8 @@ async function createRuntime(options) {
       try { await providers.close(); } catch (_) {}
       try { await mobile.stop(); } catch (_) {}
       try { await harness.stop(); } catch (_) {}
+      try { await mcp.shutdown(); } catch (_) {}
       try { await providerHost.close(); } catch (_) {}
-      if (options.legacyAgentServices) { try { await options.legacyAgentServices.shutdownMcp(); } catch (_) {} }
       for (const file of [paths.infoFile, paths.legacyInfoFile].filter(Boolean)) {
         try {
           const current = JSON.parse(fs.readFileSync(file, 'utf8'));

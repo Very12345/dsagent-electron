@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync, spawn } = require('child_process');
+const { brandHome } = require('./lib/paths.js');
 
 // 检查 git 是否可用
 function isGitAvailable() {
@@ -18,7 +19,7 @@ const PLUGINS_ROOT = 'plugins';
 const INSTALLED_DIR = 'installed';
 
 function getInstalledDir(rootDir) {
-    var base = rootDir ? path.join(rootDir, PLUGINS_ROOT) : path.join(process.env.HOME || '.', '.dsa', PLUGINS_ROOT);
+    var base = rootDir ? path.join(rootDir, PLUGINS_ROOT) : path.join(brandHome(), PLUGINS_ROOT);
     return path.join(base, INSTALLED_DIR);
 }
 

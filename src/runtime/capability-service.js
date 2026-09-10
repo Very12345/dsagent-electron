@@ -8,6 +8,7 @@ const skillEngine = require('../../skill-engine');
 const pluginManager = require('../../plugin-manager');
 const memoryStore = require('../../memory-store');
 const { manager: mcpManager } = require('../../server-mcp');
+const { TOOL_MANIFESTS } = require('./tool-registry');
 const SUBAGENT_TEMPLATES = {
   'file-reader': { displayName: '文件阅读', description: '只读分析文件内容与结构' },
   'code-reviewer': { displayName: '代码审查', description: '检查缺陷、安全性、性能和可维护性' },
@@ -16,7 +17,7 @@ const SUBAGENT_TEMPLATES = {
   'planner': { displayName: '规划代理', description: '拆解任务并给出执行计划' }
 };
 
-const LOCAL_TOOLS = ['read', 'read_file', 'list', 'list_directory', 'exists', 'info', 'write_file', 'save', 'edit', 'edit_file', 'mkdir', 'exec', 'bash', 'grep', 'glob', 'memory_read', 'memory_append', 'use_skill', 'mcp'];
+const LOCAL_TOOLS = TOOL_MANIFESTS.map((item) => item.id);
 
 function simpleItem(id, label, description, kind) {
   return { id, label, description: description || '', kind: kind || 'item' };
@@ -42,7 +43,15 @@ class CapabilityService {
       return clusters.length ? clusters : Object.keys(SUBAGENT_TEMPLATES).map((name) => simpleItem(name, SUBAGENT_TEMPLATES[name].displayName || name, SUBAGENT_TEMPLATES[name].description || '', 'agent'));
     }
     if (group === 'tools') {
-      const local = (this.tools ? this.tools.list().map((tool) => tool.id) : LOCAL_TOOLS).map((name) => simpleItem('local/' + name, name, '本地 Runtime 工具', 'tool'));
+      // 能力 ID 直接使用 tool-registry 的真实工具 ID，不再加 local/ 前缀，
+      // 也不再混入 read/save/exec 等旧别名，避免模型看到的工具名与执行名不一致。
+      const manifests = this.tools ? this.tools.list() : TOOL_MANIFESTS;
+      const local = manifests.map((tool) => simpleItem(
+        tool.id,
+        tool.label || tool.id,
+        [tool.risk, tool.category].filter(Boolean).join(' · ') || '本地 Runtime 工具',
+        'tool'
+      ));
       const mcp = mcpManager.getAllTools().map((tool) => simpleItem((tool._mcpServer || 'mcp') + '/' + tool.name, tool.name, tool.description || '', 'mcp'));
       return local.concat(mcp);
     }
