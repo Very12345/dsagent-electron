@@ -9,8 +9,8 @@
     // 引用 engine（agent-engine.js 已加载在同一上下文）
     var E = window.__dsagent_engine;
 
-    // Agent 模式：quick / professional / image（影响策略 prompt 加载）
-    window._dsAgentMode = window._dsAgentMode || 'quick';
+    // DeepSeek 网页端已统一模型；保留字段仅供旧调用方兼容。
+    window._dsAgentMode = window._dsAgentMode || 'unified';
     window.__dsagent_setMode = function(mode) {
         window._dsAgentMode = mode;
         console.log('[DS Agent] Mode set to:', mode);
@@ -115,6 +115,66 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
     function isSendBtnEnabled() {
         var btn = getSendStopBtn();
         return btn && !btn.classList.contains('ds-button--disabled');
+    }
+
+    function editableText(input) {
+        if (!input) return '';
+        return input.tagName === 'TEXTAREA' || input.tagName === 'INPUT'
+            ? String(input.value || '')
+            : String(input.textContent || '');
+    }
+
+    function isStopGenerationControl(btn) {
+        if (!btn) return false;
+        var label = [btn.getAttribute('aria-label'), btn.getAttribute('title'), btn.getAttribute('data-testid'), btn.textContent]
+            .filter(Boolean).join(' ').trim();
+        if (/(?:stop|cancel|停止|中止).*(?:generat|respond|生成|回答)|^(?:stop|停止|中止)$/i.test(label)) return true;
+        var paths = Array.from(btn.querySelectorAll('svg path')).map(function(path) { return path.getAttribute('d') || ''; }).join(' ');
+        if (paths.indexOf('M2 4.88') >= 0) return true;
+        // DeepSeek renders the stop glyph as an SVG rect. Never combine that
+        // DOM fact with the previous polling value: doing so makes
+        // _wasAiGenerating a latch which can remain true after the webpage has
+        // already restored its send button.
+        return !!btn.querySelector('svg rect');
+    }
+
+    function usageLimitState() {
+        var bodyText = document.body ? String(document.body.innerText || '') : '';
+        var recent = bodyText.slice(-16000);
+        var limited = /消息发送过于频繁|请求过于频繁|操作过于频繁|too many requests|rate limit|usage limit|out of usage|quota exceeded/i.test(recent);
+        var busy = /服务器繁忙|系统繁忙|service unavailable|server busy/i.test(recent);
+        if (!limited && !busy) return { limited: false };
+        return {
+            limited: true,
+            code: limited ? 'out_of_usage' : 'provider_busy',
+            reason: limited ? 'rate_limited' : 'server_busy',
+            retryAfter: limited ? 60 : 30,
+            message: limited
+                ? 'DeepSeek webpage rate limit reached; wait before retrying'
+                : 'DeepSeek webpage is temporarily busy; wait before retrying'
+        };
+    }
+
+    window.__dsagent_getUsageLimitState = usageLimitState;
+
+    async function waitForSendAcceptance(originalText, timeout) {
+        var started = Date.now();
+        var expected = String(originalText || '').trim();
+        while (Date.now() - started < (timeout || 12000)) {
+            var currentInput = getInputBox();
+            var currentValue = editableText(currentInput).trim();
+            var control = getSendStopBtn();
+            var generating = isStopGenerationControl(control) || !!(control && control.querySelector('.ds-loading'));
+            var limit = usageLimitState();
+            if (limit.limited) return { success: false, code: limit.code, error: limit.message, retryAfter: limit.retryAfter, rateLimited: limit.code === 'out_of_usage' };
+            // DeepSeek clears or replaces the editor as soon as its SPA accepts
+            // a turn. A native stop/loading state is an equally strong signal.
+            if (generating || !currentValue || (expected && currentValue !== expected)) {
+                return { success: true, accepted: true, evidence: generating ? 'generating' : 'input_cleared' };
+            }
+            await new Promise(function(resolve) { setTimeout(resolve, 200); });
+        }
+        return { success: false, code: 'provider_send_unconfirmed', error: 'DeepSeek did not confirm that the message was accepted' };
     }
 
     function findToggleByLabel(label) {
@@ -231,6 +291,10 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
     }
 
     function setModelMode(mode) {
+        // 2026-09: the webpage removed Fast/Expert/Vision radio modes.
+        // Keep this compatibility hook as a deterministic no-op; capabilities
+        // are now selected independently by deep-think, search and attachments.
+        if (mode === 'unified' || mode === 'quick' || mode === 'professional' || mode === 'expert' || mode === 'image') return false;
         // mode: 'quick' 或 'professional' 或 'image'
         // targetType 对应 DeepSeek 页面上的 data-model-type 值
         var targetType = mode === 'professional' ? 'expert' : (mode === 'image' ? 'image' : 'quick');
@@ -383,11 +447,20 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
 
     async function fillAndSend(text) {
         const input = getInputBox();
-        if (!input) return false;
+        if (!input) return { success: false, code: 'provider_input_unavailable', error: 'DeepSeek input box was not found' };
 
-        const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        // A completed turn may leave the legacy watcher paused while Runtime
+        // owns the page. Clear its cached bit before observing the new native
+        // send/stop control.
+        _wasAiGenerating = false;
+        stopRequested = false;
+
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+        const nativeSetter = descriptor && descriptor.set;
         if (nativeSetter && input.tagName === 'TEXTAREA') {
             nativeSetter.call(input, text);
+        } else if (input.isContentEditable) {
+            input.textContent = text;
         } else {
             input.value = text;
         }
@@ -415,7 +488,7 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
             }
             if (sendBtn && !sendBtn.classList.contains('ds-button--disabled') && !sendBtn.disabled) {
                 sendBtn.click();
-                return true;
+                return await waitForSendAcceptance(text, 12000);
             }
         }
 
@@ -423,7 +496,7 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
         input.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
         }));
-        return true;
+        return await waitForSendAcceptance(text, 12000);
     }
 
     function extractCode(mdCodeBlock) {
@@ -453,6 +526,151 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
         }
         return '';
     }
+
+    // Rebuild Markdown from DeepSeek's rendered response DOM. innerText loses
+    // fences, table delimiters and TeX source, and also includes code-toolbar
+    // labels such as "html / 复制 / 下载 / 运行". Streaming must use the same
+    // semantic representation as the final clipboard extractor.
+    function renderedMarkdown(root, options) {
+        if (!root) return '';
+        var streaming = !!(options && options.streaming);
+        var protectedBlocks = [];
+        function protect(value) {
+            var index = protectedBlocks.push(value) - 1;
+            return '\n\uE000DSMARKDOWN' + index + '\uE001\n';
+        }
+        function classText(element) {
+            return String(element && element.className && (element.className.baseVal || element.className) || '').toLowerCase();
+        }
+        function skipElement(element) {
+            var tag = String(element.tagName || '').toLowerCase();
+            if (/^(button|svg|style|script|noscript|template|textarea|input)$/.test(tag)) return true;
+            var cls = classText(element);
+            if (/(?:^|[-_\s])(toolbar|actions?|buttons?|copy|download|run-code|code-header|code-block-banner)(?:$|[-_\s])/.test(cls)) return true;
+            if (element.getAttribute && (element.getAttribute('role') === 'button' || element.getAttribute('aria-hidden') === 'true')) return true;
+            return false;
+        }
+        function texSource(element) {
+            if (!element || !element.querySelector) return '';
+            var direct = element.getAttribute('data-tex') || element.getAttribute('data-latex') || element.getAttribute('data-formula') || '';
+            var annotation = element.querySelector('annotation[encoding="application/x-tex"], annotation[encoding="application/x-latex"], script[type^="math/tex"]');
+            return String(direct || (annotation && annotation.textContent) || '').trim();
+        }
+        function escapeCell(value) {
+            return String(value || '').replace(/\|/g, '\\|').replace(/\r?\n+/g, '<br>').trim();
+        }
+        function hasMeaningfulFollowing(node) {
+            var current = node;
+            while (current && current !== root) {
+                var sibling = current.nextSibling;
+                while (sibling) {
+                    if (sibling.nodeType === Node.TEXT_NODE && String(sibling.nodeValue || '').trim()) return true;
+                    if (sibling.nodeType === Node.ELEMENT_NODE && !skipElement(sibling) && String(sibling.textContent || '').trim()) return true;
+                    sibling = sibling.nextSibling;
+                }
+                current = current.parentNode;
+            }
+            return false;
+        }
+        function serializeTable(table) {
+            var rows = Array.from(table.querySelectorAll('tr')).map(function(row) {
+                return Array.from(row.children).filter(function(cell) { return /^(TH|TD)$/.test(cell.tagName); }).map(function(cell) {
+                    return escapeCell(Array.from(cell.childNodes).map(walk).join(''));
+                });
+            }).filter(function(row) { return row.length; });
+            if (!rows.length) return '';
+            var width = rows.reduce(function(max, row) { return Math.max(max, row.length); }, 0);
+            rows = rows.map(function(row) { while (row.length < width) row.push(''); return row; });
+            var lines = ['| ' + rows[0].join(' | ') + ' |', '| ' + rows[0].map(function() { return '---'; }).join(' | ') + ' |'];
+            rows.slice(1).forEach(function(row) { lines.push('| ' + row.join(' | ') + ' |'); });
+            return '\n' + lines.join('\n') + '\n';
+        }
+        function codeFence(code, language, node) {
+            code = String(code || '').replace(/^\n|\n$/g, '');
+            var runs = code.match(/`+/g) || [];
+            var width = Math.max(3, runs.reduce(function(max, value) { return Math.max(max, value.length + 1); }, 3));
+            var fence = new Array(width + 1).join('`');
+            var leaveOpen = streaming && !hasMeaningfulFollowing(node);
+            return protect(fence + String(language || '') + '\n' + code + (leaveOpen ? '' : '\n' + fence));
+        }
+        function listItem(element) {
+            var parent = element.parentElement;
+            var ordered = parent && String(parent.tagName).toLowerCase() === 'ol';
+            var prefix = ordered ? (Array.prototype.indexOf.call(parent.children, element) + 1) + '. ' : '- ';
+            var value = Array.from(element.childNodes).map(walk).join('').trim().replace(/\n/g, '\n  ');
+            return '\n' + prefix + value;
+        }
+        function walk(node) {
+            if (!node) return '';
+            if (node.nodeType === Node.TEXT_NODE) return String(node.nodeValue || '').replace(/\u00a0/g, ' ');
+            if (node.nodeType !== Node.ELEMENT_NODE || skipElement(node)) return '';
+            var tag = String(node.tagName || '').toLowerCase();
+            var cls = classText(node);
+            if (/(?:^|\s)katex-display(?:\s|$)/.test(cls) || tag === 'mjx-container' && node.getAttribute('display') === 'true') {
+                var displayTex = texSource(node);
+                var leaveMathOpen = streaming && !hasMeaningfulFollowing(node);
+                return displayTex ? protect('$$\n' + displayTex + (leaveMathOpen ? '' : '\n$$')) : '';
+            }
+            if (/(?:^|\s)katex(?:\s|$)/.test(cls) || tag === 'math') {
+                var inlineTex = texSource(node);
+                if (inlineTex) return '$' + inlineTex.replace(/\$/g, '\\$') + '$';
+            }
+            if (tag === 'pre') {
+                var code = node.querySelector('code') || node;
+                var container = node.closest && (node.closest('.md-code-block') || node.closest('[class*="code-block"]'));
+                return codeFence(code.textContent || '', getLanguage(container || node), node);
+            }
+            if (tag === 'table') return serializeTable(node);
+            if (tag === 'br') return '\n';
+            if (tag === 'hr') return '\n---\n';
+            if (tag === 'img') {
+                var source = node.getAttribute('src') || '';
+                return source ? '![' + (node.getAttribute('alt') || '') + '](' + source + ')' : '';
+            }
+            var content = Array.from(node.childNodes).map(walk).join('');
+            if (tag === 'code') {
+                var ticks = content.indexOf('`') >= 0 ? '``' : '`';
+                return ticks + content + ticks;
+            }
+            if (tag === 'strong' || tag === 'b') return '**' + content + '**';
+            if (tag === 'em' || tag === 'i') return '*' + content + '*';
+            if (tag === 'del' || tag === 's') return '~~' + content + '~~';
+            if (tag === 'a') {
+                var href = node.getAttribute('href') || '';
+                return href ? '[' + content + '](' + href + ')' : content;
+            }
+            if (/^h[1-6]$/.test(tag)) return '\n' + new Array(Number(tag[1]) + 1).join('#') + ' ' + content.trim() + '\n';
+            if (tag === 'li') return listItem(node);
+            if (tag === 'blockquote') return '\n' + content.trim().split('\n').map(function(line) { return '> ' + line; }).join('\n') + '\n';
+            if (tag === 'p') return '\n' + content.trim() + '\n';
+            if (tag === 'ul' || tag === 'ol' || tag === 'section' || tag === 'article') return '\n' + content.trim() + '\n';
+            return content;
+        }
+        var result = walk(root).replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+        result = result.replace(/\uE000DSMARKDOWN(\d+)\uE001/g, function(_all, index) { return protectedBlocks[Number(index)] || ''; });
+        return result.trim();
+    }
+    window.__dsagent_renderedMarkdown = renderedMarkdown;
+
+    function normalizeMarkdownSource(value) {
+        var text = String(value || '').replace(/\r\n?/g, '\n')
+            .replace(/\\\[([\s\S]*?)\\\]/g, function(_all, tex) { return '$$' + tex.trim() + '$$'; })
+            .replace(/\\\(([^\n]*?)\\\)/g, function(_all, tex) { return '$' + tex.trim() + '$'; });
+        var fenced = false;
+        text = text.split('\n').map(function(line) {
+            if (/^\s*(```+|~~~+)/.test(line)) { fenced = !fenced; return line.replace(/[ \t]+$/g, ''); }
+            if (!fenced && /^\s*\|.*\|\s*$/.test(line)) {
+                var cells = line.trim().slice(1, -1).split('|').map(function(cell) { return cell.trim(); });
+                if (cells.every(function(cell) { return /^:?-{3,}:?$/.test(cell); })) {
+                    cells = cells.map(function(cell) { return (cell[0] === ':' ? ':' : '') + '---' + (cell[cell.length - 1] === ':' ? ':' : ''); });
+                }
+                return '| ' + cells.join(' | ') + ' |';
+            }
+            return line.replace(/[ \t]+$/g, '');
+        }).join('\n');
+        return text.trim();
+    }
+    window.__dsagent_normalizeMarkdownSource = normalizeMarkdownSource;
 
     function parseCodeBlock(mdCodeBlock) {
         const lang = getLanguage(mdCodeBlock);
@@ -703,9 +921,29 @@ async function deleteCurrentConversation() {
         }
     }
 
+    function assistantCopyButtons() {
+        var controls = Array.from(document.querySelectorAll('button, [role="button"], [aria-label], [title], [data-testid]'));
+        return controls.filter(function(btn) {
+            if (btn.closest('pre, code, .md-code-block, [class*="code-block"], [class*="think"], [class*="reasoning"]')) return false;
+            var label = [btn.getAttribute('aria-label'), btn.getAttribute('title'), btn.getAttribute('data-testid'), btn.textContent].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+            var path = Array.from(btn.querySelectorAll('svg path')).map(function(item) { return item.getAttribute('d') || ''; }).join(' ');
+            var copyLike = /(?:^|\b)(?:copy|复制)(?:\b|$)/i.test(label) || path.indexOf('M6.14929 4.02032') >= 0;
+            if (!copyLike) return false;
+            var parent = btn;
+            for (var depth = 0; parent && depth < 9; depth++, parent = parent.parentElement) {
+                if (parent.matches && parent.matches('.ds-markdown.ds-assistant-message-main-content, [class*="assistant-message-main-content"]')) return true;
+                if (parent.querySelector && parent.querySelector('.ds-markdown.ds-assistant-message-main-content, [class*="assistant-message-main-content"]')) return true;
+            }
+            return false;
+        });
+    }
+
     function findCopyButton() {
         // 查找 DeepSeek 回复底部的复制按钮（SVG 为复制图标）
-        // 返回最后一个（= 最新消息的）复制按钮
+        // 返回最后一个（= 最新消息的）复制按钮，且只返回 AI 消息上的（非用户消息）
+        // 通过检查附近是否有"点赞"按钮 SVG 来区分 AI 消息 vs 用户消息
+        var semantic = assistantCopyButtons();
+        if (semantic.length) return semantic[semantic.length - 1];
         var buttons = document.querySelectorAll('[role="button"]');
         console.log('[Debug] findCopyButton: total [role="button"] elements=' + buttons.length);
         var last = null;
@@ -717,7 +955,21 @@ async function deleteCurrentConversation() {
                 // 复制图标路径特征：以 M6.14929 4.02032 开头
                 if (d.indexOf('M6.14929 4.02032') >= 0) {
                     console.log('[Debug] findCopyButton: found candidate at index ' + i + ' d=' + d.substring(0, 50));
-                    last = btn;
+                    // 检查此复制按钮的父容器中是否有"点赞"按钮（AI 消息特有，用户消息只有复制+编辑）
+                    // 点赞按钮 SVG path 以 M8.27868 0.811572 开头
+                    var parent = btn.closest('[class*="message"], [class*="bubble"], [class*="response"], .ds-flex, ._425ea0b');
+                    if (parent) {
+                        var likeBtn = parent.querySelector('[role="button"] svg path[d*="M8.27868 0.811572"]');
+                        if (likeBtn) {
+                            console.log('[Debug] findCopyButton: AI message (has like button), selecting');
+                            last = btn;
+                        } else {
+                            console.log('[Debug] findCopyButton: user message (no like button), skipping');
+                        }
+                    } else {
+                        console.log('[Debug] findCopyButton: no parent container found, selecting as fallback');
+                        last = btn;
+                    }
                 }
             }
         }
@@ -725,8 +977,24 @@ async function deleteCurrentConversation() {
         return last;
     }
 
+    window.__dsagent_getAssistantCopyButtonCount = function() {
+        return assistantCopyButtons().length;
+    };
+
     function sleepCopyBtn(ms) {
         return new Promise(function(resolve) { setTimeout(resolve, ms); });
+    }
+
+    async function browserClipboardWriteText(value) {
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') return false;
+        try { await navigator.clipboard.writeText(String(value || '')); return true; }
+        catch (_) { return false; }
+    }
+
+    async function browserClipboardReadText() {
+        if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') return null;
+        try { return await navigator.clipboard.readText(); }
+        catch (_) { return null; }
     }
 
     async function waitForCopyButton(timeout) {
@@ -1131,9 +1399,9 @@ async function deleteCurrentConversation() {
             } catch (e) { /* ignore */ }
         } finally {
             // 还原剪贴板
-            if (savedClipboard && savedClipboard.text !== undefined) {
+            if (savedClipboard) {
                 try {
-                    await window.electronAPI.clipboardRestore(savedClipboard.text);
+                    await window.electronAPI.clipboardRestore(savedClipboard, markdown);
                 } catch(e) {
                     console.warn('Failed to restore clipboard:', e);
                 }
@@ -1450,7 +1718,12 @@ async function deleteCurrentConversation() {
 
         // ======== 暴露工具函数给工具系统 ========
         window.__dsagent_fillAndSend = fillAndSend;
-        window.__dsagent_isGenerating = function() { return _wasAiGenerating; };
+        window.__dsagent_isGenerating = function() {
+            var control = getSendStopBtn();
+            var generating = isStopGenerationControl(control) || !!(control && control.querySelector('.ds-loading'));
+            _wasAiGenerating = generating;
+            return generating;
+        };
         window.__dsagent_isExecuting = function() { return isExecuting; };
         window.__dsagent_confirmCommand = E.confirmCommand;
 
@@ -1522,17 +1795,14 @@ async function deleteCurrentConversation() {
         window.__dsagent_stopGeneration = function() {
             stopRequested = true;
             stopTimestamp = Date.now();  // 记录停止时间，抑制后续继续生成弹窗
-            var btn = getSendStopBtn();
-            if (btn) {
-                // 检查按钮是否处于停止模式（SVG 路径含正方形图标）
-                var svgPath = btn.querySelector('svg path');
-                var d = svgPath ? svgPath.getAttribute('d') || '' : '';
-                if (d.indexOf('M2 4.88') >= 0) {
-                    btn.click();
-                    return { success: true, message: 'Stop button clicked' };
-                }
-                return { success: false, message: 'Not in generating state' };
+            var controls = Array.from(document.querySelectorAll('button, [role="button"], .ds-button'));
+            var btn = controls.find(isStopGenerationControl) || getSendStopBtn();
+            if (btn && (isStopGenerationControl(btn) || _wasAiGenerating || !!btn.querySelector('.ds-loading'))) {
+                btn.click();
+                _wasAiGenerating = false;
+                return { success: true, stopped: true, message: 'Stop button clicked' };
             }
+            if (btn) return { success: false, stopped: false, message: 'Not in generating state' };
             return { success: false, message: 'Stop button not found' };
         };
 
@@ -1554,14 +1824,95 @@ async function deleteCurrentConversation() {
         };
         // Agent 视图控制函数
         window.__dsagent_setModelMode = function(mode) {
-            // agentview mode 值 (expert/fast/image) → setModelMode 期望的值 (professional/quick/image)
-            var dsMode = mode === 'expert' ? 'professional' : (mode === 'image' ? 'image' : 'quick');
-            setModelMode(dsMode);
+            setModelMode('unified');
         };
         window.__dsagent_setDeepThink = async function(enable) { return await setDeepThink(!!enable); };
         window.__dsagent_disableWebSearch = function() { tryToggleWebSearch(false); };
         window.__dsagent_enableWebSearch = function() { tryToggleWebSearch(true); };
-        window.__dsagent_sendMessage = async function(text) {
+        var _thinkingPrimarySelector = '[class*="think-content"], [class*="reasoning-content"], [class*="thought-content"], .ds-think, [class*="ThinkContent"], [class*="thinking-content"]';
+        var _thinkingFallbackSelector = '[class*="reasoning"], [class*="thought"], [class*="thinking"]';
+        function currentThinkingElement() {
+            var primary = Array.from(document.querySelectorAll(_thinkingPrimarySelector));
+            var candidates = primary.length ? primary : Array.from(document.querySelectorAll(_thinkingFallbackSelector));
+            if (!candidates.length) return null;
+            // Prefer a leaf content node. Broad wrappers can include both the
+            // reasoning card and the final answer after a long DOM remount.
+            var leaves = candidates.filter(function(candidate) {
+                return !candidates.some(function(other) { return other !== candidate && candidate.contains(other); });
+            });
+            return (leaves.length ? leaves : candidates)[(leaves.length ? leaves : candidates).length - 1];
+        }
+        function intersectsThinking(element, thinking) {
+            if (!element || !thinking) return false;
+            return element === thinking || element.contains(thinking) || thinking.contains(element);
+        }
+        function commonPrefixLength(left, right) {
+            var limit = Math.min(left.length, right.length);
+            var index = 0;
+            while (index < limit && left.charCodeAt(index) === right.charCodeAt(index)) index++;
+            return index;
+        }
+        // Return reasoning for the newest assistant turn as semantic Markdown.
+        // Tables, TeX and fenced code therefore survive the DSH reasoning stream.
+        window.__dsagent_extractCurrentThinking = function(streaming) {
+            try {
+                var thinkEl = currentThinkingElement();
+                if (!thinkEl) return '';
+                var clone = thinkEl.cloneNode(true);
+                clone.querySelectorAll('button, svg, [role="button"], [class*="toolbar"], [class*="action"]').forEach(function(el) { el.remove(); });
+                return normalizeMarkdownSource(renderedMarkdown(clone, { streaming: streaming !== false }))
+                    .replace(/^\s*(?:Thinking|Reasoning)\s*\n?/i, '').trim();
+            } catch (_) {
+                return '';
+            }
+        };
+        window.__dsagent_extractCurrentAnswerMarkdown = function(streaming) {
+            try {
+                var thinking = currentThinkingElement();
+                var bodies = Array.from(document.querySelectorAll('.ds-markdown.ds-assistant-message-main-content, [class*="assistant-message-main-content"]'));
+                var candidates = bodies.filter(function(body) { return !intersectsThinking(body, thinking); });
+                // Some DeepSeek builds put a broad assistant wrapper around both
+                // cards. Search its descendants/siblings for the independent
+                // answer Markdown node rather than serializing that wrapper.
+                if (!candidates.length && thinking) {
+                    var root = thinking.parentElement;
+                    for (var depth = 0; root && depth < 7 && !candidates.length; depth++, root = root.parentElement) {
+                        candidates = Array.from(root.querySelectorAll('.ds-markdown')).filter(function(body) {
+                            return !intersectsThinking(body, thinking);
+                        });
+                    }
+                }
+                if (!candidates.length) return '';
+                var answer = normalizeMarkdownSource(renderedMarkdown(candidates[candidates.length - 1], { streaming: !!streaming }));
+                var reasoning = window.__dsagent_extractCurrentThinking ? window.__dsagent_extractCurrentThinking() : '';
+                var comparableAnswer = String(answer || '').replace(/\s+/g, '');
+                var comparableReasoning = String(reasoning || '').replace(/\s+/g, '');
+                var shared = commonPrefixLength(comparableAnswer, comparableReasoning);
+                // A large shared prefix means a remounted reasoning wrapper was
+                // mistaken for the answer. Empty is safer than leaking thought.
+                if (shared > 256 && shared >= Math.min(comparableAnswer.length, comparableReasoning.length) * 0.5) return '';
+                return answer;
+            } catch (_) {
+                return '';
+            }
+        };
+        window.__dsagent_captureAssistantBaseline = function() {
+            var bodies = document.querySelectorAll('.ds-markdown.ds-assistant-message-main-content, [class*="assistant-message-main-content"]');
+            var last = window.__dsagent_extractCurrentAnswerMarkdown ? window.__dsagent_extractCurrentAnswerMarkdown(true) : '';
+            var reasoning = window.__dsagent_extractCurrentThinking ? window.__dsagent_extractCurrentThinking() : '';
+            window.__dsagent_assistantBaseline = { count: bodies.length, text: last, reasoning: reasoning, copyCount: assistantCopyButtons().length };
+            return window.__dsagent_assistantBaseline;
+        };
+        window.__dsagent_sendMessage = async function(text, promptPassthrough) {
+            if (promptPassthrough) {
+                lastUserText = text;
+                sendTimestamp = Date.now();
+                rateLimitNotified = false;
+                window.__dsagent_captureAssistantBaseline();
+                var passthroughResult = await fillAndSend(text);
+                startPollingFallback();
+                return passthroughResult;
+            }
             // P3: 模型微调指令（DeepSeek → 中文输出锁定）
             var directives = '';
             /* 模型级指令由 prompt-builder 注入到 INSTRUCTION 中，此处为兜底 */
@@ -1595,6 +1946,7 @@ async function deleteCurrentConversation() {
             var fullText = text + systemReminder + behaviorReminder;
             // 保存压缩后状态（TASK + 操作记录），由 orchestrator 在压缩后注入
             window.__dsagent_lastTask = text.substring(0, 200); // 保存当前任务片段
+            window.__dsagent_captureAssistantBaseline();
             var result = await fillAndSend(fullText);
             // 发送后启动轮询兜底
             startPollingFallback();
@@ -1651,6 +2003,9 @@ async function deleteCurrentConversation() {
             return { success: true };
         };
         window.__dsagent_getInitPromptText = async function(mode) {
+            // Legacy compatibility hook. Prompt ownership moved to the caller;
+            // the webpage transport must never synthesize a default prompt.
+            return '';
             var baseText = '';
             try {
                 var res = await window.electronAPI.getInitPrompt(mode || window._dsAgentMode || 'quick');
@@ -1699,7 +2054,7 @@ async function deleteCurrentConversation() {
             }
             return baseText;
         };
-        window.__dsagent_newChatAndSendInit = async function(mode, deepthink, userText, enableWebSearch) {
+        window.__dsagent_newChatAndSendInit = async function(mode, deepthink, userText, enableWebSearch, files) {
             // 新对话：清空上下文相关状态
             resetContextState();
             // 新对话：清空工具文档阅读记录
@@ -1723,23 +2078,34 @@ async function deleteCurrentConversation() {
             ta.focus();
             await sleep(600);
 
-            // 设置模式（在对话页面上操作）
-            setModelMode(mode === 'expert' ? 'professional' : (mode === 'image' ? 'image' : 'quick'));
-            await sleep(800);
-
-            // 设置深度思考
-            if (mode === 'image') {
-                await setDeepThink(false);
-            } else {
-                await setDeepThink(!!deepthink);
-            }
-            await sleep(300);
-
-            // 设置联网搜索
+            // 统一模型：先设置搜索，再设置思考。新版网页使用两个独立
+            // ds-toggle-button，图片能力由附件输入触发，不再切换模型。
             tryToggleWebSearch(!!enableWebSearch);
+            await sleep(300);
+            await setDeepThink(!!deepthink);
             await sleep(400);
 
             // 发送初始化提示词
+            // This is a transport boundary. DSH system prompts and tool
+            // manifests must never be converted into visible webpage text.
+            var visibleUserText = (userText || '').trim();
+            if (!visibleUserText) return { success: false, error: 'user message is empty' };
+            if (files && files.length && window.__dsagent_uploadFiles) {
+                var uploadResult = await window.__dsagent_uploadFiles(files);
+                if (!uploadResult || !uploadResult.success) return uploadResult || { success: false, error: 'image upload failed' };
+            }
+            sendTimestamp = Date.now();
+            window.__dsagent_captureAssistantBaseline();
+            var sendResult = await fillAndSend(visibleUserText);
+            if (!sendResult || sendResult.success === false) return sendResult || { success: false, code: 'provider_send_unconfirmed', error: 'DeepSeek did not accept the message' };
+            var visibleConversationUrl = '';
+            try { visibleConversationUrl = window.location.href; } catch(e) {}
+            if (!visibleConversationUrl || !/\/chat\/[^?#]+/.test(visibleConversationUrl)) {
+                await sleep(1500);
+                try { visibleConversationUrl = window.location.href; } catch(e) {}
+            }
+            return { success: true, messageIncluded: true, deepseekUrl: visibleConversationUrl || '' };
+
             var initText = await window.__dsagent_getInitPromptText(mode);
 
             // 是否有用户消息（带附件/技能/INSTRUCTION.md 的完整文本）
@@ -1756,6 +2122,7 @@ async function deleteCurrentConversation() {
             }
 
             sendTimestamp = Date.now();  // 标记发送时间，启用兜底轮询保底
+            window.__dsagent_captureAssistantBaseline();
             await fillAndSend(initText);
 
             // 获取新对话的 URL（用于历史追踪）
@@ -1958,29 +2325,75 @@ async function deleteCurrentConversation() {
         try {
             var markdown = '';
             var think = '';
+            var semanticMarkdown = '';
+            // The semantic DOM extractors are turn-aware and keep reasoning and
+            // answer content disjoint. DSML is the exception: Markdown DOM may
+            // consume PowerShell $variables as TeX, so a completed DSML turn
+            // must use the assistant copy control to recover its raw source.
+            if (window.__dsagent_extractCurrentAnswerMarkdown) {
+                semanticMarkdown = window.__dsagent_extractCurrentAnswerMarkdown(false);
+                think = window.__dsagent_extractCurrentThinking ? window.__dsagent_extractCurrentThinking(false) : '';
+                if (!/(?:[|｜]\s*){1,3}DSML\s*(?:[|｜]\s*){1,3}(?:tool_calls|function_calls|calls|invoke)/i.test(semanticMarkdown)) {
+                    return { markdown: semanticMarkdown.trim(), think: think.trim(), answerConfirmed: !!semanticMarkdown.trim() };
+                }
+            }
+            // Keep an independent DOM result. Clipboard preserves Markdown better,
+            // but DeepSeek may leave an older copy button/clipboard value around.
+            var assistantBodies = document.querySelectorAll('.ds-markdown.ds-assistant-message-main-content, [class*="assistant-message-main-content"]');
+            var domMarkdown = semanticMarkdown || (assistantBodies.length
+                ? renderedMarkdown(assistantBodies[assistantBodies.length - 1])
+                : '');
 
             // ── 1. 提取 markdown：点击复制按钮 → 读剪贴板 ──
             var copyBtn = findCopyButton();
             if (copyBtn) {
                 // 保存当前剪贴板
-                var savedClipboard = null;
+                var savedClipboard = '';
                 try { savedClipboard = await window.electronAPI.clipboardSave(); } catch(e) {}
+                var clipboardSentinel = '__DSAGENT_COPY_' + Date.now() + '__';
+                var fastClipboard = await browserClipboardWriteText(clipboardSentinel);
+                if (!fastClipboard) {
+                    try { await window.electronAPI.clipboardWriteText(clipboardSentinel); } catch(e) {}
+                }
+                var clipboardExpected = clipboardSentinel;
                 try {
                     copyBtn.click();
-                    // 等待剪贴板更新（最多 3 秒）
-                    for (var ri = 0; ri < 15; ri++) {
-                        await new Promise(function(r) { setTimeout(r, 200); });
+                    // Browser clipboard access avoids spawning PowerShell for
+                    // every sample. A short bridge fallback remains for hosts
+                    // where Chromium denies the permission.
+                    var attempts = fastClipboard ? 24 : 3;
+                    var delay = fastClipboard ? 25 : 100;
+                    for (var ri = 0; ri < attempts; ri++) {
+                        await new Promise(function(r) { setTimeout(r, delay); });
                         try {
-                            var txt = await window.electronAPI.clipboardReadText();
-                            if (txt && txt.length > 5) { markdown = txt; break; }
+                            var txt = fastClipboard ? await browserClipboardReadText() : await window.electronAPI.clipboardReadText();
+                            if (txt && txt !== clipboardSentinel) { markdown = txt; clipboardExpected = txt; break; }
                         } catch(e) {}
                     }
                 } catch(e) { /* clipboard 失败则降级到 DOM */ }
-                // 还原剪贴板
-                if (savedClipboard && savedClipboard.text !== undefined) {
-                    try { await window.electronAPI.clipboardRestore(savedClipboard.text); } catch(e) {}
-                }
+                // Restoration is ownership-checked by the host, so a newer user
+                // copy always wins. Do not hold the response open while the
+                // Windows clipboard-format restoration process exits.
+                try { Promise.resolve(window.electronAPI.clipboardRestore(savedClipboard, clipboardExpected)).catch(function() {}); } catch(e) {}
             }
+            markdown = normalizeMarkdownSource(markdown);
+            // Reject a stale/truncated clipboard result when the actual last
+            // assistant DOM visibly contains more content.
+            var copiedComparable = String(markdown || '').replace(/\s+/g, '');
+            var domComparable = String(domMarkdown || '').replace(/\s+/g, '');
+            var domTokens = String(domMarkdown || '').match(/[\p{L}\p{N}_-]{2,}/gu) || [];
+            var sampleTokens = domTokens.length > 3
+                ? [domTokens[0], domTokens[Math.floor(domTokens.length / 2)], domTokens[domTokens.length - 1]]
+                : domTokens;
+            var clipboardMatchesDom = !!copiedComparable && sampleTokens.every(function(token) { return String(markdown).indexOf(token) >= 0; });
+            // Rendered diagrams add controls such as Copy/Download/Fullscreen to
+            // innerText. Those UI tokens are not present in the copied source and
+            // must not cause a valid fenced Markdown payload to be discarded.
+            var clipboardHasStructuredMarkdown = /```[\s\S]*```/.test(String(markdown || ''))
+                || /^\s*\|[^\n]+\|\s*\n\s*\|(?:\s*:?-+:?\s*\|)+/m.test(String(markdown || ''))
+                || /(?:^|\n)\s*\$\$[\s\S]*?\$\$\s*(?:\n|$)/.test(String(markdown || ''))
+                || /(?:[|｜]\s*){1,3}DSML\s*(?:[|｜]\s*){1,3}(?:tool_calls|function_calls|calls|invoke)/i.test(String(markdown || ''));
+            if (!markdown || (domComparable && !clipboardMatchesDom && !clipboardHasStructuredMarkdown)) markdown = domMarkdown;
             // 剪贴板失败时 DOM 兜底
             if (!markdown) {
                 var messages = document.querySelectorAll(SELECTORS.messageContainer);
@@ -2027,6 +2440,9 @@ async function deleteCurrentConversation() {
                 }
             }
 
+            // Use the same extractor as live polling so the streamed and final
+            // reasoning blocks have exactly the same source and ordering.
+            if (window.__dsagent_extractCurrentThinking) think = window.__dsagent_extractCurrentThinking();
             return { markdown: markdown.trim(), think: think.trim() };
         } catch (e) {
             return { markdown: '', think: '', error: e.message };
@@ -2068,14 +2484,15 @@ async function deleteCurrentConversation() {
         try {
             switch (op) {
                 case 'newChat':
-                    return await window.__dsagent_newChatAndSendInit(args.mode || 'quick', !!args.deepThink, args.userText || '', !!args.webSearch);
+                    return await window.__dsagent_newChatAndSendInit('unified', !!args.deepThink, args.userText || '', !!args.webSearch);
                 case 'switchModel':
-                    if (window.__dsagent_setModelMode) { window.__dsagent_setModelMode(args.mode || 'quick'); return { success: true }; }
+                    if (window.__dsagent_setModelMode) { window.__dsagent_setModelMode('unified'); return { success: true }; }
                     return { success: false, error: 'setModelMode not available' };
                 case 'setDeepThink':
                     return await (window.__dsagent_setDeepThink ? window.__dsagent_setDeepThink(!!args.enable) : Promise.resolve({ success: false }));
                 case 'setWebSearch':
-                    if (window.__dsagent_disableWebSearch) { if (!args.enable) window.__dsagent_disableWebSearch(); return { success: true }; }
+                    if (args.enable && window.__dsagent_enableWebSearch) { window.__dsagent_enableWebSearch(); return { success: true }; }
+                    if (!args.enable && window.__dsagent_disableWebSearch) { window.__dsagent_disableWebSearch(); return { success: true }; }
                     return { success: false };
                 case 'sendMessage':
                     return await (window.__dsagent_sendMessage ? window.__dsagent_sendMessage(args.text || '') : Promise.resolve({ success: false, error: 'not ready' }));

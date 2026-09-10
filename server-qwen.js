@@ -2,7 +2,6 @@
 // 运行在主进程，通过 executeJavaScript 调用 inject-qwen.js 暴露的 DOM 协议
 // 对外提供统一 invoke(modelId, op, args) 协议
 'use strict';
-const { clipboard } = require('electron');
 
 function createQwenServer(qwenViewRef) {
     const getView = typeof qwenViewRef === 'function' ? qwenViewRef : () => qwenViewRef;
@@ -13,21 +12,25 @@ function createQwenServer(qwenViewRef) {
     function setQwenGenerating(v) { _qwenGenerating = v; }
 
     // ===== 模型注册 =====
-    // Qwen 网页版只有 1 个对话模型，支持文档+图片输入、图片输出
+    // Keep qwen.default as a hidden compatibility alias. Concrete web models
+    // are selected through the same picker shown at the top-left of Qianwen.
+    const QWEN_CAPABILITIES = {
+        inputMaxLen: 32768,
+        file: {
+            doc: { maxMB: 100, maxCount: 10, types: ['txt', 'pdf', 'docx', 'md', 'csv', 'xlsx', 'pptx', 'json', 'html', 'xml', 'yaml'] },
+            image: { maxMB: 100, maxCount: 10, types: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'] }
+        },
+        multimodal: { input: ['image', 'text'], output: ['text', 'image'] }
+    };
+    function webModel(id, displayName, webLabel, description, hidden) {
+        return { id, provider: 'qwen', displayName, webLabel, description, hidden: !!hidden, capabilities: QWEN_CAPABILITIES };
+    }
     const MODELS = {
-        'qwen.default': {
-            id: 'qwen.default',
-            provider: 'qwen',
-            displayName: 'Qwen 网页版',
-            capabilities: {
-                inputMaxLen: 32768,
-                file: {
-                    doc: { maxMB: 100, maxCount: 10, types: ['txt', 'pdf', 'docx', 'md', 'csv', 'xlsx', 'pptx', 'json', 'html', 'xml', 'yaml'] },
-                    image: { maxMB: 100, maxCount: 10, types: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'] }
-                },
-                multimodal: { input: ['image', 'text'], output: ['text', 'image'] }
-            }
-        }
+        'qwen.default': webModel('qwen.default', 'Qwen3.7 千问（兼容）', 'Qwen3.7-千问', '原 qwen.default 兼容别名', true),
+        'qwen.3.7': webModel('qwen.3.7', 'Qwen3.7 千问', 'Qwen3.7-千问', '综合 AI 助手，适合工作、学习与生活问答'),
+        'qwen.3.8-max': webModel('qwen.3.8-max', 'Qwen3.8 Max', 'Qwen3.8-Max', '最新 Max 旗舰模型，支持视觉理解'),
+        'qwen.3.7-max': webModel('qwen.3.7-max', 'Qwen3.7 Max', 'Qwen3.7-Max', '擅长代码编写与复杂任务'),
+        'qwen.3.6-flash': webModel('qwen.3.6-flash', 'Qwen3.6 Flash', 'Qwen3.6-Flash', '适用于简单任务，响应速度快')
     };
 
     // ===== 并行槽位：Qwen 可无限并行（移除限制） =====
@@ -108,6 +111,16 @@ function createQwenServer(qwenViewRef) {
             case 'listModels':
                 return { success: true, data: Object.keys(MODELS).map((k) => MODELS[k]) };
 
+            case 'setModelMode': {
+                const selected = await execJs(`(async function(){
+                    if (!window.__qwen || !window.__qwen.selectModel) return {success:false,error:'Qwen model selector is unavailable'};
+                    return await window.__qwen.selectModel(${JSON.stringify(model.id)});
+                })();`);
+                return selected && selected.success
+                    ? { success: true, data: selected }
+                    : { success: false, error: selected && selected.error || 'Unable to select Qwen model' };
+            }
+
             case 'newChat': {
                 setQwenGenerating(false); // 新对话开始，旧生成结束
                 const userText = args.userText || '';
@@ -122,6 +135,7 @@ function createQwenServer(qwenViewRef) {
                     // 1. 新建对话
                     var r = await window.__qwen.newConversation();
                     if (!r.success) return r;
+                    window.__dsagent_qwenBaseline = '';
                     // 2. 等待编辑器就绪（编辑器存在即就绪，sendMessage 内部有 waitForEditorReady 兜底）
                     var ready = await new Promise(function(resolve){
                         var retry = 0;
@@ -133,9 +147,16 @@ function createQwenServer(qwenViewRef) {
                         }
                         setTimeout(check, 100);
                     });
-                    // 3. 合并发送 userText
+                    // 3. Select the requested web model before the first turn.
+                    // The page persists its last choice, so this must be asserted
+                    // for every newly leased worker rather than inferred.
+                    if (!window.__qwen.selectModel) return {success:false,error:'Qwen model selector is unavailable'};
+                    var selectedModel = await window.__qwen.selectModel(${JSON.stringify(model.id)});
+                    if (!selectedModel || !selectedModel.success) return selectedModel || {success:false,error:'Qwen model selection failed'};
+                    // 4. 合并发送 userText
                     var _ut = ${JSON.stringify(userText)};
                     if (ready && _ut && _ut.trim()) {
+                        window.__dsagent_qwenLastUserText = _ut;
                         if (!window.__qwen.sendMessage) {
                             return {success:false, error:'sendMessage missing'};
                         }
@@ -205,9 +226,26 @@ function createQwenServer(qwenViewRef) {
                 setQwenGenerating(true); // 发送消息后预期进入生成态
                 const js = `(async function(){
                     if (!window.__qwen || !window.__qwen.sendMessage) return {success:false, error:'inject not ready'};
-                    return await window.__qwen.sendMessage(${JSON.stringify(args.text || '')});
+                    window.__dsagent_qwenBaseline = window.__qwen.getLastResponseText ? window.__qwen.getLastResponseText() : '';
+                    window.__dsagent_qwenLastUserText = ${JSON.stringify(args.text || '')};
+                    return await window.__qwen.sendMessage(window.__dsagent_qwenLastUserText);
                 })();`;
                 return await execJs(js);
+            }
+
+            case 'peekResponse': {
+                const js = `(function(){
+                    if (!window.__qwen || !window.__qwen.getLastResponseText) return {text:''};
+                    var text = (window.__qwen.getLastResponseText() || '').trim();
+                    if (!text || text === String(window.__dsagent_qwenBaseline || '')) return {text:''};
+                    return {text:text};
+                })();`;
+                try {
+                    const current = await execJs(js);
+                    return { success: true, data: current || { text: '' } };
+                } catch (e) {
+                    return { success: false, error: e.message };
+                }
             }
 
             case 'waitForDone': {
@@ -243,7 +281,7 @@ function createQwenServer(qwenViewRef) {
                     setQwenGenerating(false); // waitForDone 结束，不管结果如何，生成态已结束
                     if (!r) return { success: false, error: 'waitDone execJs null' };
                     console.log('[Qwen waitDone] result:', JSON.stringify(r));
-                    return { success: true, data: { stopped: true, done: !!(r.done), reason: r.reason || '' } };
+                    return { success: true, data: { stopped: true, done: !!(r.done), reason: r.reason || '', hasImages: !!r.hasImages } };
                 } catch (e) {
                     setQwenGenerating(false);
                     console.error('[Qwen waitDone] execJs error:', e.message);
@@ -284,15 +322,21 @@ function createQwenServer(qwenViewRef) {
                         return { success: true, data: { markdown: (fb && fb.markdown) || '', images: (fb && fb.images) || [], source: 'dom-fallback' } };
                     }
                     console.log('[Qwen extract] copy btn coord fallback:', JSON.stringify({x: coord.x, y: coord.y}));
-                    const savedClipboard = clipboard.readText();
-                    view.webContents.focus();
-                    await new Promise(r => setTimeout(r, 50));
-                    view.webContents.sendInputEvent({ type: 'mouseDown', x: coord.x, y: coord.y, button: 'left', clickCount: 1 });
-                    await new Promise(r => setTimeout(r, 30));
-                    view.webContents.sendInputEvent({ type: 'mouseUp', x: coord.x, y: coord.y, button: 'left', clickCount: 1 });
-                    await new Promise(r => setTimeout(r, 400));
-                    const markdown = clipboard.readText();
-                    if (savedClipboard) clipboard.writeText(savedClipboard);
+                    const savedClipboard = await execJs(`window.electronAPI && window.electronAPI.clipboardSave ? window.electronAPI.clipboardSave() : null;`);
+                    let markdown = '';
+                    try {
+                        view.webContents.focus();
+                        await new Promise(r => setTimeout(r, 50));
+                        view.webContents.sendInputEvent({ type: 'mouseDown', x: coord.x, y: coord.y, button: 'left', clickCount: 1 });
+                        await new Promise(r => setTimeout(r, 30));
+                        view.webContents.sendInputEvent({ type: 'mouseUp', x: coord.x, y: coord.y, button: 'left', clickCount: 1 });
+                        await new Promise(r => setTimeout(r, 400));
+                        markdown = await execJs(`window.electronAPI && window.electronAPI.clipboardReadText ? window.electronAPI.clipboardReadText() : '';`);
+                        const copiedUserMessage = await execJs(`!!(window.__qwen && window.__qwen.isLastUserEcho && window.__qwen.isLastUserEcho(${JSON.stringify(markdown)}));`);
+                        if (copiedUserMessage) markdown = '';
+                    } finally {
+                        if (savedClipboard) await execJs(`window.electronAPI && window.electronAPI.clipboardRestore ? window.electronAPI.clipboardRestore(${JSON.stringify(savedClipboard)}, ${JSON.stringify(markdown)}) : null;`).catch(() => {});
+                    }
                     if (markdown) {
                         return { success: true, data: { markdown: markdown, images: [], source: 'clipboard' } };
                     }
@@ -306,6 +350,17 @@ function createQwenServer(qwenViewRef) {
                     console.error('[Qwen extract] error:', e.message);
                     return { success: false, error: e.message };
                 }
+            }
+
+            case 'getConversationMetadata': {
+                const result = await execJs(`(function(){
+                    var here=(location.pathname||'').replace(/\\/$/,'');
+                    var links=Array.from(document.querySelectorAll('a[href*="/chat/"]'));
+                    var active=links.find(function(a){try{return new URL(a.href,location.href).pathname.replace(/\\/$/,'')===here;}catch(e){return false;}});
+                    var title=active&&((active.querySelector('[class*="title"],[class*="font-500"],[class*="text-title"]')||active).textContent||'').trim();
+                    return {title:(title||'').slice(0,120),url:location.href};
+                })();`);
+                return { success: true, data: { title: result && result.title || '', url: result && result.url || '' } };
             }
 
             case 'detectResponseType': {

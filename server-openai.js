@@ -67,12 +67,16 @@ function createOpenAIServer(config) {
             const req = lib.request(reqOpts, (res) => {
                 let data = '';
                 res.setEncoding('utf8');
-                res.on('data', (chunk) => { data += chunk; });
+                res.on('data', (chunk) => { data += chunk; if (options.onData) options.onData(chunk); });
                 res.on('end', () => {
                     resolve({ statusCode: res.statusCode, headers: res.headers, body: data });
                 });
             });
             req.on('error', reject);
+            if (options.signal) {
+                if (options.signal.aborted) req.destroy(Object.assign(new Error('Request cancelled'), { code: 'run_cancelled', name: 'AbortError' }));
+                else options.signal.addEventListener('abort', function(){ req.destroy(Object.assign(new Error('Request cancelled'), { code: 'run_cancelled', name: 'AbortError' })); }, { once: true });
+            }
             req.setTimeout(options.timeout || 120000, () => { req.destroy(new Error('Request timeout')); });
             if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
             req.end();
@@ -163,12 +167,14 @@ function createOpenAIServer(config) {
                     messages.push({ role: 'user', content: userContent });
                 }
 
+                const protocol = (model.protocol || _config.protocol || 'auto') === 'responses' ? 'responses' : 'chat_completions';
                 const body = {
                     model: model.apiName || model.id,
                     messages: messages,
                     stream: !!args.stream,
                     temperature: args.temperature !== undefined ? args.temperature : 0.7
                 };
+                if (Array.isArray(args.tools) && args.tools.length) body.tools = args.tools.map(function(tool) { return { type: 'function', function: { name: tool.name, description: tool.description || '', parameters: tool.parameters || { type: 'object' } } }; });
                 if (args.maxTokens) body.max_tokens = args.maxTokens;
 
                 // 缓存到 per-conversation 状态
@@ -178,26 +184,61 @@ function createOpenAIServer(config) {
                 conv.streaming = !!args.stream;
 
                 try {
-                    const res = await httpRequest(_config.endpoint + '/chat/completions', {
+                    let streamBuffer = '';
+                    let streamText = '';
+                    const streamCalls = {};
+                    const onData = args.stream ? function(chunk) {
+                        streamBuffer += chunk;
+                        var lines = streamBuffer.split(/\r?\n/);
+                        streamBuffer = lines.pop() || '';
+                        lines.forEach(function(line) {
+                            if (line.indexOf('data:') !== 0) return;
+                            var raw = line.slice(5).trim();
+                            if (!raw || raw === '[DONE]') return;
+                            try {
+                                var event = JSON.parse(raw);
+                                var delta = protocol === 'responses'
+                                    ? (event.type === 'response.output_text.delta' ? event.delta || '' : '')
+                                    : event.choices && event.choices[0] && event.choices[0].delta && event.choices[0].delta.content || '';
+                                if (protocol === 'responses') {
+                                    if (event.type === 'response.output_item.added' && event.item && event.item.type === 'function_call') streamCalls[event.output_index || event.item.id || 0] = { name: event.item.name || '', arguments: event.item.arguments || '' };
+                                    if (event.type === 'response.function_call_arguments.delta') { var rc = streamCalls[event.output_index || event.item_id || 0] || (streamCalls[event.output_index || event.item_id || 0] = { name: event.name || '', arguments: '' }); rc.arguments += event.delta || ''; }
+                                    if (event.type === 'response.function_call_arguments.done') { var rd = streamCalls[event.output_index || event.item_id || 0] || (streamCalls[event.output_index || event.item_id || 0] = { name: event.name || '', arguments: '' }); rd.name = event.name || rd.name; rd.arguments = event.arguments || rd.arguments; }
+                                } else {
+                                    var choiceDelta = event.choices && event.choices[0] && event.choices[0].delta;
+                                    (choiceDelta && choiceDelta.tool_calls || []).forEach(function(call) { var cc = streamCalls[call.index || 0] || (streamCalls[call.index || 0] = { name: '', arguments: '' }); if (call.function) { cc.name = call.function.name || cc.name; cc.arguments += call.function.arguments || ''; } });
+                                }
+                                if (delta) { streamText += delta; conv.lastResponseText = streamText; if (args.onDelta) args.onDelta(streamText); }
+                            } catch (_) {}
+                        });
+                    } : null;
+                    const requestBody = protocol === 'responses'
+                        ? { model: body.model, input: messages, stream: body.stream, tools: Array.isArray(args.tools) ? args.tools.map(function(tool) { return { type: 'function', name: tool.name, description: tool.description || '', parameters: tool.parameters || { type: 'object' }, strict: false }; }) : undefined }
+                        : body;
+                    const res = await httpRequest(_config.endpoint + (protocol === 'responses' ? '/responses' : '/chat/completions'), {
                         method: 'POST',
                         apiKey: _config.apiKey,
-                        timeout: args.timeout || 120000
-                    }, body);
+                        timeout: args.timeout || 120000,
+                        signal: args.signal,
+                        onData: onData
+                    }, requestBody);
 
                     if (res.statusCode !== 200) {
                         return { success: false, error: 'OpenAI API error ' + res.statusCode + ': ' + res.body.substring(0, 500) };
                     }
 
                     if (args.stream) {
-                        conv.lastResponseText = parseSSEStream(res.body);
+                        conv.lastResponseText = streamText || parseSSEStream(res.body, protocol) || toolProtocol(Object.keys(streamCalls).map(function(key) { return streamCalls[key]; }));
                     } else {
                         const json = JSON.parse(res.body);
                         conv.lastResponse = json;
-                        conv.lastResponseText = json.choices && json.choices[0] && json.choices[0].message ? json.choices[0].message.content : '';
+                        conv.lastResponseText = protocol === 'responses'
+                            ? extractResponsesText(json)
+                            : extractChatText(json);
                     }
                     return { success: true };
                 } catch (e) {
-                    return { success: false, error: e.message };
+                    return { success: false, error: e.message, code: e.code || (e.name === 'AbortError' ? 'run_cancelled' : 'provider_request_failed') };
                 }
             }
 
@@ -234,7 +275,7 @@ function createOpenAIServer(config) {
     }
 
     // SSE 流式解析：累积所有 delta.content
-    function parseSSEStream(body) {
+    function parseSSEStream(body, protocol) {
         const lines = body.split('\n');
         let text = '';
         for (const line of lines) {
@@ -244,11 +285,33 @@ function createOpenAIServer(config) {
             if (data === '[DONE]') break;
             try {
                 const json = JSON.parse(data);
-                const delta = json.choices && json.choices[0] && json.choices[0].delta;
-                if (delta && delta.content) text += delta.content;
+                const delta = protocol === 'responses'
+                    ? (json.type === 'response.output_text.delta' ? json.delta : '')
+                    : json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content;
+                if (delta) text += delta;
             } catch (e) { /* skip */ }
         }
         return text;
+    }
+
+    function toolProtocol(calls) {
+        return (calls || []).map(function(call) {
+            var fn = call.function || call;
+            return 'Calling: ' + (fn.name || call.name || 'tool') + '\n```json\n' + (fn.arguments || call.arguments || '{}') + '\n```';
+        }).join('\n\n');
+    }
+    function extractChatText(json) {
+        var message = json.choices && json.choices[0] && json.choices[0].message || {};
+        return message.content || toolProtocol(message.tool_calls);
+    }
+    function extractResponsesText(json) {
+        if (json.output_text) return json.output_text;
+        var text = [], calls = [];
+        (json.output || []).forEach(function(item) {
+            if (item.type === 'function_call') calls.push({ name: item.name, arguments: item.arguments });
+            (item.content || []).forEach(function(part) { if (part.type === 'output_text' && part.text) text.push(part.text); });
+        });
+        return text.join('') || toolProtocol(calls);
     }
 
     return {

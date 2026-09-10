@@ -44,6 +44,87 @@
     // ==================== 核心 API ====================
     Q.ready = true;
 
+    var QWEN_WEB_MODEL_LABELS = {
+        'qwen.default': 'Qwen3.7-千问',
+        'qwen.3.7': 'Qwen3.7-千问',
+        'qwen.3.8-max': 'Qwen3.8-Max',
+        'qwen.3.7-max': 'Qwen3.7-Max',
+        'qwen.3.6-flash': 'Qwen3.6-Flash'
+    };
+
+    function normalizedLabel(value) {
+        return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function visibleElement(node) {
+        if (!node || !node.getBoundingClientRect) return false;
+        var rect = node.getBoundingClientRect();
+        var style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+        return rect.width > 0 && rect.height > 0 && (!style || (style.display !== 'none' && style.visibility !== 'hidden'));
+    }
+
+    function modelPicker() {
+        var candidates = document.querySelectorAll('[aria-haspopup="dialog"]');
+        for (var i = 0; i < candidates.length; i++) {
+            var text = normalizedLabel(candidates[i].innerText || candidates[i].textContent);
+            if (visibleElement(candidates[i]) && /^(?:Qwen|千问)/i.test(text)) return candidates[i];
+        }
+        return null;
+    }
+
+    Q.getCurrentModel = function() {
+        var picker = modelPicker();
+        return picker ? normalizedLabel(picker.innerText || picker.textContent) : '';
+    };
+
+    Q.selectModel = async function(modelId) {
+        var label = QWEN_WEB_MODEL_LABELS[String(modelId || '')] || String(modelId || '');
+        if (!label) return { success: false, error: 'Unknown Qwen web model: ' + modelId };
+        var picker = modelPicker();
+        var pickerDeadline = Date.now() + 10000;
+        while (!picker && Date.now() < pickerDeadline) {
+            await sleep(150);
+            picker = modelPicker();
+        }
+        if (!picker) return { success: false, error: 'Qwen model picker not found after page stabilization' };
+        if (normalizedLabel(picker.innerText || picker.textContent).indexOf(label) === 0) {
+            return { success: true, model: label, unchanged: true };
+        }
+        if (picker.getAttribute('aria-expanded') !== 'true') {
+            picker.click();
+            await sleep(250);
+        }
+        var deadline = Date.now() + 4000;
+        var option = null;
+        while (!option && Date.now() < deadline) {
+            var nodes = document.querySelectorAll('div,button,[role="button"],[role="option"],[role="menuitem"]');
+            for (var i = 0; i < nodes.length; i++) {
+                if (!visibleElement(nodes[i]) || normalizedLabel(nodes[i].innerText || nodes[i].textContent) !== label) continue;
+                var candidate = nodes[i];
+                for (var depth = 0; candidate && depth < 5; depth++, candidate = candidate.parentElement) {
+                    var candidateText = normalizedLabel(candidate.innerText || candidate.textContent);
+                    var candidateClass = typeof candidate.className === 'string' ? candidate.className : '';
+                    if (candidateText.indexOf(label) === 0 && (candidate.getAttribute('role') === 'option' || candidate.getAttribute('role') === 'menuitem' || /cursor-pointer/.test(candidateClass))) {
+                        option = candidate;
+                        break;
+                    }
+                }
+                if (option) break;
+            }
+            if (!option) await sleep(100);
+        }
+        if (!option) return { success: false, error: 'Qwen model option not found: ' + label };
+        option.click();
+        deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+            await sleep(100);
+            picker = modelPicker();
+            var current = picker && normalizedLabel(picker.innerText || picker.textContent);
+            if (current && current.indexOf(label) === 0) return { success: true, model: label };
+        }
+        return { success: false, error: 'Qwen model selection was not confirmed: ' + label };
+    };
+
     // 自动点击 float-to-bottom 按钮（Qwen 回到底部的滚动按钮）
     // 严格限定：只匹配 chat 区域内的回到底部按钮，排除侧边栏折叠按钮
     // 加导航状态保护 + 节流防抖：SPA 导航/操作期间 DOM 大量变更，不加节流会导致
@@ -202,15 +283,23 @@
     function findStopButton() {
         var btns = document.querySelectorAll('button');
         for (var i = 0; i < btns.length; i++) {
-            var label = (btns[i].getAttribute('aria-label') || '');
-            if (label === '停止回答' || label.indexOf('停止') !== -1) {
+            var label = (btns[i].getAttribute('aria-label') || '').trim();
+            var title = (btns[i].getAttribute('title') || '').trim();
+            var testId = (btns[i].getAttribute('data-testid') || '').trim();
+            if (/^(停止回答|停止生成|停止响应|Stop generating|Stop response)$/i.test(label)
+                || /^(停止回答|停止生成|Stop generating)$/i.test(title)
+                || /^(stop-generating|stop-response|composer-stop-button)$/i.test(testId)) {
                 return btns[i];
             }
         }
-        // 兜底：class 含 stop（旧版兼容）
+        // Only accept an actual `stop` class token with a square stop glyph.
+        // Substring matching used to accept utility classes such as
+        // `stopPropagation`, leaving every completed Qianwen turn stuck.
         for (var i = 0; i < btns.length; i++) {
             var cls = (btns[i].className || '').toLowerCase();
-            if (cls.indexOf('stop') >= 0) return btns[i];
+            if (!/(^|[\s_-])stop([\s_-]|$)/.test(cls)) continue;
+            var svg = btns[i].querySelector('svg');
+            if (svg && (svg.querySelector('rect') || svg.querySelector('path[d*="H"], path[d*="h"]'))) return btns[i];
         }
         return null;
     }
@@ -302,6 +391,10 @@
     }
 
     Q.sendMessage = function(text) {
+        // Keep the exact submitted turn so extraction can reject a user-bubble
+        // copy. Qwen's current DOM may place the user node after the assistant
+        // markdown node even though it appears above it visually.
+        Q._lastSentText = String(text || '');
         // P3: 模型微调指令（Qwen → 中文输出锁定，由 prompt-builder 兜底此处）
         return new Promise(function(resolve) {
             // 0. 先等编辑器就绪（newChat 已确保就绪，此处仅兜底，3s 足够）
@@ -667,12 +760,20 @@
             }
 
             function getImageSignature() {
-                var imgs = document.querySelectorAll('[class*="imageItem"] img, [class*="imageWrapper"] img, [class*="message"]:last-child img');
+                var card = document.querySelector('[data-card-type="ai_generate_image_list"]');
+                if (!card) return '';
+                var imgs = card.querySelectorAll('img');
                 var sigs = [];
                 for (var ii = 0; ii < imgs.length; ii++) {
-                    var src = imgs[ii].src || '';
-                    if (src.indexOf('qianwen.com') >= 0 || src.indexOf('data:image') >= 0) sigs.push(src + '|w=' + (imgs[ii].width || 0));
+                    var src = imgs[ii].currentSrc || imgs[ii].src || '';
+                    var width = imgs[ii].naturalWidth || imgs[ii].width || 0;
+                    var height = imgs[ii].naturalHeight || imgs[ii].height || 0;
+                    if (src && !/^data:|^blob:/i.test(src) && width >= 256 && height >= 256) sigs.push(src + '|w=' + width + '|h=' + height);
                 }
+                // Qwen-Image currently renders a four-variant grid. Waiting for
+                // all four full-size assets prevents the first completed tile
+                // (often around 20%) from ending the Runtime run early.
+                if (sigs.length < 4) return '';
                 return sigs.join('||');
             }
 
@@ -746,9 +847,19 @@
                         return;
                     }
 
-                    // 图片已出现 → 立即完成
-                    showPhase(5, '全部完成!');
-                    resolve({ success: true });
+                    // 图片 URL、尺寸和完成状态稳定两秒后才算完成，避免把
+                    // loading 占位图或消息头像误判为生成结果。
+                    if (currentSig !== lastImageUrls) {
+                        lastImageUrls = currentSig;
+                        imageStableSince = Date.now();
+                    }
+                    if (Date.now() - imageStableSince >= 2000) {
+                        showPhase(5, '全部完成!');
+                        resolve({ success: true });
+                        return;
+                    }
+                    showPhase(2, '阶段2/2: 图片加载中...');
+                    setTimeout(check, 500);
                     return;
                 }
             }
@@ -902,29 +1013,106 @@
         return { hasError: false };
     };
 
+    var ASSISTANT_CONTENT_SELECTOR = '[data-message-author-role="assistant"], [data-role="assistant"], [data-author="assistant"], [data-testid*="assistant"], .markdown-pc-special-class, .qk-markdown';
+    var MESSAGE_SCOPE_SELECTOR = '[data-message-author-role], [data-role], [class*="message"], [class*="chat-item"], [class*="conversation-item"]';
+    var USER_SCOPE_SELECTOR = '[data-message-author-role="user"], [data-role="user"], [data-author="user"], [data-testid*="user-message"], [class*="user-message"], [class*="message-user"]';
+    var MARKDOWN_SELECTOR = '.markdown-pc-special-class, .qk-markdown';
+    var COPY_PATH_SELECTOR = 'svg path[d*="M832 64"]';
+
+    function isInsideUserMessage(node) {
+        return !!(node && node.closest && node.closest(USER_SCOPE_SELECTOR));
+    }
+
+    function isInsideComposer(node) {
+        return !!(node && node.closest && node.closest('[contenteditable="true"], textarea, [class*="composer"], [class*="chat-input"], [class*="input-area"]'));
+    }
+
+    function lastAssistantContentNode() {
+        var nodes = Array.from(document.querySelectorAll(ASSISTANT_CONTENT_SELECTOR)).filter(function(node) {
+            return !isInsideUserMessage(node) && !isInsideComposer(node);
+        });
+        if (!nodes.length) return null;
+        var candidate = nodes[nodes.length - 1];
+        // An explicit assistant message wrapper may contain the stable Markdown
+        // body. Returning the body avoids toolbar labels and hidden metadata.
+        if (candidate.querySelector) {
+            var markdown = candidate.querySelector(MARKDOWN_SELECTOR);
+            if (markdown && !isInsideUserMessage(markdown)) return markdown;
+        }
+        return candidate;
+    }
+
+    function assistantMessageScope() {
+        var content = lastAssistantContentNode();
+        if (!content) return null;
+        var explicit = content.closest && content.closest('[data-message-author-role="assistant"], [data-role="assistant"], [data-author="assistant"], [data-testid*="assistant"]');
+        if (explicit) return explicit;
+        var scope = content.closest && content.closest(MESSAGE_SCOPE_SELECTOR);
+        if (scope && !isInsideUserMessage(scope)) return scope;
+
+        // Hash-based Qwen class names sometimes leave only .qk-markdown stable.
+        // Walk outward while the parent still owns exactly this one Markdown
+        // response so sibling action buttons remain inside the scope.
+        var current = content;
+        for (var depth = 0; current && current.parentElement && depth < 8; depth++) {
+            var parent = current.parentElement;
+            var bodies = parent.querySelectorAll ? parent.querySelectorAll(MARKDOWN_SELECTOR) : [];
+            if (bodies.length > 1 || isInsideUserMessage(parent)) break;
+            current = parent;
+        }
+        return current || content;
+    }
+
+    function cleanAssistantText() {
+        var content = lastAssistantContentNode();
+        if (!content) return '';
+        var clone = content.cloneNode(true);
+        var extras = clone.querySelectorAll ? clone.querySelectorAll('script, style, template, [hidden], [aria-hidden="true"], button, [role="button"], img, [class*="popMenu"], [class*="imageItem"], [class*="imageWrapper"]') : [];
+        for (var i = 0; i < extras.length; i++) extras[i].remove();
+        return (clone.innerText || clone.textContent || '').trim();
+    }
+
+    function normalizedTurnText(value) {
+        return String(value || '').replace(/\r/g, '').replace(/[\s\u00a0]+/g, ' ').trim();
+    }
+
+    Q.isLastUserEcho = function(value) {
+        var extracted = normalizedTurnText(value);
+        var submitted = normalizedTurnText(Q._lastSentText || window.__dsagent_qwenLastUserText || '');
+        return !!extracted && !!submitted && extracted === submitted;
+    };
+
+    Q.getLastAssistantScope = assistantMessageScope;
+
     // 获取最后回复中的图片 URL
     // Qwen 图片结构：<div class="imageItem-xxx imageWrapper-xxx complete-xxx"><img src="https://workspace-zb-cdn.qianwen.com/..."></div>
     Q.getLastImageUrls = function() {
         var urls = [];
+        var scope = assistantMessageScope();
+        var cards = scope && scope.querySelectorAll ? scope.querySelectorAll('[data-card-type="ai_generate_image_list"]') : [];
+        var card = cards.length ? cards[cards.length - 1] : null;
+        var root = card || scope;
+        if (!root) return urls;
 
-        // 方式一：直接查找 imageItem/imageWrapper 容器中的 img
-        var imageItems = document.querySelectorAll('[class*="imageItem"] img, [class*="imageWrapper"] img');
+        // 方式一：图片卡中的全尺寸图片。Qwen 的哈希类名会变，尺寸和
+        // 卡片归属比 imageItem/complete 类名稳定。
+        var imageItems = root.querySelectorAll('img');
         for (var i = 0; i < imageItems.length; i++) {
-            var src = imageItems[i].src || '';
-            if (src && src.indexOf('qianwen.com') > -1 && urls.indexOf(src) === -1) {
+            var src = imageItems[i].currentSrc || imageItems[i].src || '';
+            var width = imageItems[i].naturalWidth || imageItems[i].width || 0;
+            var height = imageItems[i].naturalHeight || imageItems[i].height || 0;
+            if (src && !/^data:|^blob:/i.test(src) && width >= 256 && height >= 256 && urls.indexOf(src) === -1) {
                 urls.push(src);
             }
         }
 
         // 方式二：查找最后一条消息中的所有图片（兜底）
-        if (urls.length === 0) {
-            var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
-            if (messages.length > 0) {
-                var lastMsg = messages[messages.length - 1];
-                var imgs = lastMsg.querySelectorAll('img');
+        if (urls.length === 0 && !card) {
+            if (scope) {
+                var imgs = scope.querySelectorAll('img');
                 for (var i = 0; i < imgs.length; i++) {
                     var src = imgs[i].src || '';
-                    if (src && src.indexOf('qianwen.com') > -1 && urls.indexOf(src) === -1) {
+                    if (src && (imgs[i].naturalWidth || imgs[i].width || 0) >= 128 && (imgs[i].naturalHeight || imgs[i].height || 0) >= 128 && urls.indexOf(src) === -1) {
                         urls.push(src);
                     }
                 }
@@ -937,25 +1125,20 @@
     // 获取最后回复的文本（只返回文字部分，排除图片区域）
     // Qwen 回复结构：先文字 → 再图片（含"修改建议"等）
     Q.getLastResponseText = function() {
-        var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
-        if (messages.length === 0) return '';
-        var lastMsg = messages[messages.length - 1];
-        // 克隆节点，删除图片容器，取纯文字
-        var clone = lastMsg.cloneNode(true);
-        var imgAreas = clone.querySelectorAll('[class*="imageItem"], [class*="imageWrapper"], img, [class*="popMenu"]');
-        for (var i = 0; i < imgAreas.length; i++) {
-            imgAreas[i].remove();
-        }
-        return (clone.textContent || '').trim();
+        return cleanAssistantText();
     };
 
     // 获取第一阶段文字（图片前面的文字，不含后面的修改建议）
     // Qwen 回复结构：[文字] [图片] [修改建议 + 隐藏的JSON控件数据]
     // 克隆消息节点 → 删除从第一条图片开始的所有后续元素 → 取剩余文字
     Q.getPhase1Text = function() {
-        var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
-        if (messages.length === 0) return '';
-        var lastMsg = messages[messages.length - 1];
+        var lastMsg = assistantMessageScope();
+        if (!lastMsg) return '';
+
+        // The prose is rendered in a dedicated markdown node while the image
+        // card carries embedded JSON and CSS. Prefer that stable semantic split.
+        var markdownNode = lastMsg.querySelector && lastMsg.querySelector('.markdown-pc-special-class, .qk-markdown');
+        if (markdownNode) return (markdownNode.innerText || markdownNode.textContent || '').trim();
 
         // 克隆以避免修改真实 DOM
         var clone = lastMsg.cloneNode(true);
@@ -963,6 +1146,14 @@
         // 先移除隐藏的 script/style/hidden 元素（这些会产生 JSON 控件数据）
         var invisibleEls = clone.querySelectorAll('script, style, [style*="display:none"], [style*="display: none"], [hidden], template');
         for (var i = 0; i < invisibleEls.length; i++) invisibleEls[i].remove();
+
+        // 生图卡片包含 hydration JSON/CSS；正文只保留卡片外的自然语言。
+        // If the selector resolved to the card itself, detaching the cloned root
+        // would not clear its children. In that case there is no trustworthy
+        // natural-language prefix to return.
+        if (clone.matches && clone.matches('[data-card-type="ai_generate_image_list"]')) return '';
+        var generatedCard = clone.querySelector('[data-card-type="ai_generate_image_list"]');
+        if (generatedCard) generatedCard.remove();
 
         // 查找第一条图片容器
         var firstImageContainer = clone.querySelector('[class*="imageItem"], [class*="imageWrapper"]');
@@ -988,8 +1179,11 @@
     // 检测最后一条回复的"复制按钮"是否已出现（渲染完成信号）
     // 复用 copyLastResponse 的 tryFindButton 定位逻辑，但只返回 bool，不点击、不等待
     Q.hasCopyButton = function() {
+        var assistant = assistantMessageScope();
+        if (!assistant) return { success: true, has: false };
         // 方案1：复制图标 SVG 路径
-        var copySvg = document.querySelector('svg path[d*="M832 64"]');
+        var copySvgs = assistant.querySelectorAll(COPY_PATH_SELECTOR);
+        var copySvg = copySvgs.length ? copySvgs[copySvgs.length - 1] : null;
         if (copySvg) {
             var btn = copySvg.closest('[class*="hover:bg-tag"][class*="cursor-pointer"]') || copySvg.parentElement;
             if (btn) {
@@ -998,21 +1192,17 @@
             }
         }
         // 方案2：hover:bg-tag + cursor-pointer + 复制图标
-        var tagBtns = document.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
+        var tagBtns = assistant.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
         for (var i = 0; i < tagBtns.length; i++) {
             if (tagBtns[i].querySelector('svg path[d*="M832 64"]')) {
                 var r2 = tagBtns[i].getBoundingClientRect();
                 if (r2.width > 0 && r2.height > 0) return { success: true, has: true };
             }
         }
-        // 方案3：最后一条消息工具栏内
-        var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
-        if (messages.length > 0) {
-            var lastMsg = messages[messages.length - 1];
-            var msgBtns = lastMsg.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
-            for (var i = 0; i < msgBtns.length; i++) {
-                if (msgBtns[i].querySelector('svg path[d*="M832 64"]')) return { success: true, has: true };
-            }
+        // 方案3：最后一条 AI 消息工具栏内
+        var msgBtns = assistant.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
+        for (var i = 0; i < msgBtns.length; i++) {
+            if (msgBtns[i].querySelector(COPY_PATH_SELECTOR)) return { success: true, has: true };
         }
         return { success: true, has: false };
     };
@@ -1024,9 +1214,8 @@
     // 最多等 10s，找到返回 {success:true, x, y}，找不到返回 {success:false}
     Q.findCopyButtonCoord = async function() {
         function findBtn() {
-            var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
-            if (messages.length === 0) return null;
-            var lastMsg = messages[messages.length - 1];
+            var lastMsg = assistantMessageScope();
+            if (!lastMsg) return null;
             var divs = lastMsg.querySelectorAll('div[class*="cursor-pointer"]');
             for (var i = 0; i < divs.length; i++) {
                 var path = divs[i].querySelector('svg path[d^="M832 64"]');
@@ -1074,14 +1263,18 @@
             if (!markdown) {
                 return { markdown: '', source: 'dom-fallback', error: 'clipboard empty' };
             }
+            if (Q.isLastUserEcho(markdown)) {
+                var assistantText = cleanAssistantText();
+                return { markdown: assistantText, source: 'dom-assistant', error: 'clipboard selected the user message' };
+            }
             return { markdown: markdown, source: 'clipboard' };
         } catch(e) {
             return { markdown: '', source: 'dom-fallback', error: e.message };
         } finally {
-            if (savedClipboard && savedClipboard.text !== undefined) {
+            if (savedClipboard) {
                 try {
                     if (window.electronAPI && window.electronAPI.clipboardRestore) {
-                        await window.electronAPI.clipboardRestore(savedClipboard.text);
+                        await window.electronAPI.clipboardRestore(savedClipboard, markdown);
                     }
                 } catch(e) {}
             }
@@ -1101,9 +1294,8 @@
 
             // 1. 找到最后一条消息中的右侧箭头按钮（旋转90度的右箭头，菜单展开器）
             function findMenuArrowBtn() {
-                var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
-                if (messages.length === 0) return null;
-                var lastMsg = messages[messages.length - 1];
+                var lastMsg = assistantMessageScope();
+                if (!lastMsg) return null;
                 // 找 path[d="M7.475 14.558..."] 的右箭头（菜单展开按钮）
                 var paths = lastMsg.querySelectorAll('svg path[d^="M7.475"]');
                 for (var i = 0; i < paths.length; i++) {
@@ -1187,15 +1379,20 @@
                 return { markdown: fb2.markdown || '', images: fb2.images || [], source: 'dom-fallback', error: 'clipboard empty after menu click' };
             }
 
+            if (Q.isLastUserEcho(markdown)) {
+                var assistantText = cleanAssistantText();
+                return { markdown: assistantText, images: [], source: 'dom-assistant', error: 'copy action targeted the user message' };
+            }
+
             return { markdown: markdown, images: [], source: 'clipboard-menu' };
         } catch(e) {
             var fb3 = Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
             return { markdown: fb3.markdown || '', images: fb3.images || [], source: 'dom-fallback', error: e.message };
         } finally {
-            if (savedClipboard && savedClipboard.text !== undefined) {
+            if (savedClipboard) {
                 try {
                     if (window.electronAPI && window.electronAPI.clipboardRestore) {
-                        await window.electronAPI.clipboardRestore(savedClipboard.text);
+                        await window.electronAPI.clipboardRestore(savedClipboard, markdown);
                     }
                 } catch(e) {}
             }
@@ -1214,9 +1411,8 @@
             } catch(e) {}
 
             function findCopyBtnInLastMsg() {
-                var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
-                if (messages.length === 0) return null;
-                var lastMsg = messages[messages.length - 1];
+                var lastMsg = assistantMessageScope();
+                if (!lastMsg) return null;
                 var divs = lastMsg.querySelectorAll('div[class*="cursor-pointer"]');
                 for (var i = 0; i < divs.length; i++) {
                     var path = divs[i].querySelector('svg path[d^="M832 64"]');
@@ -1256,15 +1452,20 @@
                 return { markdown: fb2.markdown || '', images: fb2.images || [], source: 'dom-fallback', error: 'clipboard empty' };
             }
 
+            if (Q.isLastUserEcho(markdown)) {
+                var assistantText = cleanAssistantText();
+                return { markdown: assistantText, images: [], source: 'dom-assistant', error: 'copy action targeted the user message' };
+            }
+
             return { markdown: markdown, images: [], source: 'clipboard' };
         } catch(e) {
             var fb3 = Q.extractLastResponse ? Q.extractLastResponse() : { markdown: Q.getLastResponseText ? Q.getLastResponseText() : '', images: [] };
             return { markdown: fb3.markdown || '', images: fb3.images || [], source: 'dom-fallback', error: e.message };
         } finally {
-            if (savedClipboard && savedClipboard.text !== undefined) {
+            if (savedClipboard) {
                 try {
                     if (window.electronAPI && window.electronAPI.clipboardRestore) {
-                        await window.electronAPI.clipboardRestore(savedClipboard.text);
+                        await window.electronAPI.clipboardRestore(savedClipboard, markdown);
                     }
                 } catch(e) {}
             }
@@ -1276,8 +1477,11 @@
     Q.copyLastResponse = async function() {
 
         function tryFindButton() {
+            var assistant = assistantMessageScope();
+            if (!assistant) return null;
             // 方案1：通过复制图标 SVG 路径定位（最精准）
-            var copySvg = document.querySelector('svg path[d*="M832 64"]');
+            var copySvgs = assistant.querySelectorAll(COPY_PATH_SELECTOR);
+            var copySvg = copySvgs.length ? copySvgs[copySvgs.length - 1] : null;
             if (copySvg) {
                 // 复制按钮特征：hover:bg-tag + cursor-pointer（严格匹配，避免误点外层容器）
                 var btn = copySvg.closest('[class*="hover:bg-tag"][class*="cursor-pointer"]') || copySvg.parentElement;
@@ -1293,7 +1497,7 @@
             }
 
             // 方案2：通过 hover:bg-tag + cursor-pointer + 复制图标 SVG 定位
-            var tagBtns = document.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
+            var tagBtns = assistant.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
             for (var i = 0; i < tagBtns.length; i++) {
                 if (tagBtns[i].querySelector('svg path[d*="M832 64"]')) {
                     var rect = tagBtns[i].getBoundingClientRect();
@@ -1307,12 +1511,9 @@
             }
 
             // 方案3：在最后一条消息的工具栏中查找（限消息内 + 复制图标 SVG）
-            var messages = document.querySelectorAll('[class*="message"], [class*="chat-item"], [class*="conversation-item"]');
-            if (messages.length > 0) {
-                var lastMsg = messages[messages.length - 1];
-                var msgBtns = lastMsg.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
-                for (var i = 0; i < msgBtns.length; i++) {
-                    if (msgBtns[i].querySelector('svg path[d*="M832 64"]')) {
+            var msgBtns = assistant.querySelectorAll('[class*="hover:bg-tag"][class*="cursor-pointer"]');
+            for (var i = 0; i < msgBtns.length; i++) {
+                if (msgBtns[i].querySelector(COPY_PATH_SELECTOR)) {
                         var rect = msgBtns[i].getBoundingClientRect();
                         return {
                             success: true,
@@ -1320,7 +1521,6 @@
                             x: Math.round(rect.left + rect.width / 2),
                             y: Math.round(rect.top + rect.height / 2)
                         };
-                    }
                 }
             }
 
@@ -1730,10 +1930,11 @@
     // 检测回复类型：text / image / ppt
     Q.detectResponseType = function() {
         // 图片生成卡片特征：data-card-type="ai_generate_image_list"
-        var imgCard = document.querySelector('[data-card-type="ai_generate_image_list"]');
+        var scope = assistantMessageScope();
+        var imgCard = scope && scope.querySelector('[data-card-type="ai_generate_image_list"]');
         if (imgCard) return { type: 'image' };
         // PPT 卡片特征：data-ppt-id
-        var pptCard = document.querySelector('[data-ppt-id]');
+        var pptCard = scope && scope.querySelector('[data-ppt-id]');
         if (pptCard) return { type: 'ppt' };
         // 默认文本
         return { type: 'text' };
@@ -1747,7 +1948,7 @@
     // 提取图片回复：文字 + 图片 URL 列表
     Q.extractImageResponse = function() {
         try {
-            var text = Q.getLastResponseText ? Q.getLastResponseText() : '';
+            var text = Q.getPhase1Text ? Q.getPhase1Text() : (Q.getLastResponseText ? Q.getLastResponseText() : '');
             var images = Q.getLastImageUrls ? Q.getLastImageUrls() : [];
             return { markdown: text, images: images };
         } catch (e) {

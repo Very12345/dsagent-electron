@@ -1,7 +1,14 @@
 node_modules/
 dist/
+dist-renderer/
+dist-cli/
+.artifacts/
 *.exe
 *.log
 .env
 fingerprints.json
 qqbot1.js
+__pycache__/
+*.pyc
+test-results/
+playwright-report/

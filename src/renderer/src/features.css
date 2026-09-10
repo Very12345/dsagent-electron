@@ -1,0 +1,22 @@
+.feature-name {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.feature-name small {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.side-title small {
+  color: var(--muted);
+  font-weight: 400;
+}

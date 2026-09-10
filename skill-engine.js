@@ -19,7 +19,8 @@ const { execSync } = require('child_process');
 // ---
 // 模板内容...
 
-const SKILLS_DIR = '.dsa';
+const SKILLS_DIR = '.webagent';
+const LEGACY_SKILLS_DIR = '.dsa';
 const SKILL_SUBDIR = 'skills';
 
 // 获取技能存储路径：优先使用配置中的 skillsStoragePath
@@ -32,10 +33,12 @@ function getStoragePath(rootDir) {
             if (fs.existsSync(p)) return p;
         }
     } catch(e) {}
-    // 回退：项目级 .dsa/skills/ 或全局
+    // 回退：项目级 .webagent/skills/，旧 .dsa 只读兼容
     if (rootDir) {
         var proj = path.join(rootDir, SKILLS_DIR, SKILL_SUBDIR);
         if (fs.existsSync(proj)) return proj;
+        var legacyProj = path.join(rootDir, LEGACY_SKILLS_DIR, SKILL_SUBDIR);
+        if (fs.existsSync(legacyProj)) return legacyProj;
     }
     // 全局 fallback
     var home = process.env.HOME || process.env.USERPROFILE || '.';
@@ -54,6 +57,11 @@ function getBaseDir(rootDir) {
 function getGlobalDir() {
     var home = process.env.HOME || process.env.USERPROFILE || '.';
     return path.join(home, SKILLS_DIR, SKILL_SUBDIR);
+}
+
+function getLegacyGlobalDir() {
+    var home = process.env.HOME || process.env.USERPROFILE || '.';
+    return path.join(home, LEGACY_SKILLS_DIR, SKILL_SUBDIR);
 }
 
 // 解析 SKILL.md frontmatter
@@ -113,10 +121,8 @@ function parseSkillFile(filePath) {
 function loadAll(rootDir) {
     _registry.clear();
     var dirs = [];
-
-    // 从配置的存储路径加载
-    var storagePath = getStoragePath(rootDir);
-    if (storagePath && fs.existsSync(storagePath)) {
+    function collect(storagePath) {
+      if (!storagePath || !fs.existsSync(storagePath)) return;
         try {
             fs.readdirSync(storagePath).forEach(function(d) {
                 var skillFile = path.join(storagePath, d, 'SKILL.md');
@@ -125,29 +131,13 @@ function loadAll(rootDir) {
         } catch(e) {}
     }
 
-    // 也加载项目级 .dsa/skills/
-    var projDir = getBaseDir(rootDir);
-    if (projDir && fs.existsSync(projDir) && projDir !== storagePath) {
-        try {
-            fs.readdirSync(projDir).forEach(function(d) {
-                var skillFile = path.join(projDir, d, 'SKILL.md');
-                if (fs.existsSync(skillFile) && !dirs.some(function(f) { return f === skillFile; })) {
-                    dirs.push(skillFile);
-                }
-            });
-        } catch(e) {}
-    }
-
-    // 全局技能
-    var globalDir = getGlobalDir();
-    if (fs.existsSync(globalDir)) {
-        try {
-            fs.readdirSync(globalDir).forEach(function(d) {
-                var skillFile = path.join(globalDir, d, 'SKILL.md');
-                if (fs.existsSync(skillFile)) dirs.push(skillFile);
-            });
-        } catch(e) {}
-    }
+    // Later sources win: legacy user < user < configured < legacy workspace < workspace.
+    collect(getLegacyGlobalDir());
+    collect(getGlobalDir());
+    collect(getStoragePath(rootDir));
+    if (rootDir) collect(path.join(rootDir, LEGACY_SKILLS_DIR, SKILL_SUBDIR));
+    collect(getBaseDir(rootDir));
+    if (rootDir) collect(path.join(rootDir, SKILL_SUBDIR));
 
     dirs.forEach(function(fp) {
         var skill = parseSkillFile(fp);
@@ -209,9 +199,9 @@ function expandTemplate(template, argStr, sessionId) {
 
     // 3. $ARGUMENTS
     if (result.indexOf('$ARGUMENTS') >= 0) {
-        result = result.split('$ARGUMENTS').join(arguments.trim());
-    } else if (arguments.trim()) {
-        result += '\n\nARGUMENTS: ' + arguments.trim();
+        result = result.split('$ARGUMENTS').join(String(argStr || '').trim());
+    } else if (String(argStr || '').trim()) {
+        result += '\n\nARGUMENTS: ' + String(argStr || '').trim();
     }
 
     // 4. ${SKILL_DIR}
