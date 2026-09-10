@@ -15,6 +15,28 @@ function inside(root, candidate) {
   return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+// A parser or provider may hand back the whole argument object wrapped in a
+// single `params`/`arguments` key — {"params":{"path":"a.js"}} — because the
+// Runtime system prompt teaches models the {"tool":..., "params":{...}} shape.
+// Unwrap it once here so every tool sees flat arguments no matter which
+// parser produced the call. Without this the tool silently received zero
+// arguments (a missing path resolved to the workspace root and raised a
+// misleading EISDIR), which made agents retry the same call forever.
+function unwrapArguments(input) {
+  let value = input;
+  for (let depth = 0; depth < 2; depth += 1) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const keys = Object.keys(value);
+    if (keys.length !== 1) return value;
+    const key = keys[0];
+    if (key !== 'params' && key !== 'arguments') return value;
+    const inner = value[key];
+    if (!inner || typeof inner !== 'object' || Array.isArray(inner)) return value;
+    value = inner;
+  }
+  return value;
+}
+
 function createToolExecutor(options) {
   const workspace = path.resolve(options.workspace || process.cwd());
   const registry = options.registry || null;
@@ -24,6 +46,17 @@ function createToolExecutor(options) {
     const candidate = path.resolve(workspace, value || '.');
     if (!inside(workspace, candidate)) throw Object.assign(new Error('Path escapes workspace'), { code: 'path_outside_workspace' });
     return candidate;
+  }
+
+  // Resolve a required path parameter. Failing loudly here is deliberate:
+  // silently falling back to the workspace root turned a missing argument
+  // into "read a directory" and gave the model no way to recover.
+  function requiredPath(params, names) {
+    for (const name of names) {
+      const value = params[name];
+      if (typeof value === 'string' && value.trim()) return resolvePath(value);
+    }
+    throw Object.assign(new Error('Missing required parameter: ' + names[0]), { code: 'tool_missing_parameter' });
   }
 
   function run(command, timeout) {
@@ -67,13 +100,14 @@ function createToolExecutor(options) {
     if (typeof params === 'string') {
       try { params = JSON.parse(params); } catch (_) { params = { content: params }; }
     }
+    params = unwrapArguments(params) || {};
     try {
       name = registry ? registry.aliases(name) : ({ read: 'read_file', list: 'list_directory', grep: 'rg', exec: 'exec_command', bash: 'exec_command', save: 'write_file' })[name] || name;
       const approvalResult = await approval(name, params);
       if (approvalResult) return approvalResult;
       switch (name) {
         case 'read_file': {
-          const file = resolvePath(params.path || params.file || params.file_path);
+          const file = requiredPath(params, ['path', 'file', 'file_path']);
           const content = fs.readFileSync(file, 'utf8');
           const lines = content.split(/\r?\n/);
           const start = Math.max(0, (Number(params.start) || 1) - 1);
@@ -85,20 +119,20 @@ function createToolExecutor(options) {
           return { success: true, data: fs.readdirSync(directory, { withFileTypes: true }).map((entry) => ({ name: entry.name, type: entry.isDirectory() ? 'directory' : 'file' })) };
         }
         case 'exists':
-          return { success: true, data: { exists: fs.existsSync(resolvePath(params.path)) } };
+          return { success: true, data: { exists: fs.existsSync(requiredPath(params, ['path', 'file', 'file_path'])) } };
         case 'info': {
-          const file = resolvePath(params.path);
+          const file = requiredPath(params, ['path', 'file', 'file_path']);
           const stat = fs.statSync(file);
           return { success: true, data: { path: file, size: stat.size, directory: stat.isDirectory(), modified_at: stat.mtime.toISOString() } };
         }
         case 'write_file': {
-          const file = resolvePath(params.path || params.file || params.file_path);
+          const file = requiredPath(params, ['path', 'file', 'file_path']);
           fs.mkdirSync(path.dirname(file), { recursive: true });
           fs.writeFileSync(file, String(params.content || ''), 'utf8');
           return { success: true, data: { path: file } };
         }
         case 'apply_patch': {
-          const file = resolvePath(params.path || params.file || params.file_path);
+          const file = requiredPath(params, ['path', 'file', 'file_path']);
           if (params.content != null && !params.find && !params.search) {
             fs.mkdirSync(path.dirname(file), { recursive: true });
             fs.writeFileSync(file, String(params.content), 'utf8');
@@ -115,20 +149,20 @@ function createToolExecutor(options) {
           return { success: true, data: { path: file, replacements: params.all === true ? occurrences : 1 } };
         }
         case 'mkdir': {
-          const directory = resolvePath(params.path);
+          const directory = requiredPath(params, ['path', 'dir', 'directory']);
           fs.mkdirSync(directory, { recursive: true });
           return { success: true, data: { path: directory } };
         }
         case 'copy_path': {
-          const source = resolvePath(params.source); const target = resolvePath(params.target);
+          const source = requiredPath(params, ['source', 'from']); const target = requiredPath(params, ['target', 'to']);
           fs.cpSync(source, target, { recursive: true, force: false }); return { success: true, data: { source, target } };
         }
         case 'move_path': {
-          const source = resolvePath(params.source); const target = resolvePath(params.target);
+          const source = requiredPath(params, ['source', 'from']); const target = requiredPath(params, ['target', 'to']);
           fs.renameSync(source, target); return { success: true, data: { source, target } };
         }
         case 'delete_path': {
-          const target = resolvePath(params.path);
+          const target = requiredPath(params, ['path', 'file', 'file_path']);
           if (target === workspace) return { success: false, error: 'Refusing to delete workspace root' };
           fs.rmSync(target, { recursive: !!params.recursive, force: false }); return { success: true, data: { path: target } };
         }
@@ -211,7 +245,7 @@ function createToolExecutor(options) {
         case 'git_stage': return runFile('git', ['add', '--'].concat(Array.isArray(params.paths) ? params.paths : [params.path || '.']), params.timeout);
         case 'git_commit': return runFile('git', ['commit', '-m', String(params.message || '')], params.timeout);
         case 'git_worktree': return runFile('git', ['worktree'].concat(Array.isArray(params.args) ? params.args : ['list']), params.timeout);
-        case 'view_image': { const file = resolvePath(params.path); const stat = fs.statSync(file); return { success: true, data: { path: file, size: stat.size, mime: path.extname(file).slice(1).toLowerCase() } }; }
+        case 'view_image': { const file = requiredPath(params, ['path', 'file', 'file_path']); const stat = fs.statSync(file); return { success: true, data: { path: file, size: stat.size, mime: path.extname(file).slice(1).toLowerCase() } }; }
         case 'plan': return { success: true, data: { steps: Array.isArray(params.steps) ? params.steps : [], updated: true } };
         case 'interval': return { success: true, data: { scheduled: true, interval_ms: Number(params.interval_ms) || 0, task: params.task || '' } };
         case 'request_user_input': return { success: false, error: 'User input is required', code: 'user_input_required', data: params };

@@ -59,9 +59,19 @@ function parseDsmlCalls(value) {
       } catch (_) { valid = false; break; }
     }
     if (!valid || !parameterCount) continue;
-    const normalizedArguments = parameterCount === 1 && args.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments)
-      ? args.arguments
-      : args;
+    // Web models sometimes wrap the whole argument object in a single
+    // parameter. Accept both spellings: `arguments` is DSH's native name,
+    // `params` is what the Runtime system prompt teaches the model
+    // ({"tool":"...","params":{...}}). Missing `params` here meant every
+    // such call reached the executor with zero real arguments, which then
+    // failed with confusing errors and made the agent retry forever.
+    let normalizedArguments = args;
+    if (parameterCount === 1) {
+      for (const wrapper of ['arguments', 'params']) {
+        const inner = args[wrapper];
+        if (inner && typeof inner === 'object' && !Array.isArray(inner)) { normalizedArguments = inner; break; }
+      }
+    }
     calls.push({ name, arguments: normalizedArguments, index: invoke.index, end: invokePattern.lastIndex });
   }
   return calls;
