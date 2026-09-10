@@ -90,3 +90,35 @@ test('a missing path parameter reports itself instead of reading a directory', a
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('glob honours path patterns and read_file honours a limit', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-glob-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src', 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'a.js'), 'l1\nl2\nl3\nl4\nl5\n', 'utf8');
+    fs.writeFileSync(path.join(root, 'src', 'b.txt'), 'x\n', 'utf8');
+    fs.writeFileSync(path.join(root, 'src', 'nested', 'c.js'), 'y\n', 'utf8');
+    const executor = executorFor(root);
+
+    // Patterns carrying a path used to be compared against the file name, so
+    // every such call returned [] even though the files were right there.
+    const deep = await executor.execute('glob', JSON.stringify({ pattern: 'src/**/*.js' }));
+    assert.equal(deep.success, true);
+    assert.equal(deep.data.files.length, 2, 'src/**/*.js must span directories: ' + JSON.stringify(deep.data.files));
+
+    const direct = await executor.execute('glob', JSON.stringify({ pattern: 'src/*.js' }));
+    assert.equal(direct.data.files.length, 1, 'src/*.js must not recurse');
+
+    // Bare patterns keep matching at any depth so existing callers do not change.
+    const bare = await executor.execute('glob', JSON.stringify({ pattern: '*.js' }));
+    assert.equal(bare.data.files.length, 2);
+
+    const limited = await executor.execute('read_file', JSON.stringify({ path: 'src/a.js', limit: 2 }));
+    assert.equal(limited.data.content, 'l1\nl2');
+
+    const whole = await executor.execute('read_file', JSON.stringify({ path: 'src/a.js' }));
+    assert.equal(whole.data.content.split('\n').length, 6);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

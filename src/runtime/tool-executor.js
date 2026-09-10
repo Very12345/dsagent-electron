@@ -37,6 +37,30 @@ function unwrapArguments(input) {
   return value;
 }
 
+// Translate a workspace-relative glob into a RegExp. `**` spans directories,
+// `*` stays inside one path segment, `?` matches a single character.
+function globToRegExp(pattern) {
+  const source = String(pattern || '**/*').replace(/\\/g, '/').replace(/^\.\//, '');
+  let output = '';
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '*') {
+      if (source[index + 1] === '*') {
+        index += 1;
+        if (source[index + 1] === '/') index += 1;
+        output += '(?:.*/)?';
+      } else {
+        output += '[^/]*';
+      }
+    } else if (character === '?') {
+      output += '[^/]';
+    } else {
+      output += character.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp('^' + output + '$', 'i');
+}
+
 function createToolExecutor(options) {
   const workspace = path.resolve(options.workspace || process.cwd());
   const registry = options.registry || null;
@@ -111,7 +135,15 @@ function createToolExecutor(options) {
           const content = fs.readFileSync(file, 'utf8');
           const lines = content.split(/\r?\n/);
           const start = Math.max(0, (Number(params.start) || 1) - 1);
-          const end = params.end ? Math.min(lines.length, Number(params.end)) : lines.length;
+          // `limit` is the equivalent of `end` expressed as a line count; models
+          // reach for it constantly, and silently ignoring it returned the whole
+          // file (a model explicitly flagged the discrepancy in a live run).
+          const limit = Number(params.limit != null ? params.limit : params.count);
+          const end = params.end
+            ? Math.min(lines.length, Number(params.end))
+            : Number.isFinite(limit) && limit > 0
+              ? Math.min(lines.length, start + limit)
+              : lines.length;
           return { success: true, data: { path: file, content: lines.slice(start, end).join('\n') } };
         }
         case 'list_directory': {
@@ -193,18 +225,31 @@ function createToolExecutor(options) {
           return runFile('rg', ['--line-number', '--word-regexp', '--color', 'never', symbol, resolvePath(params.path || '.')], params.timeout || 30000);
         }
         case 'glob': {
-          const suffix = String(params.pattern || '*').replace(/^\*+/, '');
+          const rawPattern = String(params.pattern || '*').replace(/\\/g, '/').replace(/^\.\//, '');
+          // Bare patterns such as "*.js" keep the historical behaviour of
+          // matching at any depth. Patterns carrying a path ("src/**/*.js")
+          // need real glob semantics: the old code compared the entire pattern
+          // against the file name, so every such call silently returned [] and
+          // agents burned rounds guessing why a directory of files looked empty.
+          const simpleSuffix = rawPattern.includes('/') ? null : rawPattern.replace(/^\*+/, '');
+          const matcher = simpleSuffix === null ? globToRegExp(rawPattern) : null;
+          const base = resolvePath(params.path || '.');
           const results = [];
           const walk = (target) => {
             if (results.length >= 1000) return;
             for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
               if (['node_modules', '.git', 'dist'].includes(entry.name)) continue;
               const full = path.join(target, entry.name);
-              if (entry.isDirectory()) walk(full);
-              else if (!suffix || suffix === '*' || entry.name.endsWith(suffix)) results.push(full);
+              if (entry.isDirectory()) { walk(full); continue; }
+              if (matcher) {
+                const relative = path.relative(base, full).replace(/\\/g, '/');
+                if (matcher.test(relative)) results.push(full);
+              } else if (!simpleSuffix || entry.name.endsWith(simpleSuffix)) {
+                results.push(full);
+              }
             }
           };
-          walk(resolvePath(params.path || '.'));
+          walk(base);
           return { success: true, data: { files: results } };
         }
         case 'memory_read':
