@@ -1,7 +1,7 @@
 {
   "name": "@webagent/dsh-integration",
-  "version": "1.5.0",
-  "description": "Host-only WebAgent provider bridge and DeepSeek vision tool for upstream DSH",
+  "version": "1.6.0",
+  "description": "Host-only WebAgent provider bridge, webpage search and DeepSeek vision tool for upstream DSH",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -12,6 +12,7 @@
   "peerDependencies": {
     "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.1",
     "@deepseek-ai/dsh-tools": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-web": "^0.1.5-rc.1",
     "@deepseek-ai/cordis": "^4.0.2"
   },
   "license": "MIT"

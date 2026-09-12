@@ -10,7 +10,13 @@ provider entry to the isolated Web profile. A clean GitHub checkout is kept as
 an upstream comparison baseline; WebAgent never builds patched frontend assets
 from that checkout.
 
-The host plugin contributes a `deepseek_vision` tool for local PNG, JPEG, GIF,
+The host plugin registers `webagent-deepseek-web` as a DSH web-search provider.
+It uses the signed-in DeepSeek webpage's native search mode through the local
+Runtime, not the metered DeepSeek API search endpoint. Each search uses an
+ephemeral webpage conversation that Runtime deletes after completion. The
+ordinary public-HTTP `web_fetch` provider remains unchanged.
+
+The host plugin also contributes a `deepseek_vision` tool for local PNG, JPEG, GIF,
 BMP and WebP files. Image input is routed through the selectable unified
 `deepseek.web` model; there is no separate Vision model.
 The tool remains useful when an agent wants to inspect a workspace image without

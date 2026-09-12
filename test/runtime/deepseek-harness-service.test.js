@@ -8,7 +8,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const yaml = require('js-yaml');
 const { DeepSeekHarnessService, availablePort } = require('../../src/runtime/deepseek-harness-service');
-const { extractDshToolCallsFromReasoning, extractDshToolCallsFromText, parseDshToolCall, hasIncompleteDshToolEnvelope, isStableDeepseekCompletion, parseDeepseekRawSse } = require('../../server-deepseek');
+const { extractDshToolCallsFromReasoning, extractDshToolCallsFromText, parseDshToolCall, hasIncompleteDshToolEnvelope, isStableDeepseekCompletion, parseDeepseekRawSse, mergeContinuationText, mergeRawResponseRecord, createRawResponseAggregate, createDeepseekServer, detectReasoningLoop } = require('../../server-deepseek');
 
 test('DeepSeek Harness service writes an isolated WebAgent API provider without storing the bearer token', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-'));
@@ -81,9 +81,15 @@ test('DeepSeek Harness host overlay registers the WebAgent provider at boot', as
     const overlay = yaml.load(raw);
     const adapter = overlay.find((entry) => entry.id === 'llm-pi-ai');
     const defaultModel = overlay.find((entry) => entry.id === 'agent-default-model');
+    const web = overlay.find((entry) => entry.id === 'web');
+    const paidSearch = overlay.find((entry) => entry.id === 'web-search-deepseek');
+    const webTool = overlay.find((entry) => entry.id === 'tool-web');
     assert.deepEqual(adapter.config.providers.webagent.models.map((model) => model.id), ['deepseek.web', 'qwen.3.7', 'qwen.3.8-max', 'qwen.3.7-max', 'qwen.3.6-flash', 'qwen.gateway.3.8-max', 'qwen.gateway.3.7-max', 'qwen.gateway.3.7-plus', 'qwen.gateway.3.6-plus', 'chatgpt.web']);
     assert.equal(adapter.config.providers.webagent.apiKeyEnv, 'WEBAGENT_DSH_TOKEN');
     assert.deepEqual(defaultModel.config, { provider: 'webagent', model: 'deepseek.web' });
+    assert.deepEqual(web.config, { searchProvider: 'webagent-deepseek-web', fetchProvider: 'http' });
+    assert.equal(paidSearch.disabled, true);
+    assert.deepEqual(webTool.config, { fetch: true, searchTimeoutMs: 180000, searchMaxQueries: 2 });
     assert.equal(raw.includes('secret-token'), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -121,6 +127,19 @@ test('DeepSeek Harness preserves retired presets it does not own', () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('WebAgent installs a managed minimal preset backed by fresh-process pwsh', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-stable-minimal-'));
+  const service = new DeepSeekHarnessService({ root: path.join(__dirname, '..', '..'), runtimePort: 5858, runtimeToken: 'test-token', home });
+  try {
+    assert.equal(service._installStableMinimalPreset(), true);
+    const presetRoot = path.join(home, '.agent-presets', 'webagent-minimal-stable');
+    const composition = fs.readFileSync(path.join(presetRoot, 'agent.cordis.yml'), 'utf8');
+    assert.match(composition, /@deepseek-ai\/dsh-tool-pwsh'/);
+    assert.doesNotMatch(composition, /pwsh-persistent/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(presetRoot, '.webagent-managed.json'), 'utf8')).product, 'WebAgent');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test('DeepSeek webpage new-chat transport bypasses the legacy default prompt builder', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', '..', 'inject-deepseek.js'), 'utf8');
   assert.match(source, /__dsagent_getInitPromptText = async function\(mode\) \{[\s\S]{0,240}return '';/);
@@ -148,6 +167,8 @@ test('DeepSeek long waits fail closed instead of extracting an unfinished reason
   assert.match(source, /nativeIdlePolls >= NATIVE_IDLE_POLLS && stablePolls >= 2/);
   assert.match(source, /!incompleteBodyToolCall && wasGenerating && nativeIdlePolls/);
   assert.match(source, /!incompleteBodyToolCall && contentSeen && stablePolls >= FALLBACK_STABLE_POLLS/);
+  assert.match(source, /reason: 'dom_tool_fallback'/);
+  assert.match(source, /quietForMs >= RAW_DOM_FALLBACK_QUIET_MS/);
   assert.match(source, /!snapshot\.domGenerating/);
   assert.match(source, /isStableDeepseekCompletion\(snapshot, contentSeen, stablePolls, Date\.now\(\) - lastActivityAt\)/);
   const waitBody = source.slice(source.indexOf('async function waitForDoneInternal'), source.indexOf('async function extractResponseInternal'));
@@ -238,6 +259,344 @@ test('DeepSeek raw SSE treats path deltas without o as APPEND across THINK and R
   assert.equal(parsed.finished, true);
 });
 
+test('DeepSeek continuation responses are joined without duplicating repeated prefixes', () => {
+  assert.equal(mergeContinuationText('第一段。', '第二段。'), '第一段。第二段。');
+  assert.equal(mergeContinuationText('第一段。', '第一段。第二段。'), '第一段。第二段。');
+  assert.equal(mergeContinuationText('abcdef', 'defghi'), 'abcdefghi');
+  const aggregate = createRawResponseAggregate();
+  const first = mergeRawResponseRecord(aggregate, { source: 'cdp', seq: 1 }, { markdown: '第一段。', reasoning: '想法一', finished: true });
+  const second = mergeRawResponseRecord(aggregate, { source: 'cdp', seq: 2 }, { markdown: '第二段。', reasoning: '想法二', finished: true });
+  assert.equal(first.markdown, '第一段。');
+  assert.equal(second.markdown, '第一段。第二段。');
+  assert.equal(second.reasoning, '想法一想法二');
+  assert.equal(second.recordKey, 'cdp:2');
+});
+
+test('SSE completion automatically clicks Continue generating and waits for the next network response', async () => {
+  let continued = false;
+  let continueClicks = 0;
+  const makeRaw = (content) => [
+    'data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [{ type: 'RESPONSE', content }] } } }),
+    '',
+    'event: close',
+    'data: {}',
+    ''
+  ].join('\n');
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes("var labels = ['继续生成'")) {
+          if (!continued) {
+            continued = true;
+            continueClicks += 1;
+            return { found: true, clicked: true, label: '继续生成' };
+          }
+          return { found: false, clicked: false };
+        }
+        return null;
+      }
+    },
+    completionStreamAfter: async () => continued
+      ? { source: 'cdp', seq: 2, text: makeRaw('第二段。'), done: true, logicalDone: true }
+      : { source: 'cdp', seq: 1, text: makeRaw('第一段。'), done: true, logicalDone: true }
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 3000 });
+  assert.equal(waited.success, true);
+  assert.equal(waited.data.continuations, 1);
+  assert.equal(continueClicks, 1);
+  const peeked = await server.invoke('deepseek.web', 'peekResponse', {});
+  assert.equal(peeked.data.text, '第一段。第二段。');
+});
+
+test('an interrupted pending SSE clicks Continue before CDP reports the old request closed', async () => {
+  let continued = false;
+  let continueClicks = 0;
+  const pendingRaw = 'data: ' + JSON.stringify({ v: { response: { status: 'WIP', fragments: [{ type: 'RESPONSE', content: '中断前。' }] } } }) + '\n\n';
+  const finalRaw = [
+    'data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [{ type: 'RESPONSE', content: '继续后。' }] } } }),
+    '', 'event: close', 'data: {}', ''
+  ].join('\n');
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes("var labels = ['继续生成'")) {
+          if (!continued) {
+            continued = true;
+            continueClicks += 1;
+            return { found: true, clicked: true, label: '继续生成', tag: 'DIV', role: 'button' };
+          }
+          return { found: false, clicked: false };
+        }
+        return null;
+      }
+    },
+    completionStreamAfter: async () => continued
+      ? { source: 'cdp', seq: 2, text: finalRaw, done: true, logicalDone: true }
+      : { source: 'cdp', seq: 1, text: pendingRaw, done: false, logicalDone: false }
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 3000 });
+  assert.equal(waited.success, true);
+  assert.equal(waited.data.continuations, 1);
+  assert.equal(continueClicks, 1);
+  const peeked = await server.invoke('deepseek.web', 'peekResponse', {});
+  assert.equal(peeked.data.text, '中断前。继续后。');
+});
+
+test('reasoning-only completion keeps probing long enough for a late Continue button', async () => {
+  let probes = 0;
+  let continued = false;
+  const reasoningCall = '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="read">\n<｜DSML｜parameter name="arguments" string="false">{"file_path":"a.js"}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+  const makeRaw = (type, content) => ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [{ type, content }] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes("var labels = ['继续生成'")) {
+          probes += 1;
+          if (!continued && probes >= 7) { continued = true; return { found: true, clicked: true, label: '继续生成' }; }
+          return { found: false, clicked: false };
+        }
+        return null;
+      }
+    },
+    completionStreamAfter: async () => continued
+      ? { source: 'cdp', seq: 2, text: makeRaw('RESPONSE', '续写正文'), done: true, logicalDone: true }
+      : { source: 'cdp', seq: 1, text: makeRaw('THINK', reasoningCall), done: true, logicalDone: true }
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 4000, allowReasoningToolCall: true });
+  assert.equal(waited.success, true);
+  assert.equal(waited.data.continuations, 1);
+  assert.ok(probes >= 7);
+  const extracted = await server.invoke('deepseek.web', 'extractResponse', { allowReasoningToolCall: true });
+  assert.equal(extracted.data.markdown, '续写正文');
+});
+
+test('Continue generating uses trusted pointer input when the provider host supports it', async () => {
+  let continued = false;
+  const pointerEvents = [];
+  const makeRaw = (content) => ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [{ type: 'RESPONSE', content }] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes("var labels = ['继续生成'")) return continued
+          ? { found: false, clicked: false }
+          : { found: true, clicked: false, label: '继续生成', x: 320, y: 240 };
+        return null;
+      },
+      sendInputEvent: async (event) => {
+        pointerEvents.push(event);
+        if (event.type === 'mouseUp') continued = true;
+      }
+    },
+    completionStreamAfter: async () => continued
+      ? { source: 'cdp', seq: 2, text: makeRaw('继续后的完整正文'), done: true, logicalDone: true }
+      : { source: 'cdp', seq: 1, text: makeRaw('截断正文'), done: true, logicalDone: true }
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 3000 });
+  assert.equal(waited.success, true);
+  assert.equal(waited.data.continuations, 1);
+  assert.deepEqual(pointerEvents.map((event) => event.type), ['mouseMove', 'mouseDown', 'mouseUp']);
+  const extracted = await server.invoke('deepseek.web', 'extractResponse', {});
+  assert.equal(extracted.data.markdown, '截断正文继续后的完整正文');
+});
+
+test('Continue generating retries when the first trusted click produces no newer SSE request', async () => {
+  let clickAttempts = 0;
+  let continued = false;
+  const makeRaw = (content) => ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [{ type: 'RESPONSE', content }] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes("var labels = ['继续生成'")) return continued
+          ? { found: false, clicked: false }
+          : { found: true, clicked: false, label: '继续生成', x: 320, y: 240 };
+        return null;
+      },
+      clickVisibleText: async () => {
+        clickAttempts += 1;
+        if (clickAttempts >= 2) continued = true;
+        return { found: true, clicked: true, label: '继续生成', trusted: true, method: 'playwright-text' };
+      }
+    },
+    completionStreamAfter: async () => continued
+      ? { source: 'cdp', seq: 2, text: makeRaw('续写已开始'), done: true, logicalDone: true }
+      : { source: 'cdp', seq: 1, text: makeRaw('首段'), done: true, logicalDone: true }
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 5000 });
+  assert.equal(waited.success, true);
+  assert.equal(waited.data.continuations, 1);
+  assert.equal(clickAttempts, 2);
+  const extracted = await server.invoke('deepseek.web', 'extractResponse', {});
+  assert.equal(extracted.data.markdown, '首段续写已开始');
+});
+
+test('newChat resets the raw SSE boundary before sending the first message', async () => {
+  let resets = 0;
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes('__dsagent_newChatAndSendInit')) return { success: true, deepseekUrl: 'https://chat.deepseek.com/a/chat/s/fresh' };
+        return null;
+      }
+    },
+    resetRawCompletionStreams: async () => { resets += 1; return { cdp: 7, page: 4 }; }
+  };
+  const server = createDeepseekServer(view);
+  const created = await server.invoke('deepseek.web', 'newChat', { userText: 'hello' });
+  assert.equal(created.success, true);
+  assert.equal(resets, 1);
+});
+
+test('an empty DeepSeek SSE with a visible frequency limit fails over before empty-response retry', async () => {
+  const emptyRaw = ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  let limitProbes = 0;
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes('__dsagent_getUsageLimitState')) {
+          limitProbes += 1;
+          return { limited: true, code: 'out_of_usage', reason: 'rate_limited', retryAfter: 60 };
+        }
+        return null;
+      }
+    },
+    completionStreamAfter: async () => ({ source: 'cdp', seq: 1, text: emptyRaw, done: true, logicalDone: true })
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 3000, allowReasoningToolCall: true });
+  assert.equal(waited.success, false);
+  assert.equal(waited.code, 'out_of_usage');
+  assert.equal(waited.retryAfter, 60);
+  assert.equal(limitProbes, 1);
+});
+
+test('the DeepSeek webpage context-limit banner becomes a canonical compaction error', async () => {
+  const emptyRaw = ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes('__dsagent_getUsageLimitState')) return {
+          limited: true,
+          contextWindowExceeded: true,
+          code: 'context_length_exceeded',
+          reason: 'context_window_exceeded'
+        };
+        return null;
+      }
+    },
+    completionStreamAfter: async () => ({ source: 'cdp', seq: 1, text: emptyRaw, done: true, logicalDone: true })
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 3000, allowReasoningToolCall: true });
+  assert.equal(waited.success, false);
+  assert.equal(waited.code, 'context_length_exceeded');
+  assert.match(waited.error, /compact the Harness session/);
+  const injection = fs.readFileSync(path.join(__dirname, '..', '..', 'inject-deepseek.js'), 'utf8');
+  assert.match(injection, /达到对话长度上限/);
+});
+
+test('provider busy detection ignores historical Markdown and tool output text', () => {
+  const injection = fs.readFileSync(path.join(__dirname, '..', '..', 'inject-deepseek.js'), 'utf8');
+  const detector = injection.slice(injection.indexOf('function providerErrorKind'), injection.indexOf('async function waitForSendAcceptance'));
+  assert.match(detector, /captureProviderErrorBaseline/);
+  assert.match(detector, /\.ds-markdown/);
+  assert.match(detector, /service temporarily unavailable/);
+  assert.doesNotMatch(detector, /body\.innerText/);
+  assert.doesNotMatch(detector, /service unavailable\|server busy/);
+});
+
+test('a complete DSML suffix in reasoning is extracted without exposing surrounding thought', async () => {
+  const reasoning = 'private analysis\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name="read">\n<｜DSML｜parameter name="arguments" string="false">{"file_path":"test/headless.js","limit":12,"offset":454}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+  const raw = ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [{ type: 'THINK', content: reasoning }] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  const view = { webContents: { isDestroyed: () => false, executeJavaScript: async (source) => source === '1' ? 1 : null }, completionStreamAfter: async () => ({ source: 'cdp', seq: 1, text: raw, done: true, logicalDone: true }) };
+  const server = createDeepseekServer(view);
+  const extracted = await server.invoke('deepseek.web', 'extractResponse', { allowReasoningToolCall: true });
+  assert.equal(extracted.success, true);
+  assert.match(extracted.data.markdown, /<dsh_tool_call>/);
+  assert.match(extracted.data.markdown, /test\/headless\.js/);
+  assert.doesNotMatch(extracted.data.markdown, /private analysis/);
+  assert.equal(extracted.data.reasoningToolCall, true);
+});
+
+test('repeated reasoning phrases trigger a bounded corrective turn', async () => {
+  const repeated = Array.from({ length: 5 }, () => 'Let me check.\nLet me emit.').join('\n');
+  assert.ok(detectReasoningLoop(repeated));
+  assert.equal(detectReasoningLoop('I checked one file and now I will inspect another distinct module.'), null);
+  let recovered = false;
+  let stopped = 0;
+  const pendingRaw = 'data: ' + JSON.stringify({ v: { response: { status: 'WIP', fragments: [{ type: 'THINK', content: repeated }] } } }) + '\n\n';
+  const finalRaw = ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [{ type: 'RESPONSE', content: 'LOOP_RECOVERED' }] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes('__dsagent_stopGeneration')) { stopped += 1; return { success: true }; }
+        if (source.includes('LOOP_RECOVERY')) { recovered = true; return { success: true }; }
+        if (source.includes("var labels = ['继续生成'")) return { found: false, clicked: false };
+        return null;
+      }
+    },
+    completionStreamAfter: async () => recovered
+      ? { source: 'cdp', seq: 2, text: finalRaw, done: true, logicalDone: true }
+      : { source: 'cdp', seq: 1, text: pendingRaw, done: false, logicalDone: false }
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 5000, allowReasoningToolCall: true });
+  assert.equal(waited.success, true);
+  assert.equal(waited.data.reasoningLoopRecoveries, 1);
+  assert.equal(stopped, 1);
+  const extracted = await server.invoke('deepseek.web', 'extractResponse', {});
+  assert.equal(extracted.data.markdown, 'LOOP_RECOVERED');
+});
+
+test('a completed repetitive DSH response is corrected instead of accepted as final output', async () => {
+  const repeated = Array.from({ length: 6 }, () => 'Let me check.\nLet me emit.').join('\n');
+  let recovered = false;
+  const makeRaw = (content) => ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [{ type: 'RESPONSE', content }] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes('__dsagent_stopGeneration')) return { success: true };
+        if (source.includes('LOOP_RECOVERY')) { recovered = true; return { success: true }; }
+        if (source.includes("var labels = ['继续生成'")) return { found: false, clicked: false };
+        return null;
+      }
+    },
+    completionStreamAfter: async () => recovered
+      ? { source: 'cdp', seq: 2, text: makeRaw('RECOVERED_FINAL'), done: true, logicalDone: true }
+      : { source: 'cdp', seq: 1, text: makeRaw(repeated), done: true, logicalDone: true }
+  };
+  const server = createDeepseekServer(view);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', { timeout: 5000, allowReasoningToolCall: true });
+  assert.equal(waited.success, true);
+  assert.equal(waited.data.reasoningLoopRecoveries, 1);
+  const extracted = await server.invoke('deepseek.web', 'extractResponse', { allowReasoningToolCall: true });
+  assert.equal(extracted.data.markdown, 'RECOVERED_FINAL');
+});
+
 test('DSH recognizes a complete fenced tool call in the rendered answer body', () => {
   assert.equal(
     extractDshToolCallsFromText('```dsh-tool-call\n{"name":"pwsh","arguments":{"command":"npm test"}}\n```'),
@@ -274,22 +633,65 @@ test('WebAgent DSH plugin contributes a provider-scoped webpage transport prompt
   const plugin = await import(pathToFileURL(file).href + '?test=' + Date.now());
   let section = null;
   let tool = null;
+  let searchProvider = null;
   const ctx = {
     systemPrompt: { section: (value) => { section = value; return () => {}; } },
     tools: { register: (value) => { tool = value; return () => {}; } },
+    web: { registerSearchProvider: (value) => { searchProvider = value; return () => {}; } },
     effect: (factory) => factory()
   };
   plugin.apply(ctx);
   assert.equal(section.complete, undefined);
   const webText = section.text({ agent: { options: { provider: 'webagent' } } });
-  assert.match(webText, /WEBAGENT_DSH_BRIDGE_V2/);
-  assert.match(webText, /```dsh-tool-call/);
-  assert.match(webText, /Native <｜DSML｜tool_calls>/);
-  assert.match(webText, /raw provider stream/);
+  assert.match(webText, /WEBAGENT_DSH_BRIDGE_V3/);
+  assert.match(webText, /<｜DSML｜tool_calls>/);
+  assert.doesNotMatch(webText, /dsh-tool-call/);
+  assert.match(webText, /no alternative tool protocol/);
   assert.match(webText, /Preserve arguments exactly/);
   assert.ok(webText.length < 2400);
   assert.equal(section.text({ agent: { options: { provider: 'deepseek-official' } } }), '');
   assert.equal(tool.name, 'deepseek_vision');
+  assert.equal(searchProvider.id, 'webagent-deepseek-web');
+});
+
+test('WebAgent DSH web search uses an ephemeral native webpage search and returns source URLs', async () => {
+  const file = path.join(__dirname, '..', '..', 'integrations', 'dsh-webagent-plugin', 'lib', 'index.js');
+  const plugin = await import(pathToFileURL(file).href + '?search=' + Date.now());
+  let searchProvider = null;
+  let requestBody = null;
+  let requestHeaders = null;
+  const oldFetch = global.fetch;
+  const oldUrl = process.env.WEBAGENT_RUNTIME_URL;
+  const oldToken = process.env.WEBAGENT_DSH_TOKEN;
+  global.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    requestHeaders = options.headers;
+    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Official docs: [Harness](https://github.com/deepseek-ai/deepseek-harness). More at https://deepseek-harness.github.io/deepseek-harness/.' } }] }) };
+  };
+  process.env.WEBAGENT_RUNTIME_URL = 'http://127.0.0.1:5858';
+  process.env.WEBAGENT_DSH_TOKEN = 'test-token';
+  try {
+    plugin.apply({
+      systemPrompt: { section: () => () => {} },
+      tools: { register: () => () => {} },
+      web: { registerSearchProvider: (value) => { searchProvider = value; return () => {}; } },
+      effect: (factory) => factory()
+    });
+    assert.equal(searchProvider.available(), true);
+    const result = await searchProvider.search({ query: 'DeepSeek Harness repository', maxResults: 4 }, new AbortController().signal);
+    assert.equal(requestBody.web_search, true);
+    assert.equal(requestBody.stream, false);
+    assert.equal(requestHeaders['X-WebAgent-Ephemeral'], 'true');
+    assert.deepEqual(result.sources, [
+      { url: 'https://github.com/deepseek-ai/deepseek-harness', title: 'Harness' },
+      { url: 'https://deepseek-harness.github.io/deepseek-harness/' }
+    ]);
+    assert.equal(result.truncated, false);
+  } finally {
+    global.fetch = oldFetch;
+    if (oldUrl === undefined) delete process.env.WEBAGENT_RUNTIME_URL; else process.env.WEBAGENT_RUNTIME_URL = oldUrl;
+    if (oldToken === undefined) delete process.env.WEBAGENT_DSH_TOKEN; else process.env.WEBAGENT_DSH_TOKEN = oldToken;
+  }
 });
 
 test('DeepSeek vision tool bridges a local image through the unified model', async () => {
@@ -315,6 +717,7 @@ test('DeepSeek vision tool bridges a local image through the unified model', asy
     plugin.apply({
       systemPrompt: { section: () => () => {} },
       tools: { register: (value) => { tool = value; return () => {}; } },
+      web: { registerSearchProvider: () => () => {} },
       effect: (factory) => factory()
     });
     const result = await tool.execute({ image_path: image, prompt: 'What is visible?' }, { signal: new AbortController().signal });
@@ -336,6 +739,16 @@ test('WebAgent DSH integration is host-only and leaves the upstream WebUI untouc
   assert.equal(manifest.dsh, undefined);
   assert.equal(manifest.exports['./client'], undefined);
   assert.equal(fs.existsSync(path.join(root, 'lib', 'client.js')), false);
+});
+
+test('DeepSeek SSE transport disables legacy clipboard automation', () => {
+  const injection = fs.readFileSync(path.join(__dirname, '..', '..', 'inject-deepseek.js'), 'utf8');
+  assert.match(injection, /let enableAutoExec = false;/);
+  const extractor = injection.slice(injection.indexOf('window.__dsagent_extractLastResponse ='), injection.indexOf('// 上传文件到当前对话'));
+  assert.ok(extractor.indexOf('clipboardUsed: false') < extractor.indexOf('clipboardSave()'));
+  const daemon = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'node', 'daemon.js'), 'utf8');
+  const hostConfig = daemon.slice(daemon.indexOf('const rawHost = new PlaywrightProviderHost'), daemon.indexOf('const createWorker ='));
+  assert.doesNotMatch(hostConfig, /clipboardBridge/);
 });
 
 test('DeepSeek Harness resolves the selected session to its owning workspace', async () => {

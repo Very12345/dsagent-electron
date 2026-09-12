@@ -24,9 +24,9 @@ function AccountsView() {
   const [gatewayForm, setGatewayForm] = React.useState({ username: '', password: '', area_code: '', model: 'qwen3-7-max' });
   const [gatewayBusy, setGatewayBusy] = React.useState('');
   const [message, setMessage] = React.useState('');
-  const [deepseekAccounts, setDeepseekAccounts] = React.useState<{ active_account_id: string; data: any[] }>({ active_account_id: 'default', data: [] });
+  const [deepseekAccounts, setDeepseekAccounts] = React.useState<{ active_account_id: string; failover_order: string[]; browser_visible: boolean; data: any[] }>({ active_account_id: 'default', failover_order: [], browser_visible: false, data: [] });
   const [newAccountName, setNewAccountName] = React.useState('');
-  const load = () => Promise.all([request<{ data: any[] }>('/api/provider-configs'), request<{ data: any[] }>('/api/providers'), request<QwenGatewayStatus>('/api/qwen-gateway'), request<{ active_account_id: string; data: any[] }>('/api/providers/deepseek/accounts')])
+  const load = () => Promise.all([request<{ data: any[] }>('/api/provider-configs'), request<{ data: any[] }>('/api/providers'), request<QwenGatewayStatus>('/api/qwen-gateway'), request<{ active_account_id: string; failover_order: string[]; browser_visible: boolean; data: any[] }>('/api/providers/deepseek/accounts')])
     .then(([configsValue, providersValue, gatewayValue, accountsValue]) => { setConfigs(configsValue.data); setWebProviders(providersValue.data.map((item) => item.id)); setGateway(gatewayValue); setDeepseekAccounts(accountsValue); setGatewayForm((value) => ({ ...value, model: gatewayValue.upstream_model || value.model })); })
     .catch(() => { setConfigs([]); setWebProviders([]); });
   React.useEffect(() => { void load(); }, []);
@@ -57,6 +57,25 @@ function AccountsView() {
       await accountAction(account.id, 'login');
     } catch (error: any) { setMessage(error.message); }
   };
+  const moveDeepseekAccount = async (accountId: string, offset: number) => {
+    const configuredOrder = deepseekAccounts.failover_order || [];
+    const order = (configuredOrder.length ? configuredOrder : deepseekAccounts.data.map((account) => account.id)).slice();
+    const index = order.indexOf(accountId); const target = index + offset;
+    if (index < 0 || target < 0 || target >= order.length) return;
+    [order[index], order[target]] = [order[target], order[index]];
+    try {
+      setDeepseekAccounts(await request('/api/providers/deepseek/accounts/order', { method: 'PATCH', body: { order } }));
+      setMessage('自动切换顺序已保存。');
+    } catch (error: any) { setMessage(error.message); }
+  };
+  const toggleDeepseekBrowser = async () => {
+    const visible = !deepseekAccounts.browser_visible;
+    setMessage(visible ? '正在切换到可见调试浏览器…' : '正在恢复隐藏浏览器…');
+    try {
+      setDeepseekAccounts(await request('/api/providers/deepseek/browser-visibility', { method: 'PATCH', body: { visible } }));
+      setMessage(visible ? '已开启；下一次 DeepSeek Run 会显示真实浏览器窗口。' : '已关闭；下一次 DeepSeek Run 将在后台运行。');
+    } catch (error: any) { setMessage(error.code === 'session_busy' ? 'DeepSeek 正在运行，请在当前 Run 完成后切换。' : error.message); }
+  };
   const add = async (event: React.FormEvent) => {
     event.preventDefault(); setMessage('正在保存…');
     try {
@@ -81,9 +100,9 @@ function AccountsView() {
     <section className="settings-section"><h2>网页账户</h2><div className="button-grid">{[
       ['deepseek', 'DeepSeek', 'alpha-d-circle-outline'], ['qwen', '千问', 'creation-outline'], ['chatgpt', 'ChatGPT（实验性）', 'chat-processing-outline']
     ].map(([id, label, icon]) => <button key={id} className={webProviders.length && !webProviders.includes(id) ? 'unsupported' : ''} onClick={() => void login(id)}><Icon name={icon} /><span><b>登录 {label}</b><small>{webProviders.length && !webProviders.includes(id) ? '当前 Runtime 不支持，需要完全重启' : '打开当前账号的独立登录窗口'}</small></span></button>)}</div>{message && <p className="form-message">{message}</p>}</section>
-    <section className="settings-section"><h2>DeepSeek 多账号 <small>手动切换</small></h2><p>每个账号使用独立浏览器 Profile 与 Cookie。切换只影响新的 Run，不接管正在执行的 Worker；已有远端对话保留在原账号。</p>
+    <section className="settings-section"><h2>DeepSeek 多账号 <small>限速自动切换</small></h2><p>每个账号使用独立浏览器 Profile 与 Cookie。触发限速时按下列顺序切换到下一个已登录账号，并用完整本地历史继续同一 Run；原账号对话保留。</p><div className="button-row"><button className={deepseekAccounts.browser_visible ? 'primary' : ''} onClick={() => void toggleDeepseekBrowser()}><Icon name={deepseekAccounts.browser_visible ? 'eye' : 'eye-off-outline'} />{deepseekAccounts.browser_visible ? '调试浏览器：显示' : '调试浏览器：隐藏'}</button><small>切换时不会中断正在执行的 Run；开启后可直接观察 DeepSeek 原始页面。</small></div>
       <form className="settings-form provider-form" onSubmit={addDeepseekAccount}><label className="wide">账号名称<input required value={newAccountName} onChange={(event) => setNewAccountName(event.target.value)} placeholder="例如：备用账号" /></label><button className="primary" type="submit"><Icon name="account-plus-outline" />添加并登录</button></form>
-      <div className="config-list">{deepseekAccounts.data.map((account) => <div key={account.id}><Icon name={account.active ? 'account-check' : 'account-outline'} /><span><b>{account.name}{account.active ? ' · 当前' : ''}</b><small>{account.id}{account.limited_until && new Date(account.limited_until).getTime() > Date.now() ? ' · 限速至 ' + new Date(account.limited_until).toLocaleTimeString() : account.last_login_at ? ' · 已登录' : ' · 尚未登录'}</small></span><button disabled={account.active} onClick={() => void accountAction(account.id, 'select')}>切换</button><button onClick={() => void accountAction(account.id, 'login')}>登录</button>{account.id !== 'default' && <button className="danger" onClick={() => void accountAction(account.id, 'delete')}>删除</button>}</div>)}</div>
+      <div className="config-list">{deepseekAccounts.data.slice().sort((a, b) => (a.failover_index ?? 999) - (b.failover_index ?? 999)).map((account, index, ordered) => <div key={account.id}><Icon name={account.active ? 'account-check' : 'account-outline'} /><span><b>{index + 1}. {account.name}{account.active ? ' · 当前' : ''}</b><small>{account.id}{account.limited_until && new Date(account.limited_until).getTime() > Date.now() ? ' · 限速至 ' + new Date(account.limited_until).toLocaleTimeString() : account.last_login_at ? ' · 已登录' : ' · 尚未登录'}</small></span><button title="上移" disabled={index === 0} onClick={() => void moveDeepseekAccount(account.id, -1)}><Icon name="arrow-up" /></button><button title="下移" disabled={index === ordered.length - 1} onClick={() => void moveDeepseekAccount(account.id, 1)}><Icon name="arrow-down" /></button><button disabled={account.active} onClick={() => void accountAction(account.id, 'select')}>切换</button><button onClick={() => void accountAction(account.id, 'login')}>登录</button>{account.id !== 'default' && <button className="danger" onClick={() => void accountAction(account.id, 'delete')}>删除</button>}</div>)}</div>
     </section>
     <section className="settings-section"><h2>Qianwen 网关模型 <small>Rogator · 仅启用 Qwen</small></h2>
       <p>模型 ID <code>qwen.gateway</code>。WebAgent 管理消息、工具与 DSH；Rogator 只负责 Qwen 网页协议传输，不加载其 DeepSeek 逆向模块。</p>

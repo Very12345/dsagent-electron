@@ -374,12 +374,15 @@ function json(res, status, body, headers) {
 }
 
 function apiError(error) {
+  const code = error.code || 'server_error';
+  const rawMessage = error.message || String(error);
+  const message = code === 'provider_busy' && !/\b503\b/.test(rawMessage) ? 'HTTP 503: ' + rawMessage : rawMessage;
   return {
     error: {
-      message: error.message || String(error),
-      type: error.code || 'server_error',
+      message,
+      type: code,
       param: error.param || null,
-      code: error.code || 'server_error',
+      code,
       ...(error.retry_after_seconds ? { retry_after_seconds: Number(error.retry_after_seconds) } : {})
     }
   };
@@ -388,6 +391,7 @@ function apiError(error) {
 function completedRunErrorStatus(error) {
   const code = String(error && error.code || '');
   if (code === 'qwen_gateway_rate_limited' || code === 'rate_limit_exceeded' || code === 'out_of_usage') return 429;
+  if (code === 'context_length_exceeded') return 400;
   if (code === 'provider_busy') return 503;
   if (code === 'qwen_gateway_browser_login_required' || code === 'provider_login_required') return 401;
   return 500;
@@ -535,6 +539,16 @@ class RuntimeApiServer {
       if (providerAccountsMatch && req.method === 'POST') {
         const body = await readBody(req, 1024 * 1024);
         return json(res, 201, this.providers.createAccount(decodeURIComponent(providerAccountsMatch[1]), body.name));
+      }
+      const providerAccountOrderMatch = path.match(/^\/api\/providers\/([^/]+)\/accounts\/order$/);
+      if (providerAccountOrderMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+        const body = await readBody(req, 1024 * 1024);
+        return json(res, 200, this.providers.setAccountOrder(decodeURIComponent(providerAccountOrderMatch[1]), body.order));
+      }
+      const providerVisibilityMatch = path.match(/^\/api\/providers\/([^/]+)\/browser-visibility$/);
+      if (providerVisibilityMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+        const body = await readBody(req, 1024 * 1024);
+        return json(res, 200, await this.providers.setBrowserVisibility(decodeURIComponent(providerVisibilityMatch[1]), !!body.visible));
       }
       const providerAccountActionMatch = path.match(/^\/api\/providers\/([^/]+)\/accounts\/([^/]+)(?:\/(select|login))?$/);
       if (providerAccountActionMatch) {
@@ -882,7 +896,10 @@ class RuntimeApiServer {
       includeUsage: !!(body.stream_options && body.stream_options.include_usage)
     });
     const completed = await this.runs.waitForRun(run.id);
-    if (completed.status !== 'completed') throw Object.assign(new Error(completed.error && completed.error.message || 'Run failed'), { code: completed.error && completed.error.code || 'run_failed', status: completedRunErrorStatus(completed.error), retry_after_seconds: completed.error && completed.error.retry_after_seconds });
+    if (completed.status !== 'completed') {
+      if (session.ephemeral) await this._cleanupEphemeralSession(session.id);
+      throw Object.assign(new Error(completed.error && completed.error.message || 'Run failed'), { code: completed.error && completed.error.code || 'run_failed', status: completedRunErrorStatus(completed.error), retry_after_seconds: completed.error && completed.error.retry_after_seconds });
+    }
     const calls = toolBridge ? bridgedToolCalls(completed.output, body.tools) : [];
     const response = {
       id: 'chatcmpl-' + run.id,
@@ -1053,6 +1070,7 @@ class RuntimeApiServer {
         send(apiError(Object.assign(new Error(event.data.error && event.data.error.message || 'Run failed'), { code: event.data.error && event.data.error.code || event.type, retry_after_seconds: event.data.error && event.data.error.retry_after_seconds })));
         res.write('data: [DONE]\n\n');
         cleanup();
+        if (options.ephemeral) void this._cleanupEphemeralSession(sessionId);
       }
     };
     const heartbeat = setInterval(() => { if (!closed && !res.writableEnded) res.write(': heartbeat\n\n'); }, 5000);

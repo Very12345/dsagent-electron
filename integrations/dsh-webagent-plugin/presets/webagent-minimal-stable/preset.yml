@@ -1,0 +1,3 @@
+name: WebAgent 稳定极简模式
+description: 仅提供一次性 Shell；避免 Windows 持久 PTY 对长 PowerShell 命令的换行损坏与超时。
+order: 4

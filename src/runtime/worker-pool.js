@@ -161,6 +161,12 @@ class WorkerPool extends EventEmitter {
     };
   }
 
+  async destroyIdle() {
+    const idle = this.workers.filter((worker) => worker.state === 'idle');
+    await Promise.all(idle.map((worker) => this._destroy(worker, null)));
+    return idle.length;
+  }
+
   async close() {
     const workers = this.workers.slice();
     this.queue.splice(0).forEach((request) => request.reject(new Error('Worker pool closed')));

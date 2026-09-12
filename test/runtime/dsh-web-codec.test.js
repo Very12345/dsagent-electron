@@ -11,7 +11,7 @@ const {
 } = require('../../src/runtime/dsh-web-codec');
 
 const runtimeContext = 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nWorkspace: D:/Code/Test\nPolicy: workspace-write';
-const prompt = BRIDGE_SENTINEL + '\nCompact DSH-owned prompt. Use ```dsh-tool-call fences.';
+const prompt = BRIDGE_SENTINEL + '\nCompact DSH-owned prompt. Use only native DSML.';
 const tools = [{ name: 'read_file', description: 'Read one file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }];
 const skillCatalog = '<system-reminder>\n<available_skills>\n- `cordis-plugin-development`: Build plugins.\n</available_skills>\n</system-reminder>';
 
@@ -47,10 +47,10 @@ test('a complete external preset keeps its system prompt ahead of the webpage wi
     { role: 'user', content: 'Inspect the project' }
   ], tools);
   assert.ok(envelope.text.indexOf(presetPrompt) < envelope.text.indexOf(BRIDGE_SENTINEL));
-  assert.match(envelope.text, /WEBAGENT_DSH_BRIDGE_V2/);
-  assert.match(envelope.text, /dsh-tool-call/);
-  assert.match(envelope.text, /Native <｜DSML｜tool_calls>/);
-  assert.match(envelope.text, /raw provider stream/);
+  assert.match(envelope.text, /WEBAGENT_DSH_BRIDGE_V3/);
+  assert.match(envelope.text, /<｜DSML｜tool_calls>/);
+  assert.doesNotMatch(envelope.text, /dsh-tool-call/);
+  assert.match(envelope.text, /no alternative tool protocol/);
 });
 
 test('continuation preserves assistant calls and parallel tool results as an ordered delta', () => {

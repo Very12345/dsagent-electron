@@ -2,8 +2,36 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ProviderManager, collapseRepeatedDomText } = require('../../src/runtime/provider-manager');
+const { ProviderManager, collapseRepeatedDomText, hasBridgeProtocolChanged, assessMalformedDshToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS } = require('../../src/runtime/provider-manager');
 const { createDeepseekServer } = require('../../server-deepseek');
+
+test('a V3 bridge state with the temporarily omitted protocol field remains cache-compatible', () => {
+  const requested = { protocol: 'WEBAGENT_DSH_BRIDGE_V3', prompt_hash: 'same-v3-prompt' };
+  assert.equal(hasBridgeProtocolChanged({ version: 3, prompt_hash: 'same-v3-prompt' }, requested), false);
+  assert.equal(hasBridgeProtocolChanged({ version: 3, prompt_hash: 'older-prompt' }, requested), true);
+  assert.equal(hasBridgeProtocolChanged({ version: 3, protocol: 'WEBAGENT_DSH_BRIDGE_V2', prompt_hash: 'same-v3-prompt' }, requested), true);
+});
+
+test('malformed DSML intent is distinguished from a valid schema-shaped tool call', () => {
+  const tools = [{ name: 'pwsh', parameters: { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' } }, required: ['command', 'description'] } }];
+  const broken = '<｜DSML｜tool_calls><｜DSML｜invoke name="pwsh"><｜DSML｜parameter name="arguments" string="false">{"command":"pwd"}';
+  assert.match(assessMalformedDshToolCall(broken, tools).reason, /incomplete|malformed/);
+  const missing = '<｜DSML｜tool_calls><｜DSML｜invoke name="pwsh"><｜DSML｜parameter name="arguments" string="false">{"command":"pwd"}</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
+  assert.match(assessMalformedDshToolCall(missing, tools).reason, /description/);
+  const valid = '<｜DSML｜tool_calls><｜DSML｜invoke name="pwsh"><｜DSML｜parameter name="arguments" string="false">{"command":"pwd","description":"inspect"}</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
+  assert.equal(assessMalformedDshToolCall(valid, tools), null);
+  assert.match(dshToolRepairPrompt({ reason: 'bad tags' }, tools), /Resend ONLY/);
+  assert.match(dshToolRepairPrompt({ reason: 'bad tags' }, tools), /Allowed tool names: pwsh/);
+  const readTools = [{ name: 'read', parameters: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } }];
+  const stringWrapped = '<｜DSML｜tool_calls><｜DSML｜invoke name="read"><｜DSML｜parameter name="arguments" string="true">{"file_path":"deck.md"}</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
+  const wrappedAssessment = assessMalformedDshToolCall(stringWrapped, readTools);
+  assert.match(wrappedAssessment.reason, /string="true"/);
+  assert.match(wrappedAssessment.reason, /file_path/);
+  const detailedPrompt = dshToolRepairPrompt(wrappedAssessment, readTools, { attempt: 2, maxAttempts: 2 });
+  assert.match(detailedPrompt, /Required JSON Schema/);
+  assert.match(detailedPrompt, /previous correction repeated/i);
+  assert.match(detailedPrompt, /string="false"/);
+});
 
 test('all qwen.gateway models route only to the Rogator adapter', async () => {
   const calls = [];
@@ -71,6 +99,22 @@ test('provider pool defaults and URL ownership validation are strict', async () 
   assert.equal(manager._validWebUrl('chatgpt', 'https://chatgpt.com.evil.test/c/abc'), false);
   const deleted = await manager.cleanupSession({ id: 'child', model: 'qwen.default', provider_state: { provider: 'qwen', url: 'https://evil.test/chat/abc', last_run_id: 'run-a' } }, 'run-a', 'call-a');
   assert.equal(deleted, false, 'an unowned URL must never be navigated to or deleted');
+  await manager.close();
+});
+
+test('debug browser visibility waits for active provider Runs before rebuilding contexts', async () => {
+  const changed = [];
+  const manager = new ProviderManager({
+    webFactories: { deepseek: async () => ({ accountId: 'default', destroy: async () => {} }), qwen: async () => ({}) },
+    accountManager: { setBrowserVisible: async (provider, visible) => { changed.push([provider, visible]); return { provider, browser_visible: visible }; } }
+  });
+  const lease = await manager.pools.deepseek.acquire({ provider: 'deepseek', session_id: 'busy', run_id: 'run-busy', account_id: 'default' });
+  const busy = await manager.setBrowserVisibility('deepseek', true).then(() => null, (error) => error);
+  assert.equal(busy.code, 'session_busy');
+  await lease.release();
+  const result = await manager.setBrowserVisibility('deepseek', true);
+  assert.equal(result.browser_visible, true);
+  assert.deepEqual(changed, [['deepseek', true]]);
   await manager.close();
 });
 
@@ -144,6 +188,46 @@ test('an unconfirmed DeepSeek send retires the stale conversation before DSH ret
   await manager.close();
 });
 
+test('a full DeepSeek webpage conversation rolls over once before DSH needs compaction', async () => {
+  const url = 'https://chat.deepseek.com/a/chat/s/context-full';
+  const rolloverUrl = 'https://chat.deepseek.com/a/chat/s/context-rollover';
+  let accountSwitches = 0;
+  let rolledOver = false;
+  const worker = {
+    ensureAuthenticated: async () => true,
+    navigate: async () => true,
+    assertConversation: async () => true,
+    waitForConversationUrl: async () => rolloverUrl,
+    server: { invoke: async (_model, method) => {
+      if (method === 'setDeepThink' || method === 'setWebSearch') return { success: true };
+      if (method === 'sendMessage') return { success: false, code: 'context_length_exceeded', error: 'context length exceeded' };
+      if (method === 'newChat') { rolledOver = true; return { success: true, data: { conversationUrl: rolloverUrl } }; }
+      if (method === 'waitForDone') return { success: true, data: { done: true } };
+      if (method === 'extractResponse') return { success: true, data: { markdown: 'ROLLOVER_COMPLETED', think: '' } };
+      if (method === 'getConversationMetadata') return { success: true, data: { url: rolloverUrl, title: 'Rollover completed' } };
+      if (method === 'peekResponse') return { success: true, data: { text: '' } };
+      throw new Error('unexpected method: ' + method);
+    } }
+  };
+  const accountManager = {
+    activeAccount: () => 'default',
+    listAccounts: () => ({ data: [{ id: 'default', limited_until: '' }] }),
+    nextAvailableAccount: () => { accountSwitches += 1; return 'backup'; }
+  };
+  const manager = new ProviderManager({ webFactories: { deepseek: async () => worker, qwen: async () => ({}) }, accountManager });
+  const state = { provider: 'deepseek', account_id: 'default', url, conversations: [{ provider: 'deepseek', account_id: 'default', url, status: 'active' }] };
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'context-full', provider_state: state }, messages: [{ role: 'user', content: 'continue' }], instructions: '',
+    run: { id: 'run-context-full', prompt_passthrough: true, provider_tools: [], deep_think: true, web_search: false }, signal: new AbortController().signal, timeout: 1000
+  });
+  assert.equal(rolledOver, true);
+  assert.equal(result.content, 'ROLLOVER_COMPLETED');
+  assert.equal(result.provider_state.url, rolloverUrl);
+  assert.equal(result.provider_state.conversations.find((item) => item.url === url).status, 'pending_cleanup');
+  assert.equal(accountSwitches, 0);
+  await manager.close();
+});
+
 test('DeepSeek out-of-usage keeps the remote conversation for a later retry', async () => {
   const url = 'https://chat.deepseek.com/a/chat/s/rate-limited';
   const worker = {
@@ -171,6 +255,165 @@ test('DeepSeek out-of-usage keeps the remote conversation for a later retry', as
   assert.deepEqual(error.provider_state.dsh_bridge, previousBridge);
   assert.equal(error.provider_state.conversations[0].status, 'active');
   assert.ok(error.provider_state.rate_limited_until);
+  await manager.close();
+});
+
+test('DeepSeek out-of-usage switches to the next user-ordered logged account and completes the same Run', async () => {
+  const primaryUrl = 'https://chat.deepseek.com/a/chat/s/limited-primary';
+  const backupUrl = 'https://chat.deepseek.com/a/chat/s/healthy-backup';
+  const createdAccounts = [];
+  const selected = [];
+  const statuses = [];
+  const accountManager = {
+    activeAccount: () => 'default',
+    listAccounts: () => ({ active_account_id: selected.slice(-1)[0] || 'default', failover_order: ['default', 'backup'], data: [
+      { id: 'default', last_login_at: 'now', limited_until: '' },
+      { id: 'backup', last_login_at: 'now', limited_until: '' }
+    ] }),
+    markAccountLimited: (_provider, account) => { selected.push('limited:' + account); return true; },
+    nextAvailableAccount: (_provider, current, excluded) => current === 'default' && !excluded.includes('backup') ? 'backup' : '',
+    selectAccount: async (_provider, account) => { selected.push(account); return true; }
+  };
+  const factory = async (options) => {
+    const account = options.account_id;
+    createdAccounts.push(account);
+    return {
+      accountId: account,
+      ensureAuthenticated: async () => true,
+      navigate: async () => true,
+      assertConversation: async () => true,
+      waitForConversationUrl: async (suggested) => suggested || backupUrl,
+      server: { invoke: async (_model, method) => {
+        if (method === 'setDeepThink' || method === 'setWebSearch' || method === 'sendMessage') return { success: true };
+        if (method === 'newChat') return { success: true, data: { conversationUrl: backupUrl } };
+        if (method === 'waitForDone') return account === 'default'
+          ? { success: false, code: 'out_of_usage', error: 'limited', retryAfter: 60 }
+          : { success: true, data: { done: true } };
+        if (method === 'extractResponse') return { success: true, data: { markdown: 'BACKUP_COMPLETED', think: '' } };
+        if (method === 'peekResponse') return { success: true, data: { text: '' } };
+        if (method === 'getConversationMetadata') return { success: true, data: { url: backupUrl, title: 'Backup completed' } };
+        throw new Error('unexpected method: ' + method);
+      } }
+    };
+  };
+  const manager = new ProviderManager({ webFactories: { deepseek: factory, qwen: async () => ({}) }, accountManager });
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'failover', provider_state: { provider: 'deepseek', account_id: 'default', url: primaryUrl, conversations: [{ provider: 'deepseek', account_id: 'default', url: primaryUrl, status: 'active' }] } },
+    messages: [{ role: 'user', content: 'Finish this task' }], instructions: '',
+    run: { id: 'run-failover', prompt_passthrough: true, provider_tools: [], deep_think: false, web_search: false },
+    signal: new AbortController().signal, timeout: 1000,
+    onStatus: (value) => statuses.push(value)
+  });
+  assert.equal(result.content, 'BACKUP_COMPLETED');
+  assert.equal(result.provider_state.account_id, 'backup');
+  assert.equal(result.provider_state.url, backupUrl);
+  assert.deepEqual(createdAccounts, ['default', 'backup']);
+  assert.ok(selected.includes('limited:default'));
+  assert.ok(selected.includes('backup'));
+  assert.ok(statuses.some((value) => /正在切换到 backup/.test(value)));
+  await manager.close();
+});
+
+test('DeepSeek provider busy retries after 1-5 seconds then switches accounts', async () => {
+  assert.deepEqual(PROVIDER_BUSY_RETRY_DELAYS_MS, [1000, 2000, 3000, 4000, 5000]);
+  const primaryUrl = 'https://chat.deepseek.com/a/chat/s/busy-primary';
+  const backupUrl = 'https://chat.deepseek.com/a/chat/s/busy-backup';
+  const attempts = { default: 0, backup: 0 };
+  const selected = [];
+  const statuses = [];
+  const accountManager = {
+    activeAccount: () => 'default',
+    listAccounts: () => ({ data: [{ id: 'default', limited_until: '' }, { id: 'backup', limited_until: '' }] }),
+    nextAvailableAccount: (_provider, current, excluded) => current === 'default' && !excluded.includes('backup') ? 'backup' : '',
+    selectAccount: async (_provider, account) => { selected.push(account); return true; }
+  };
+  const factory = async (options) => {
+    const account = options.account_id;
+    return {
+      accountId: account,
+      ensureAuthenticated: async () => true,
+      navigate: async () => true,
+      assertConversation: async () => true,
+      waitForConversationUrl: async () => backupUrl,
+      server: { invoke: async (_model, method) => {
+        if (method === 'setDeepThink' || method === 'setWebSearch' || method === 'sendMessage') return { success: true };
+        if (method === 'newChat') return { success: true, data: { conversationUrl: backupUrl } };
+        if (method === 'waitForDone') {
+          attempts[account] += 1;
+          return account === 'default'
+            ? { success: false, code: 'provider_busy', error: 'busy', retryAfter: 30 }
+            : { success: true, data: { done: true } };
+        }
+        if (method === 'extractResponse') return { success: true, data: { markdown: 'BUSY_FAILOVER_COMPLETED', think: '' } };
+        if (method === 'peekResponse') return { success: true, data: { text: '' } };
+        if (method === 'getConversationMetadata') return { success: true, data: { url: account === 'default' ? primaryUrl : backupUrl, title: 'Busy recovered' } };
+        throw new Error('unexpected method: ' + method);
+      } }
+    };
+  };
+  const manager = new ProviderManager({ webFactories: { deepseek: factory, qwen: async () => ({}) }, accountManager });
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'busy-failover', provider_state: { provider: 'deepseek', account_id: 'default', url: primaryUrl, conversations: [{ provider: 'deepseek', account_id: 'default', url: primaryUrl, status: 'active' }] } },
+    messages: [{ role: 'user', content: 'Finish after busy recovery' }], instructions: '',
+    run: { id: 'run-busy-failover', prompt_passthrough: true, provider_tools: [], deep_think: false, web_search: false },
+    signal: new AbortController().signal, timeout: 1000, provider_busy_retry_delays: [0, 0, 0, 0, 0],
+    onStatus: (value) => statuses.push(value)
+  });
+  assert.equal(attempts.default, 6);
+  assert.equal(attempts.backup, 1);
+  assert.equal(result.content, 'BUSY_FAILOVER_COMPLETED');
+  assert.equal(result.provider_state.account_id, 'backup');
+  assert.deepEqual(selected, ['backup']);
+  assert.ok(statuses.some((value) => /重试（1\/5）/.test(value)));
+  assert.ok(statuses.some((value) => /重试（5\/5）/.test(value)));
+  assert.ok(statuses.some((value) => /重试已耗尽，正在切换到 backup/.test(value)));
+  await manager.close();
+});
+
+test('DeepSeek busy failover wraps from the last account back to the first', async () => {
+  const urls = { first: 'https://chat.deepseek.com/a/chat/s/cycle-first', second: 'https://chat.deepseek.com/a/chat/s/cycle-second' };
+  const attempts = { first: 0, second: 0 };
+  const selected = [];
+  const accountManager = {
+    activeAccount: () => 'first',
+    listAccounts: () => ({ data: [{ id: 'first', limited_until: '' }, { id: 'second', limited_until: '' }] }),
+    nextAvailableAccount: (_provider, current) => current === 'first' ? 'second' : 'first',
+    selectAccount: async (_provider, account) => { selected.push(account); return true; }
+  };
+  const factory = async (options) => {
+    const account = options.account_id;
+    return {
+      accountId: account,
+      ensureAuthenticated: async () => true,
+      navigate: async () => true,
+      assertConversation: async () => true,
+      waitForConversationUrl: async () => urls[account],
+      server: { invoke: async (_model, method) => {
+        if (method === 'setDeepThink' || method === 'setWebSearch' || method === 'sendMessage') return { success: true };
+        if (method === 'newChat') return { success: true, data: { conversationUrl: urls[account] } };
+        if (method === 'waitForDone') {
+          attempts[account] += 1;
+          const recovered = account === 'first' && attempts.first === 7;
+          return recovered ? { success: true, data: { done: true } } : { success: false, code: 'provider_busy', error: 'busy' };
+        }
+        if (method === 'extractResponse') return { success: true, data: { markdown: 'CYCLIC_BUSY_RECOVERED', think: '' } };
+        if (method === 'peekResponse') return { success: true, data: { text: '' } };
+        if (method === 'getConversationMetadata') return { success: true, data: { url: urls[account], title: 'Cycle recovered' } };
+        throw new Error('unexpected method: ' + method);
+      } }
+    };
+  };
+  const manager = new ProviderManager({ webFactories: { deepseek: factory, qwen: async () => ({}) }, accountManager });
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'busy-cycle', provider_state: { provider: 'deepseek', account_id: 'first', url: urls.first, conversations: [{ provider: 'deepseek', account_id: 'first', url: urls.first, status: 'active' }] } },
+    messages: [{ role: 'user', content: 'Keep trying in account order' }], instructions: '',
+    run: { id: 'run-busy-cycle', prompt_passthrough: true, provider_tools: [], deep_think: false, web_search: false },
+    signal: new AbortController().signal, timeout: 1000, provider_busy_retry_delays: [0, 0, 0, 0, 0]
+  });
+  assert.deepEqual(attempts, { first: 7, second: 6 });
+  assert.deepEqual(selected, ['second', 'first']);
+  assert.equal(result.content, 'CYCLIC_BUSY_RECOVERED');
+  assert.equal(result.provider_state.account_id, 'first');
   await manager.close();
 });
 
@@ -525,7 +768,7 @@ test('DSH webpage transport preserves the DSH-owned system prompt and ordered co
     timeout: 1000
   });
   assert.equal(result.content, 'PASSTHROUGH_OK');
-  assert.match(sentText, /WEBAGENT_DSH_BRIDGE_V2/);
+  assert.match(sentText, /WEBAGENT_DSH_BRIDGE_V3/);
   assert.match(sentText, /CALLER_OWNS_THIS_TASK/);
   assert.match(sentText, /PRIVATE_SANDBOX_CONTEXT/);
   assert.match(sentText, /CORDIS_SKILL_CATALOG/);
@@ -536,7 +779,7 @@ test('DSH webpage transport preserves the DSH-owned system prompt and ordered co
   assert.match(sentText, /dsh_available_tools_json/);
   assert.match(sentText, /read_file/);
   assert.match(sentText, /DSH_OWNS_THIS_SYSTEM_PROMPT/);
-  assert.ok(sentText.indexOf('DSH_OWNS_THIS_SYSTEM_PROMPT') < sentText.indexOf('WEBAGENT_DSH_BRIDGE_V2'));
+  assert.ok(sentText.indexOf('DSH_OWNS_THIS_SYSTEM_PROMPT') < sentText.indexOf('WEBAGENT_DSH_BRIDGE_V3'));
   assert.doesNotMatch(sentText, /\[system\]|\[tools\]/);
   assert.doesNotMatch(sentText, /system_instructions|conversation_context|WebAgent Runtime tools|chat mode/i);
   assert.equal(waitArgs.allowReasoningToolCall, true);
@@ -569,7 +812,7 @@ test('DSH vision transport converts plugin image blocks to webpage uploads witho
     signal: new AbortController().signal, timeout: 1000
   });
   assert.equal(result.content, 'VISION_OK');
-  assert.match(createdArgs.userText, /WEBAGENT_DSH_BRIDGE_V2/);
+  assert.match(createdArgs.userText, /WEBAGENT_DSH_BRIDGE_V3/);
   assert.match(createdArgs.userText, /Describe this image/);
   assert.deepEqual(createdArgs.files, [{ name: 'dsh-image-1.png', mime: 'image/png', data: 'aGVsbG8=' }]);
   assert.match(createdArgs.userText, /PRIVATE/);
@@ -650,6 +893,166 @@ test('DSH second webpage turn sends a versioned update envelope and keeps passth
   assert.deepEqual(modeCalls, []);
   assert.match(sentArgs.text, /PRIVATE_DSH_PROMPT/);
   assert.doesNotMatch(sentArgs.text, /system-reminder|行为规则/);
+  assert.equal(result.provider_state.dsh_bridge.protocol, 'WEBAGENT_DSH_BRIDGE_V3');
+  await manager.close();
+});
+
+test('DeepSeek performs one fast in-place repair when a DSML tool call is malformed', async () => {
+  const conversationUrl = 'https://chat.deepseek.com/a/chat/s/dsh-repair';
+  const sent = [];
+  const thinkModes = [];
+  let extracts = 0;
+  const malformed = 'Checking now.\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name="pwsh">\n<｜DSML｜parameter name="arguments" string="false">{"command":"pwd"}';
+  const repaired = '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="pwsh">\n<｜DSML｜parameter name="arguments" string="false">{"command":"pwd","description":"Inspect workspace"}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+  const worker = {
+    ensureAuthenticated: async () => true,
+    navigate: async () => true,
+    assertConversation: async () => true,
+    server: { invoke: async (_model, method, args) => {
+      if (method === 'setWebSearch') return { success: true };
+      if (method === 'setDeepThink') { thinkModes.push(args.enable); return { success: true }; }
+      if (method === 'sendMessage') { sent.push(args.text); return { success: true }; }
+      if (method === 'waitForDone') return { success: true, data: { done: true } };
+      if (method === 'extractResponse') { extracts += 1; return { success: true, data: { markdown: extracts === 1 ? malformed : repaired, think: '' } }; }
+      if (method === 'peekResponse') return { success: true, data: { text: '' } };
+      if (method === 'getConversationMetadata') return { success: true, data: { url: conversationUrl, title: 'Repair test' } };
+      throw new Error('unexpected method: ' + method);
+    } }
+  };
+  const tools = [{ name: 'pwsh', parameters: { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' } }, required: ['command', 'description'] } }];
+  const manager = new ProviderManager({ webFactories: { deepseek: async () => worker, qwen: async () => ({}) } });
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'dsh-repair', provider_state: { provider: 'deepseek', url: conversationUrl } },
+    messages: [{ role: 'system', content: 'DSH prompt' }, { role: 'user', content: 'Inspect workspace' }], instructions: '',
+    run: { id: 'run-dsh-repair', prompt_passthrough: true, provider_tools: tools, deep_think: true, web_search: false },
+    signal: new AbortController().signal, timeout: 1000
+  });
+  assert.equal(sent.length, 2);
+  assert.match(sent[1], /^FORMAT_REPAIR 1\/2:/);
+  assert.doesNotMatch(sent[1], /Inspect workspace/);
+  assert.deepEqual(thinkModes, [true, false]);
+  assert.match(result.content, /^Checking now\./);
+  assert.match(result.content, /<｜DSML｜tool_calls>/);
+  assert.equal(result.provider_state.url, conversationUrl);
+  await manager.close();
+});
+
+test('DeepSeek escalates a precise schema diagnosis through a second repair round', async () => {
+  const conversationUrl = 'https://chat.deepseek.com/a/chat/s/dsh-two-repairs';
+  const sent = [];
+  const statuses = [];
+  let extracts = 0;
+  const mislabeled = '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="read">\n<｜DSML｜parameter name="arguments" string="true">{"file_path":"design_spec_reference.md"}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+  const repaired = '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="read">\n<｜DSML｜parameter name="arguments" string="false">{"file_path":"design_spec_reference.md"}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+  const worker = {
+    ensureAuthenticated: async () => true,
+    navigate: async () => true,
+    assertConversation: async () => true,
+    server: { invoke: async (_model, method, args) => {
+      if (method === 'setDeepThink' || method === 'setWebSearch') return { success: true };
+      if (method === 'sendMessage') { sent.push(args.text); return { success: true }; }
+      if (method === 'waitForDone') return { success: true, data: { done: true } };
+      if (method === 'extractResponse') {
+        extracts += 1;
+        return { success: true, data: { markdown: extracts <= 2 ? mislabeled : repaired, think: '' } };
+      }
+      if (method === 'peekResponse') return { success: true, data: { text: '' } };
+      if (method === 'getConversationMetadata') return { success: true, data: { url: conversationUrl, title: 'Two repair test' } };
+      throw new Error('unexpected method: ' + method);
+    } }
+  };
+  const tools = [{ name: 'read', parameters: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } }];
+  const manager = new ProviderManager({ webFactories: { deepseek: async () => worker, qwen: async () => ({}) } });
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'dsh-two-repairs', provider_state: { provider: 'deepseek', url: conversationUrl } },
+    messages: [{ role: 'system', content: 'DSH prompt' }, { role: 'user', content: 'Read the reference' }], instructions: '',
+    run: { id: 'run-dsh-two-repairs', prompt_passthrough: true, provider_tools: tools, deep_think: true, web_search: false },
+    signal: new AbortController().signal, timeout: 1000, onStatus: (value) => statuses.push(value)
+  });
+  assert.equal(sent.length, 3);
+  assert.match(sent[1], /string="true"/);
+  assert.match(sent[1], /Required JSON Schema/);
+  assert.match(sent[2], /previous correction repeated/i);
+  assert.match(result.content, /string="false"/);
+  assert.ok(statuses.some((value) => /1\/2/.test(value)));
+  assert.ok(statuses.some((value) => /2\/2/.test(value)));
+  await manager.close();
+});
+
+test('DeepSeek retries one empty DSH SSE response in the same remote conversation', async () => {
+  const conversationUrl = 'https://chat.deepseek.com/a/chat/s/empty-recovery';
+  const sent = [];
+  const statuses = [];
+  let waits = 0;
+  let newChats = 0;
+  const worker = {
+    ensureAuthenticated: async () => true,
+    navigate: async () => true,
+    assertConversation: async () => true,
+    server: { invoke: async (_model, method, args) => {
+      if (method === 'newChat') { newChats += 1; return { success: false }; }
+      if (method === 'setDeepThink' || method === 'setWebSearch') return { success: true };
+      if (method === 'sendMessage') { sent.push(args.text); return { success: true }; }
+      if (method === 'waitForDone') { waits += 1; return waits <= 3 ? { success: false, code: 'provider_sse_empty', error: 'empty' } : { success: true, data: { done: true } }; }
+      if (method === 'extractResponse') return { success: true, data: { markdown: 'RECOVERED_FINAL', think: '' } };
+      if (method === 'peekResponse') return { success: true, data: { text: '' } };
+      if (method === 'getConversationMetadata') return { success: true, data: { url: conversationUrl, title: 'Recovered' } };
+      throw new Error('unexpected method: ' + method);
+    } }
+  };
+  const manager = new ProviderManager({ webFactories: { deepseek: async () => worker, qwen: async () => ({}) } });
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'empty-recovery', provider_state: { provider: 'deepseek', url: conversationUrl } },
+    messages: [{ role: 'system', content: 'DSH prompt' }, { role: 'user', content: 'Continue project' }], instructions: '',
+    run: { id: 'run-empty-recovery', prompt_passthrough: true, provider_tools: [{ name: 'read', parameters: { type: 'object', properties: {} } }], deep_think: true, web_search: false },
+    signal: new AbortController().signal, timeout: 1000,
+    onStatus: (value) => statuses.push(value),
+    empty_response_recovery_delays: [0, 0, 0]
+  });
+  assert.equal(result.content, 'RECOVERED_FINAL');
+  assert.equal(result.provider_state.url, conversationUrl);
+  assert.equal(newChats, 0);
+  assert.equal(waits, 4);
+  assert.equal(sent.length, 4);
+  assert.equal(sent[1], sent[0]);
+  assert.ok(sent[2].startsWith(sent[0]));
+  assert.ok(sent[3].startsWith(sent[0]));
+  assert.match(sent[2], /<webagent_transport_retry attempt="2">/);
+  assert.match(sent[3], /<webagent_transport_retry attempt="3">/);
+  assert.ok(statuses.includes('DeepSeek 返回空响应，正在重发当前增量（1/3）…'));
+  assert.ok(statuses.includes('DeepSeek 返回空响应，正在重发当前增量（2/3）…'));
+  assert.ok(statuses.includes('DeepSeek 返回空响应，正在重发当前增量（3/3）…'));
+  await manager.close();
+});
+
+test('exhausted empty-response retries roll back the DSH checkpoint without retiring the URL', async () => {
+  const conversationUrl = 'https://chat.deepseek.com/a/chat/s/empty-rollback';
+  const previousBridge = { version: 3, protocol: 'WEBAGENT_DSH_BRIDGE_V3', prompt_hash: 'old', tools_hash: 'old-tools', message_count: 1, message_signatures: ['old'] };
+  let waits = 0;
+  const worker = {
+    ensureAuthenticated: async () => true,
+    navigate: async () => true,
+    assertConversation: async () => true,
+    server: { invoke: async (_model, method) => {
+      if (method === 'setDeepThink' || method === 'setWebSearch' || method === 'sendMessage') return { success: true };
+      if (method === 'waitForDone') { waits += 1; return { success: false, code: 'provider_sse_empty', error: 'empty' }; }
+      if (method === 'peekResponse') return { success: true, data: { text: '' } };
+      throw new Error('unexpected method: ' + method);
+    } }
+  };
+  const manager = new ProviderManager({ webFactories: { deepseek: async () => worker, qwen: async () => ({}) } });
+  const error = await manager.complete({
+    model: 'deepseek.web', session: { id: 'empty-rollback', provider_state: { provider: 'deepseek', url: conversationUrl, dsh_bridge: previousBridge, conversations: [{ provider: 'deepseek', url: conversationUrl, status: 'active' }] } },
+    messages: [{ role: 'system', content: 'new prompt' }, { role: 'user', content: 'tool result continuation' }], instructions: '',
+    run: { id: 'run-empty-rollback', prompt_passthrough: true, provider_tools: [], deep_think: false, web_search: false },
+    signal: new AbortController().signal, timeout: 1000,
+    empty_response_recovery_delays: [0, 0, 0]
+  }).then(() => null, (failure) => failure);
+  assert.equal(error.code, 'provider_sse_empty');
+  assert.equal(waits, 4);
+  assert.equal(error.provider_state.url, conversationUrl);
+  assert.deepEqual(error.provider_state.dsh_bridge, previousBridge);
+  assert.equal(error.provider_state.conversations[0].status, 'active');
   await manager.close();
 });
 

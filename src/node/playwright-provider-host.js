@@ -192,6 +192,7 @@ class PlaywrightWebContents extends EventEmitter {
     this._inputQueue = this._inputQueue.then(run, run).catch((error) => {
       this.emit('input-error', error);
     });
+    return this._inputQueue;
   }
 
   async _dispatchInputEvent(event) {
@@ -220,6 +221,25 @@ class PlaywrightWebContents extends EventEmitter {
     await this._inputQueue;
     if (this.isDestroyed()) throw Object.assign(new Error('Provider page is destroyed'), { code: 'provider_page_destroyed' });
     return this.page.keyboard.insertText(String(value == null ? '' : value));
+  }
+
+  async clickVisibleText(labels, options) {
+    if (this.isDestroyed()) throw Object.assign(new Error('Provider page is destroyed'), { code: 'provider_page_destroyed' });
+    if (!this.page || typeof this.page.getByText !== 'function') return { found: false, clicked: false };
+    const timeout = Math.max(250, Number(options && options.timeout) || 1500);
+    for (const label of Array.isArray(labels) ? labels : [labels]) {
+      const locator = this.page.getByText(String(label || ''), { exact: true });
+      const count = await locator.count().catch(() => 0);
+      for (let index = count - 1; index >= 0; index -= 1) {
+        const candidate = locator.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        try {
+          await candidate.click({ timeout });
+          return { found: true, clicked: true, label: String(label || ''), trusted: true, method: 'playwright-text' };
+        } catch (_) {}
+      }
+    }
+    return { found: false, clicked: false };
   }
 
   async capturePage(rect) {
@@ -256,10 +276,101 @@ class PlaywrightProviderWorker {
       navigationTimeout: host.navigationTimeout
     });
     this.rawResponses = [];
+    this.cdpResponses = [];
+    this.cdpRequests = new Map();
+    this.cdpSequence = 0;
+    this.cdpRequestSequence = 0;
+    this.cdpRequestMeta = new Map();
+    this.cdpSession = null;
+    this.cdpReady = this._startCdpCapture();
     if (page && typeof page.on === 'function') {
       page.on('response', (response) => { void this._captureResponse(response); });
     }
   }
+
+  async _startCdpCapture() {
+    if (this.provider !== 'deepseek') return false;
+    try {
+      const context = this.page && typeof this.page.context === 'function' ? this.page.context() : null;
+      if (!context || typeof context.newCDPSession !== 'function') return false;
+      const session = await context.newCDPSession(this.page);
+      this.cdpSession = session;
+      session.on('Network.requestWillBeSent', (event) => this._trackCdpRequest(event));
+      session.on('Network.responseReceived', (event) => { void this._beginCdpResponse(event); });
+      session.on('Network.dataReceived', (event) => this._appendCdpResponse(event));
+      session.on('Network.loadingFinished', (event) => this._finishCdpResponse(event.requestId));
+      session.on('Network.loadingFailed', (event) => this._finishCdpResponse(event.requestId, event.errorText || 'Network loading failed'));
+      await session.send('Network.enable');
+      return true;
+    } catch (_) { return false; }
+  }
+
+  _trackCdpRequest(event) {
+    const request = event && event.request || {};
+    const url = String(request.url || '');
+    if (!/\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(url)) return;
+    this.cdpRequestMeta.set(event.requestId, {
+      seq: ++this.cdpRequestSequence,
+      url,
+      startedAt: Date.now()
+    });
+  }
+
+  async _beginCdpResponse(event) {
+    const response = event && event.response || {};
+    const url = String(response.url || '');
+    if (!/\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(url)) return;
+    const requestMeta = this.cdpRequestMeta.get(event.requestId);
+    const requestSeq = requestMeta && requestMeta.seq || ++this.cdpRequestSequence;
+    this.cdpSequence = Math.max(this.cdpSequence, requestSeq);
+    const record = {
+      seq: requestSeq,
+      requestId: event.requestId,
+      url,
+      status: Number(response.status) || 0,
+      contentType: String(response.mimeType || ''),
+      text: '',
+      done: false,
+      logicalDone: false,
+      startedAt: requestMeta && requestMeta.startedAt || Date.now(),
+      decoder: new TextDecoder()
+    };
+    this.cdpRequests.set(event.requestId, record);
+    this.cdpResponses.push(record);
+    if (this.cdpResponses.length > 6) this.cdpResponses.splice(0, this.cdpResponses.length - 6);
+    try {
+      const buffered = await this.cdpSession.send('Network.streamResourceContent', { requestId: event.requestId });
+      if (buffered && buffered.bufferedData) this._appendCdpBytes(record, buffered.bufferedData);
+    } catch (error) {
+      record.error = error && error.message || String(error);
+    }
+  }
+
+  _appendCdpBytes(record, base64) {
+    try {
+      record.text += record.decoder.decode(Buffer.from(String(base64 || ''), 'base64'), { stream: true });
+      if (record.text.length > 16 * 1024 * 1024) record.text = record.text.slice(-16 * 1024 * 1024);
+      if (/\nevent:\s*close(?:\n|$)/i.test(record.text)) record.logicalDone = true;
+    } catch (error) { record.error = error && error.message || String(error); }
+  }
+
+  _appendCdpResponse(event) {
+    const record = event && this.cdpRequests.get(event.requestId);
+    if (record && event.data) this._appendCdpBytes(record, event.data);
+  }
+
+  _finishCdpResponse(requestId, error) {
+    const record = this.cdpRequests.get(requestId);
+    if (!record) return;
+    if (error) record.error = error;
+    try { record.text += record.decoder.decode(); } catch (_) {}
+    record.done = true;
+    record.finishedAt = Date.now();
+    this.cdpRequests.delete(requestId);
+    this.cdpRequestMeta.delete(requestId);
+  }
+
+  async ready() { await this.cdpReady; return this; }
 
   async _captureResponse(response) {
     try {
@@ -267,7 +378,7 @@ class PlaywrightProviderWorker {
       if (!url || !/deepseek\.com/i.test(url)) return;
       const headers = typeof response.allHeaders === 'function' ? await response.allHeaders() : (response.headers ? response.headers() : {});
       const contentType = String(headers && headers['content-type'] || '');
-      const candidate = /\/api\/v0\/chat\/completion(?:\?|$)/i.test(url) && /event-stream/i.test(contentType);
+      const candidate = /\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(url) && /event-stream/i.test(contentType);
       if (!candidate) return;
       const record = {
         url,
@@ -294,23 +405,33 @@ class PlaywrightProviderWorker {
   getRawResponses() { return this.rawResponses.slice(); }
   rawResponseCursor() { return this.rawResponses.length; }
   completionResponseAfter(cursor) {
-    return this.rawResponses.slice(Math.max(0, Number(cursor) || 0)).filter((record) => /\/api\/v0\/chat\/completion(?:\?|$)/i.test(record.url)).slice(-1)[0] || null;
+    return this.rawResponses.slice(Math.max(0, Number(cursor) || 0)).filter((record) => /\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(record.url)).slice(-1)[0] || null;
   }
   async rawStreamCursor() {
-    try { return Number(await this.page.evaluate(() => window.__webagentRawCompletionCursor ? window.__webagentRawCompletionCursor() : 0)) || 0; }
-    catch (_) { return 0; }
+    let page = 0;
+    try { page = Number(await this.page.evaluate(() => window.__webagentRawCompletionCursor ? window.__webagentRawCompletionCursor() : 0)) || 0; } catch (_) {}
+    return { cdp: this.cdpRequestSequence, page };
   }
   async resetRawCompletionStreams() {
-    try { return Number(await this.page.evaluate(() => window.__webagentResetRawCompletions ? window.__webagentResetRawCompletions() : 0)) || 0; }
-    catch (_) { return this.rawStreamCursor(); }
+    this.cdpResponses.length = 0;
+    let page = 0;
+    try { page = Number(await this.page.evaluate(() => window.__webagentResetRawCompletions ? window.__webagentResetRawCompletions() : 0)) || 0; } catch (_) {}
+    return { cdp: this.cdpRequestSequence, page };
   }
   async completionStreamAfter(cursor) {
-    try { return await this.page.evaluate((value) => window.__webagentRawCompletionAfter ? window.__webagentRawCompletionAfter(value) : null, Number(cursor) || 0); }
-    catch (_) { return null; }
+    const cdpCursor = Number(cursor && cursor.cdp) || 0;
+    const cdp = this.cdpResponses.filter((record) => record.seq > cdpCursor).slice(-1)[0];
+    if (cdp && (cdp.text || !cdp.error)) return { seq: cdp.seq, url: cdp.url, text: cdp.text, done: cdp.done, logicalDone: cdp.logicalDone, error: cdp.error || '', source: 'cdp' };
+    try {
+      const pageCursor = Number(cursor && cursor.page) || 0;
+      const page = await this.page.evaluate((value) => window.__webagentRawCompletionAfter ? window.__webagentRawCompletionAfter(value) : null, pageCursor);
+      return page ? Object.assign({ source: 'page-fetch' }, page) : null;
+    } catch (_) { return null; }
   }
 
   isDestroyed() { return this.webContents.isDestroyed(); }
   async destroy() {
+    if (this.cdpSession && typeof this.cdpSession.detach === 'function') await this.cdpSession.detach().catch(() => {});
     await this.webContents.destroy();
     this.host._forgetWorker(this);
   }
@@ -323,7 +444,7 @@ class PlaywrightProviderHost {
     this.channel = config.channel === undefined ? 'msedge' : config.channel;
     this.headless = config.headless === undefined ? true : !!config.headless;
     this.profilesRoot = path.resolve(config.profilesRoot || path.join(os.homedir(), '.webagent', 'edge-profiles'));
-    this.clipboardBridge = config.clipboardBridge || {};
+    this.clipboardBridge = config.clipboardBridge || null;
     this.navigationTimeout = Math.max(1000, Number(config.navigationTimeout) || 60000);
     this.viewport = Object.assign({ width: 1280, height: 800 }, config.viewport || {});
     this.launchOptions = Object.assign({}, config.launchOptions || {});
@@ -333,6 +454,7 @@ class PlaywrightProviderHost {
     this.contexts = new Map();
     this.loginAttempts = new Map();
     this.workers = new Set();
+    this.pageReservations = new Set();
     this.closed = false;
     this.accountsFile = path.resolve(config.accountsFile || path.join(this.profilesRoot, 'accounts.json'));
     this.accounts = this._loadAccounts();
@@ -347,7 +469,9 @@ class PlaywrightProviderHost {
       const items = Array.isArray(source.items) ? source.items.filter((item) => item && /^[a-z0-9][a-z0-9_-]{0,47}$/.test(String(item.id || ''))) : [];
       if (!items.some((item) => item.id === 'default')) items.unshift({ id: 'default', name: '默认账号', created_at: new Date().toISOString(), limited_until: '' });
       const active = items.some((item) => item.id === source.active) ? source.active : 'default';
-      providers[provider] = { active, items };
+      const ids = items.map((item) => item.id);
+      const configuredOrder = Array.isArray(source.failover_order) ? source.failover_order.filter((id) => ids.includes(id)) : [];
+      providers[provider] = { active, items, failover_order: configuredOrder.concat(ids.filter((id) => !configuredOrder.includes(id))), browser_visible: !!source.browser_visible };
     }
     return { version: 1, providers };
   }
@@ -367,9 +491,10 @@ class PlaywrightProviderHost {
   listAccounts(providerValue) {
     const provider = normalizeProvider(providerValue);
     const record = this.accounts.providers[provider];
-    return { provider, active_account_id: record.active, data: record.items.map((item) => ({
+    return { provider, active_account_id: record.active, failover_order: record.failover_order.slice(), browser_visible: !!record.browser_visible, data: record.items.map((item) => ({
       ...item,
       active: item.id === record.active,
+      failover_index: record.failover_order.indexOf(item.id),
       profile_exists: fs.existsSync(safeProfilePath(this.profilesRoot, item.id === 'default' ? provider : provider + '--' + item.id))
     })) };
   }
@@ -380,6 +505,7 @@ class PlaywrightProviderHost {
     const id = 'account-' + crypto.randomBytes(5).toString('hex');
     const item = { id, name: String(name || '').trim().slice(0, 64) || '账号 ' + (record.items.length + 1), created_at: new Date().toISOString(), limited_until: '' };
     record.items.push(item);
+    record.failover_order.push(id);
     this._saveAccounts();
     return { ...item, active: false };
   }
@@ -390,6 +516,53 @@ class PlaywrightProviderHost {
     const record = this.accounts.providers[provider];
     if (!record.items.some((item) => item.id === accountId)) throw Object.assign(new Error('Provider account not found'), { code: 'provider_account_not_found', status: 404 });
     record.active = accountId;
+    this._saveAccounts();
+    return this.listAccounts(provider);
+  }
+
+  setAccountOrder(providerValue, orderValue) {
+    const provider = normalizeProvider(providerValue);
+    const record = this.accounts.providers[provider];
+    const ids = record.items.map((item) => item.id);
+    const requested = Array.isArray(orderValue) ? orderValue.map(normalizeAccountId) : [];
+    if (requested.length !== ids.length || new Set(requested).size !== ids.length || requested.some((id) => !ids.includes(id))) {
+      throw Object.assign(new Error('Account failover order must contain every account exactly once'), { code: 'provider_account_order_invalid', status: 400 });
+    }
+    record.failover_order = requested;
+    this._saveAccounts();
+    return this.listAccounts(provider);
+  }
+
+  nextAvailableAccount(providerValue, currentValue, excludedValue) {
+    const provider = normalizeProvider(providerValue);
+    const record = this.accounts.providers[provider];
+    const current = normalizeAccountId(currentValue || record.active);
+    const excluded = new Set((Array.isArray(excludedValue) ? excludedValue : []).map(normalizeAccountId));
+    const order = record.failover_order.length ? record.failover_order : record.items.map((item) => item.id);
+    const start = Math.max(0, order.indexOf(current));
+    for (let offset = 1; offset <= order.length; offset += 1) {
+      const id = order[(start + offset) % order.length];
+      if (!id || id === current || excluded.has(id)) continue;
+      const item = record.items.find((candidate) => candidate.id === id);
+      if (!item || !item.last_login_at) continue;
+      const limitedUntil = Date.parse(item.limited_until || '');
+      if (Number.isFinite(limitedUntil) && limitedUntil > Date.now()) continue;
+      const profileDir = safeProfilePath(this.profilesRoot, id === 'default' ? provider : provider + '--' + id);
+      if (!fs.existsSync(profileDir)) continue;
+      return id;
+    }
+    return '';
+  }
+
+  browserVisible(providerValue) {
+    const provider = normalizeProvider(providerValue);
+    return !!this.accounts.providers[provider].browser_visible;
+  }
+
+  async setBrowserVisible(providerValue, visible) {
+    const provider = normalizeProvider(providerValue);
+    await this._closeProviderContext(provider);
+    this.accounts.providers[provider].browser_visible = !!visible;
     this._saveAccounts();
     return this.listAccounts(provider);
   }
@@ -413,6 +586,7 @@ class PlaywrightProviderHost {
     if (index < 0) throw Object.assign(new Error('Provider account not found'), { code: 'provider_account_not_found', status: 404 });
     await this._closeProviderContext(provider, accountId);
     record.items.splice(index, 1);
+    record.failover_order = record.failover_order.filter((id) => id !== accountId);
     if (record.active === accountId) record.active = 'default';
     this._saveAccounts();
     return this.listAccounts(provider);
@@ -441,7 +615,7 @@ class PlaywrightProviderHost {
     fs.mkdirSync(profileDir, { recursive: true });
     const chromium = this.chromium || defaultChromium();
     const launchOptions = Object.assign({
-      headless: headlessOverride === undefined ? this.headless : !!headlessOverride,
+      headless: headlessOverride === undefined ? (this.headless && !this.browserVisible(provider)) : !!headlessOverride,
       viewport: this.viewport,
       acceptDownloads: true
     }, this.launchOptions);
@@ -449,9 +623,11 @@ class PlaywrightProviderHost {
     const context = await chromium.launchPersistentContext(profileDir, launchOptions);
     try {
       await this._installClipboardBridge(context, provider);
-      if (typeof context.grantPermissions === 'function') {
-        const origin = new URL(this.providerUrls[provider].home).origin;
-        await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+      if (this.clipboardBridge) {
+        if (typeof context.grantPermissions === 'function') {
+          const origin = new URL(this.providerUrls[provider].home).origin;
+          await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+        }
       }
     }
     catch (error) {
@@ -471,23 +647,25 @@ class PlaywrightProviderHost {
   }
 
   async _installClipboardBridge(context, provider) {
-    const bindings = [
-      ['__webagentClipboardReadText', 'readText'],
-      ['__webagentClipboardWriteText', 'writeText'],
-      ['__webagentClipboardSave', 'save'],
-      ['__webagentClipboardRestore', 'restore']
-    ];
-    for (const [binding, operation] of bindings) {
-      await context.exposeBinding(binding, (source, ...args) => this._callClipboard(operation, provider, source, args));
+    if (this.clipboardBridge) {
+      const bindings = [
+        ['__webagentClipboardReadText', 'readText'],
+        ['__webagentClipboardWriteText', 'writeText'],
+        ['__webagentClipboardSave', 'save'],
+        ['__webagentClipboardRestore', 'restore']
+      ];
+      for (const [binding, operation] of bindings) {
+        await context.exposeBinding(binding, (source, ...args) => this._callClipboard(operation, provider, source, args));
+      }
+      await context.addInitScript(`(function(){
+        var api = window.electronAPI || {};
+        api.clipboardReadText = function(){ return window.__webagentClipboardReadText(); };
+        api.clipboardWriteText = function(text){ return window.__webagentClipboardWriteText(String(text == null ? '' : text)); };
+        api.clipboardSave = function(){ return window.__webagentClipboardSave(); };
+        api.clipboardRestore = function(saved, expectedText){ return window.__webagentClipboardRestore(saved, expectedText); };
+        Object.defineProperty(window, 'electronAPI', { configurable: true, value: api });
+      })();`);
     }
-    await context.addInitScript(`(function(){
-      var api = window.electronAPI || {};
-      api.clipboardReadText = function(){ return window.__webagentClipboardReadText(); };
-      api.clipboardWriteText = function(text){ return window.__webagentClipboardWriteText(String(text == null ? '' : text)); };
-      api.clipboardSave = function(){ return window.__webagentClipboardSave(); };
-      api.clipboardRestore = function(saved, expectedText){ return window.__webagentClipboardRestore(saved, expectedText); };
-      Object.defineProperty(window, 'electronAPI', { configurable: true, value: api });
-    })();`);
     if (provider === 'deepseek') {
       // Installed before the application scripts run. Reading a cloned fetch
       // body exposes the provider's original SSE incrementally without
@@ -506,13 +684,18 @@ class PlaywrightProviderHost {
         };
         window.fetch=async function(){
           var args=Array.prototype.slice.call(arguments);
-          var response=await originalFetch.apply(this,args);
+          var requestUrl=String(args[0]&&(args[0].url||args[0])||'');
+          var isCompletion=/\\/api\\/v0\\/chat\\/(?:completion|continue)(?:\\?|$)/i.test(requestUrl);
+          var record=isCompletion?{seq:++sequence,url:requestUrl,text:'',done:false,logicalDone:false,startedAt:Date.now()}:null;
+          if(record){records.push(record);if(records.length>4)records.splice(0,records.length-4);}
+          var response;
+          try{response=await originalFetch.apply(this,args);}
+          catch(error){if(record){record.error=error&&error.message||String(error);record.done=true;record.finishedAt=Date.now();}throw error;}
           try{
             var url=String(response.url||args[0]&&(args[0].url||args[0])||'');
-            if(!/\\/api\\/v0\\/chat\\/completion(?:\\?|$)/i.test(url))return response;
-            var record={seq:++sequence,url:url,text:'',done:false,logicalDone:false,startedAt:Date.now()};
-            records.push(record);
-            if(records.length>4)records.splice(0,records.length-4);
+            if(!/\\/api\\/v0\\/chat\\/(?:completion|continue)(?:\\?|$)/i.test(url))return response;
+            if(!record){record={seq:++sequence,url:url,text:'',done:false,logicalDone:false,startedAt:Date.now()};records.push(record);if(records.length>4)records.splice(0,records.length-4);}
+            record.url=url;
             var clone=response.clone();
             Promise.resolve().then(async function(){
               try{
@@ -553,10 +736,25 @@ class PlaywrightProviderHost {
     const provider = normalizeProvider(providerValue);
     const accountId = normalizeAccountId(options && options.account_id || this.activeAccount(provider));
     const record = await this._context(provider, accountId);
-    const page = await record.context.newPage();
+    const claimedPages = new Set(Array.from(this.workers).map((worker) => worker.page));
+    const pages = typeof record.context.pages === 'function' ? record.context.pages() : [];
+    const reusable = pages.find((candidate) => candidate
+      && !(typeof candidate.isClosed === 'function' && candidate.isClosed())
+      && !claimedPages.has(candidate)
+      && !this.pageReservations.has(candidate)
+      && typeof candidate.url === 'function'
+      && candidate.url() === 'about:blank');
+    const page = reusable || await record.context.newPage();
+    // createWorker calls for title generation and the first real turn can race
+    // immediately after startup. Reserve the initial page before the first
+    // await so a concurrent call cannot bind and navigate the same page.
+    this.pageReservations.add(page);
     const worker = new PlaywrightProviderWorker(this, provider, record.profileDir, page);
+    try { await worker.ready(); }
+    catch (error) { this.pageReservations.delete(page); await worker.destroy().catch(() => {}); throw error; }
     worker.accountId = accountId;
     this.workers.add(worker);
+    this.pageReservations.delete(page);
     const config = options || {};
     const url = Object.prototype.hasOwnProperty.call(config, 'url') ? config.url : this.providerUrls[provider].home;
     if (url) {
@@ -581,7 +779,7 @@ class PlaywrightProviderHost {
   async _openLogin(provider, options) {
     const accountId = normalizeAccountId(options && options.account_id || this.activeAccount(provider));
     const config = Object.assign({}, options || {}, { url: (options && options.url) || this.providerUrls[provider].login });
-    if (!this.headless) {
+    if (!this.headless || this.browserVisible(provider)) {
       const worker = await this.createWorker(provider, Object.assign({}, config, { account_id: accountId }));
       if (worker.page && typeof worker.page.bringToFront === 'function') await worker.page.bringToFront();
       await this._waitForAuthentication(provider, worker.page, config.signal);
@@ -721,6 +919,7 @@ class PlaywrightProviderHost {
     }));
     this.contexts.clear();
     this.loginAttempts.clear();
+    this.pageReservations.clear();
   }
 }
 

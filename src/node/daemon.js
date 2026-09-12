@@ -133,13 +133,7 @@ async function main() {
       headless: args.headlessWorkers,
       profilesRoot: path.join(HOME, 'browser-profiles'),
       accountsFile: path.join(HOME, 'provider-accounts.json'),
-      launchOptions: { args: ['--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'] },
-      clipboardBridge: {
-        readText: () => nativeBridge.readClipboard(),
-        writeText: (text) => nativeBridge.writeClipboard(text),
-        save: (_meta) => nativeBridge.beginClipboard('provider-worker'),
-        restore: (saved, expectedText) => nativeBridge.endClipboard('provider-worker', saved, expectedText)
-      }
+      launchOptions: { args: ['--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'] }
     });
     const createWorker = createProviderWorkerFactory(rawHost, { root: ROOT });
     const providerHost = {
@@ -150,6 +144,10 @@ async function main() {
       listAccounts: (provider) => rawHost.listAccounts(provider),
       createAccount: (provider, name) => rawHost.createAccount(provider, name),
       selectAccount: (provider, accountId) => rawHost.selectAccount(provider, accountId),
+      setAccountOrder: (provider, order) => rawHost.setAccountOrder(provider, order),
+      nextAvailableAccount: (provider, accountId, excluded) => rawHost.nextAvailableAccount(provider, accountId, excluded),
+      browserVisible: (provider) => rawHost.browserVisible(provider),
+      setBrowserVisible: (provider, visible) => rawHost.setBrowserVisible(provider, visible),
       removeAccount: (provider, accountId) => rawHost.removeAccount(provider, accountId),
       markAccountLimited: (provider, accountId, retryAfter) => rawHost.markAccountLimited(provider, accountId, retryAfter),
       close: () => rawHost.close()

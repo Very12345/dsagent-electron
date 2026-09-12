@@ -144,6 +144,16 @@ test('DeepSeek webpage rate limiting is exposed as out_of_usage without a generi
   } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test('DeepSeek webpage busy errors carry HTTP 503 for the DSH pi-ai classifier', async () => {
+  const f = await fixture({ complete: async () => { throw Object.assign(new Error('DeepSeek webpage is temporarily busy; wait before retrying'), { code: 'provider_busy', status: 503, retry_after_seconds: 30 }); } });
+  try {
+    const response = await request(f.port, '/v1/chat/completions', { method: 'POST', body: { model: 'deepseek.web', messages: [{ role: 'user', content: 'hello' }] } });
+    assert.equal(response.status, 503);
+    assert.equal(response.data.error.code, 'provider_busy');
+    assert.match(response.data.error.message, /HTTP 503/);
+  } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test('streaming rate-limit failures expose out_of_usage and terminate with DONE', async () => {
   const f = await fixture({ complete: async () => { throw Object.assign(new Error('DeepSeek webpage usage limit reached'), { code: 'out_of_usage', status: 429, retry_after_seconds: 60 }); } });
   try {
@@ -151,6 +161,27 @@ test('streaming rate-limit failures expose out_of_usage and terminate with DONE'
     assert.equal(response.status, 200);
     assert.match(response.raw, /"code":"out_of_usage"/);
     assert.match(response.raw, /"retry_after_seconds":60/);
+    assert.match(response.raw, /data: \[DONE\]/);
+  } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('webpage context overflow is exposed in the form DSH compaction recognizes', async () => {
+  const f = await fixture({ complete: async () => { throw Object.assign(new Error('DeepSeek webpage context window exceeded; compact the Harness session'), { code: 'context_length_exceeded', status: 400 }); } });
+  try {
+    const response = await request(f.port, '/v1/chat/completions', { method: 'POST', body: { model: 'deepseek.web', messages: [{ role: 'user', content: 'continue' }] } });
+    assert.equal(response.status, 400);
+    assert.equal(response.data.error.code, 'context_length_exceeded');
+    assert.match(response.data.error.message, /context window exceeded/);
+  } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('streaming webpage context overflow preserves the compaction error code', async () => {
+  const f = await fixture({ complete: async () => { throw Object.assign(new Error('DeepSeek webpage context window exceeded; compact the Harness session'), { code: 'context_length_exceeded', status: 400 }); } });
+  try {
+    const response = await request(f.port, '/v1/chat/completions', { method: 'POST', body: { model: 'deepseek.web', stream: true, messages: [{ role: 'user', content: 'continue' }] } });
+    assert.equal(response.status, 200);
+    assert.match(response.raw, /"code":"context_length_exceeded"/);
+    assert.match(response.raw, /context window exceeded/);
     assert.match(response.raw, /data: \[DONE\]/);
   } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
@@ -780,15 +811,19 @@ test('provider account API supports create, select, login and delete', async () 
   f.api.providers.listAccounts = (provider) => ({ provider, active_account_id: 'default', data: [{ id: 'default', active: true }] });
   f.api.providers.createAccount = (provider, name) => { calls.push(['create', provider, name]); return { id: 'account-two', name }; };
   f.api.providers.selectAccount = async (provider, id) => { calls.push(['select', provider, id]); return { provider, active_account_id: id, data: [] }; };
+  f.api.providers.setAccountOrder = (provider, order) => { calls.push(['order', provider, order]); return { provider, active_account_id: 'default', failover_order: order, data: [] }; };
+  f.api.providers.setBrowserVisibility = async (provider, visible) => { calls.push(['visibility', provider, visible]); return { provider, browser_visible: visible, data: [] }; };
   f.api.providers.authenticate = async (provider, input) => { calls.push(['login', provider, input.account_id]); return { provider, account_id: input.account_id, login_opened: true }; };
   f.api.providers.removeAccount = async (provider, id) => { calls.push(['delete', provider, id]); return { provider, active_account_id: 'default', data: [] }; };
   try {
     assert.equal((await request(f.port, '/api/providers/deepseek/accounts')).data.active_account_id, 'default');
     assert.equal((await request(f.port, '/api/providers/deepseek/accounts', { method: 'POST', body: { name: '备用' } })).status, 201);
     assert.equal((await request(f.port, '/api/providers/deepseek/accounts/account-two/select', { method: 'POST', body: {} })).data.active_account_id, 'account-two');
+    assert.deepEqual((await request(f.port, '/api/providers/deepseek/accounts/order', { method: 'PATCH', body: { order: ['account-two', 'default'] } })).data.failover_order, ['account-two', 'default']);
+    assert.equal((await request(f.port, '/api/providers/deepseek/browser-visibility', { method: 'PATCH', body: { visible: true } })).data.browser_visible, true);
     assert.equal((await request(f.port, '/api/providers/deepseek/accounts/account-two/login', { method: 'POST', body: {} })).data.login_opened, true);
     assert.equal((await request(f.port, '/api/providers/deepseek/accounts/account-two', { method: 'DELETE' })).status, 200);
-    assert.deepEqual(calls, [['create', 'deepseek', '备用'], ['select', 'deepseek', 'account-two'], ['login', 'deepseek', 'account-two'], ['delete', 'deepseek', 'account-two']]);
+    assert.deepEqual(calls, [['create', 'deepseek', '备用'], ['select', 'deepseek', 'account-two'], ['order', 'deepseek', ['account-two', 'default']], ['visibility', 'deepseek', true], ['login', 'deepseek', 'account-two'], ['delete', 'deepseek', 'account-two']]);
   } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 

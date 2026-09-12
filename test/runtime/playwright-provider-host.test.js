@@ -8,6 +8,7 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const {
   PlaywrightProviderHost,
+  PlaywrightProviderWorker,
   normalizeProvider
 } = require('../../src/node/playwright-provider-host');
 
@@ -114,6 +115,55 @@ test('one persistent Edge context is reused per provider while workers get separ
   } finally { await cleanup(f); }
 });
 
+test('the first provider worker reuses Chromium initial about:blank page', async () => {
+  const profilesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-playwright-blank-'));
+  let initialPage = null;
+  const chromium = {
+    async launchPersistentContext(profile, options) {
+      const context = new MockContext(profile, options);
+      initialPage = await context.newPage();
+      return context;
+    }
+  };
+  const host = new PlaywrightProviderHost({ chromium, profilesRoot, headless: true, authenticationProbe: async () => true });
+  try {
+    const worker = await host.createWorker('deepseek');
+    assert.equal(worker.page, initialPage);
+    assert.equal(worker.page.url(), 'https://chat.deepseek.com/');
+    assert.equal(worker.page.context.pages().length, 1);
+  } finally {
+    await host.close();
+    fs.rmSync(profilesRoot, { recursive: true, force: true });
+  }
+});
+
+test('concurrent first workers never bind the same initial about:blank page', async () => {
+  const profilesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-playwright-blank-race-'));
+  let context = null;
+  let initialPage = null;
+  const chromium = {
+    async launchPersistentContext(profile, options) {
+      context = new MockContext(profile, options);
+      initialPage = await context.newPage();
+      return context;
+    }
+  };
+  const host = new PlaywrightProviderHost({ chromium, profilesRoot, headless: true, authenticationProbe: async () => true });
+  try {
+    const [first, second] = await Promise.all([
+      host.createWorker('deepseek.pro.web'),
+      host.createWorker('deepseek.flash.web')
+    ]);
+    assert.notEqual(first.page, second.page);
+    assert.ok(first.page === initialPage || second.page === initialPage);
+    assert.equal(context.pages().length, 2);
+    assert.equal(host.pageReservations.size, 0);
+  } finally {
+    await host.close();
+    fs.rmSync(profilesRoot, { recursive: true, force: true });
+  }
+});
+
 test('openLogin uses provider login URL and exposes the injected clipboard bridge', async () => {
   const calls = [];
   const f = fixture();
@@ -170,6 +220,50 @@ test('DeepSeek accounts use isolated persistent profiles and persist manual sele
   } finally { await cleanup(f); }
 });
 
+test('DeepSeek account failover order persists and skips limited or unlogged accounts', async () => {
+  const f = fixture();
+  try {
+    const backup = f.host.createAccount('deepseek', '备用账号');
+    const third = f.host.createAccount('deepseek', '未登录账号');
+    const record = f.host.accounts.providers.deepseek;
+    record.items.find((item) => item.id === 'default').last_login_at = new Date().toISOString();
+    record.items.find((item) => item.id === backup.id).last_login_at = new Date().toISOString();
+    fs.mkdirSync(path.join(f.profilesRoot, 'deepseek'), { recursive: true });
+    fs.mkdirSync(path.join(f.profilesRoot, 'deepseek--' + backup.id), { recursive: true });
+    const ordered = f.host.setAccountOrder('deepseek', [backup.id, third.id, 'default']);
+    assert.deepEqual(ordered.failover_order, [backup.id, third.id, 'default']);
+    assert.equal(f.host.nextAvailableAccount('deepseek', 'default', []), backup.id);
+    f.host.markAccountLimited('deepseek', backup.id, 60);
+    assert.equal(f.host.nextAvailableAccount('deepseek', 'default', []), '');
+    const saved = JSON.parse(fs.readFileSync(path.join(f.profilesRoot, 'accounts.json'), 'utf8'));
+    assert.deepEqual(saved.providers.deepseek.failover_order, [backup.id, third.id, 'default']);
+  } finally { await cleanup(f); }
+});
+
+test('provider workers do not receive clipboard bindings unless explicitly configured', async () => {
+  const f = fixture();
+  try {
+    await f.host.createWorker('deepseek');
+    assert.equal(f.host.clipboardBridge, null);
+    assert.equal(Object.keys(f.launches[0].bindings).filter((name) => /Clipboard/.test(name)).length, 0);
+    assert.equal(f.launches[0].scripts.some((script) => String(script).includes('__webagentClipboardReadText')), false);
+  } finally { await cleanup(f); }
+});
+
+test('DeepSeek debug browser visibility persists and launches a headed provider context', async () => {
+  const f = fixture();
+  try {
+    const listing = await f.host.setBrowserVisible('deepseek', true);
+    assert.equal(listing.browser_visible, true);
+    const worker = await f.host.createWorker('deepseek');
+    assert.equal(f.launches[0].options.headless, false);
+    await worker.destroy();
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.profilesRoot, 'accounts.json'), 'utf8')).providers.deepseek.browser_visible, true);
+    const hidden = await f.host.setBrowserVisible('deepseek', false);
+    assert.equal(hidden.browser_visible, false);
+  } finally { await cleanup(f); }
+});
+
 test('webContents maps JavaScript, keyboard, mouse, screenshot and Electron-like events', async () => {
   const f = fixture();
   try {
@@ -197,6 +291,28 @@ test('webContents maps JavaScript, keyboard, mouse, screenshot and Electron-like
     await worker.destroy();
     assert.equal(worker.webContents.isDestroyed(), true);
   } finally { await cleanup(f); }
+});
+
+test('DeepSeek raw SSE cursor excludes a response whose request began before reset', async () => {
+  const page = new MockPage({});
+  page.context = () => null;
+  page.evaluate = async (source) => String(source).includes('__webagentResetRawCompletions') ? 0 : null;
+  const worker = new PlaywrightProviderWorker({ navigationTimeout: 1000, _forgetWorker: () => {} }, 'deepseek', 'profile', page);
+  await worker.ready();
+  worker.cdpSession = { send: async () => ({}) };
+  const url = 'https://chat.deepseek.com/api/v0/chat/completion';
+  const continueUrl = 'https://chat.deepseek.com/api/v0/chat/continue';
+  worker._trackCdpRequest({ requestId: 'old', request: { url } });
+  const cursor = await worker.resetRawCompletionStreams();
+  await worker._beginCdpResponse({ requestId: 'old', response: { url, status: 200, mimeType: 'text/event-stream' } });
+  assert.equal(await worker.completionStreamAfter(cursor), null);
+  worker._trackCdpRequest({ requestId: 'new', request: { url: continueUrl } });
+  await worker._beginCdpResponse({ requestId: 'new', response: { url: continueUrl, status: 200, mimeType: 'text/event-stream' } });
+  worker._appendCdpResponse({ requestId: 'new', data: Buffer.from('event: close\ndata: {}\n').toString('base64') });
+  const current = await worker.completionStreamAfter(cursor);
+  assert.equal(current.seq, 2);
+  assert.equal(current.url, continueUrl);
+  assert.match(current.text, /event: close/);
 });
 
 test('getBrowserCredentials combines isolated cookies and storage without reading a system profile', async () => {

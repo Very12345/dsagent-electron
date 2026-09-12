@@ -158,6 +158,7 @@ class DeepSeekHarnessService {
     this.logs = [];
     this.webModelsRegistered = false;
     this._removeRetiredManagedPresets();
+    this._installStableMinimalPreset();
     this._writeSettings();
     const env = Object.assign({}, process.env, {
       DSH_HOME: this.home,
@@ -427,6 +428,40 @@ class DeepSeekHarnessService {
     return removed;
   }
 
+  _installStableMinimalPreset() {
+    const id = 'webagent-minimal-stable';
+    const source = path.join(this.root, 'integrations', 'dsh-webagent-plugin', 'presets', id);
+    const target = path.join(this.home, '.agent-presets', id);
+    const marker = path.join(target, '.webagent-managed.json');
+    if (!fs.existsSync(path.join(source, 'preset.yml')) || !fs.existsSync(path.join(source, 'agent.cordis.yml'))) {
+      this.logs.push('[preset] stable minimal source is unavailable');
+      return false;
+    }
+    if (fs.existsSync(target) && !fs.existsSync(marker)) {
+      this.logs.push('[preset] preserved user preset ' + id);
+      return false;
+    }
+    if (fs.existsSync(marker)) {
+      try {
+        const metadata = JSON.parse(fs.readFileSync(marker, 'utf8'));
+        if (metadata.product !== 'WebAgent' || metadata.id !== id) {
+          this.logs.push('[preset] preserved unrecognized preset ' + id);
+          return false;
+        }
+      } catch (error) {
+        this.logs.push('[preset] preserved unreadable preset ' + id + ': ' + error.message);
+        return false;
+      }
+    }
+    fs.mkdirSync(target, { recursive: true });
+    atomicWrite(path.join(target, 'preset.yml'), fs.readFileSync(path.join(source, 'preset.yml'), 'utf8'));
+    atomicWrite(path.join(target, 'agent.cordis.yml'), fs.readFileSync(path.join(source, 'agent.cordis.yml'), 'utf8'));
+    atomicWrite(marker, JSON.stringify({ product: 'WebAgent', id, version: 1 }, null, 2));
+    this.presets = [{ id, name: 'WebAgent 稳定极简模式', managed: true }];
+    this.logs.push('[preset] installed ' + id);
+    return true;
+  }
+
   _webAgentProvider() {
     return {
       displayName: 'WebAgent - Web Models',
@@ -548,6 +583,9 @@ class DeepSeekHarnessService {
     atomicWrite(this._pluginPatch(), yaml.dump([
       { id: 'llm-pi-ai', config: { providers: { webagent: this._webAgentProvider() } } },
       { id: 'agent-default-model', config: { provider: 'webagent', model: 'deepseek.web' } },
+      { id: 'web', config: { searchProvider: 'webagent-deepseek-web', fetchProvider: 'http' } },
+      { id: 'web-search-deepseek', disabled: true },
+      { id: 'tool-web', config: { fetch: true, searchTimeoutMs: 180000, searchMaxQueries: 2 } },
       { insert: [{ id: 'webagent-integration', name: '@webagent/dsh-integration' }] }
     ], { noRefs: true, lineWidth: 120 }));
   }

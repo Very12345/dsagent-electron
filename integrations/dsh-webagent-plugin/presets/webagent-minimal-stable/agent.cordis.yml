@@ -1,0 +1,16 @@
+# WebAgent-managed minimal preset. It intentionally uses DSH's official
+# fresh-process shell tools instead of the persistent PTY tools.
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    prefix: You are a helpful software engineer assistant.
+    complete: true
+    includeRuntimeContext: false
+
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'

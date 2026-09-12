@@ -48,7 +48,10 @@
         'sql', 'json', 'xml', 'html', 'css', 'yaml', 'yml'
     ];
 
-    let enableAutoExec = true;
+    // Runtime/DSH owns tool execution and consumes the provider's original
+    // SSE. Keep the retired DOM/copy-button executor disabled so provider
+    // automation never touches the user's clipboard.
+    let enableAutoExec = false;
     let serviceConnected = false;
     let isExecuting = false;
     let stopRequested = false;  // 全局停止请求标记
@@ -60,6 +63,7 @@
     let lastProcessedTimestamp = 0; // 最后一次处理完成的时间戳，防重复
     let _asyncRoundCount = 0;      // 异步任务等待轮次计数（控制 DeepSeek 输出 <= 2）
     let _contextCompressSent = false; // 本轮是否已触发上下文压缩提示
+    let providerErrorBaseline = null; // 发送前已存在的网页错误提示计数
     window.__dsagent_pendingAsyncTasks = [];  // 待处理异步任务列表
     window.__dsagent_seenToolDocs = [];       // AI 已查看过文档的工具名列表
 
@@ -138,11 +142,50 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
         return !!btn.querySelector('svg rect');
     }
 
+    function providerErrorKind(text) {
+        var value = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!value || value.length > 180) return '';
+        if (/^(?:达到对话长度上限[，, ]*请开启新对话|对话长度(?:已)?达(?:到)?上限|上下文(?:长度|窗口)(?:已)?(?:达到|超出|超过)(?:最大)?(?:长度|上限)|context (?:length|window).*(?:exceeded|full)|maximum context (?:length|window))$/i.test(value)) return 'context';
+        if (/^(?:消息发送过于频繁|请求过于频繁|操作过于频繁)(?:[，, ]*(?:请稍后重试|请稍后再试))?$|^(?:too many requests|rate limit(?:ed| exceeded)?|usage limit exceeded|out of usage|quota exceeded)(?:[,.! ]*(?:please )?(?:retry|try again)(?: later)?)?$/i.test(value)) return 'rate';
+        if (/^(?:服务器繁忙|系统繁忙|服务暂时不可用)(?:[，, ]*(?:请稍后重试|请稍后再试))?$|^(?:server (?:is )?busy|service temporarily unavailable)(?:[,.! ]*(?:please )?(?:retry|try again)(?: later)?)?$/i.test(value)) return 'busy';
+        return '';
+    }
+
+    function providerErrorCounts() {
+        var counts = { context: 0, rate: 0, busy: 0 };
+        var nodes = Array.from(document.querySelectorAll('div,span,p'));
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            if (node.closest('pre,code,.ds-markdown,[class*="markdown"],textarea,[contenteditable="true"]')) continue;
+            var rect = node.getBoundingClientRect();
+            var style = window.getComputedStyle(node);
+            if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') continue;
+            var kind = providerErrorKind(node.textContent);
+            if (kind) counts[kind] += 1;
+        }
+        return counts;
+    }
+
+    function captureProviderErrorBaseline() {
+        providerErrorBaseline = providerErrorCounts();
+        return Object.assign({}, providerErrorBaseline);
+    }
+
     function usageLimitState() {
-        var bodyText = document.body ? String(document.body.innerText || '') : '';
-        var recent = bodyText.slice(-16000);
-        var limited = /消息发送过于频繁|请求过于频繁|操作过于频繁|too many requests|rate limit|usage limit|out of usage|quota exceeded/i.test(recent);
-        var busy = /服务器繁忙|系统繁忙|service unavailable|server busy/i.test(recent);
+        var counts = providerErrorCounts();
+        var baseline = providerErrorBaseline || { context: 0, rate: 0, busy: 0 };
+        if (counts.context > baseline.context) {
+            return {
+                limited: true,
+                contextWindowExceeded: true,
+                code: 'context_length_exceeded',
+                reason: 'context_window_exceeded',
+                retryAfter: 0,
+                message: 'DeepSeek webpage context window exceeded; compact the Harness session and continue in a new conversation'
+            };
+        }
+        var limited = counts.rate > baseline.rate;
+        var busy = counts.busy > baseline.busy;
         if (!limited && !busy) return { limited: false };
         return {
             limited: true,
@@ -155,6 +198,7 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
         };
     }
 
+    window.__dsagent_captureProviderErrorBaseline = captureProviderErrorBaseline;
     window.__dsagent_getUsageLimitState = usageLimitState;
 
     async function waitForSendAcceptance(originalText, timeout) {
@@ -448,6 +492,7 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
     async function fillAndSend(text) {
         const input = getInputBox();
         if (!input) return { success: false, code: 'provider_input_unavailable', error: 'DeepSeek input box was not found' };
+        captureProviderErrorBaseline();
 
         // A completed turn may leave the legacy watcher paused while Runtime
         // owns the page. Clear its cached bit before observing the new native
@@ -2317,10 +2362,12 @@ async function deleteCurrentConversation() {
             if (window.__dsagent_extractCurrentAnswerMarkdown) {
                 semanticMarkdown = window.__dsagent_extractCurrentAnswerMarkdown(false);
                 think = window.__dsagent_extractCurrentThinking ? window.__dsagent_extractCurrentThinking(false) : '';
-                if (!/(?:[|｜]\s*){1,3}DSML\s*(?:[|｜]\s*){1,3}(?:tool_calls|function_calls|calls|invoke)/i.test(semanticMarkdown)) {
-                    return { markdown: semanticMarkdown.trim(), think: think.trim(), answerConfirmed: !!semanticMarkdown.trim() };
-                }
+                // Compatibility-only DOM extraction. Live provider responses,
+                // including DSML, come from raw SSE and never click Copy or
+                // read/write/restore the system clipboard.
+                return { markdown: semanticMarkdown.trim(), think: think.trim(), answerConfirmed: !!semanticMarkdown.trim(), clipboardUsed: false };
             }
+            return { markdown: '', think: think.trim(), answerConfirmed: false, clipboardUsed: false };
             // Keep an independent DOM result. Clipboard preserves Markdown better,
             // but DeepSeek may leave an older copy button/clipboard value around.
             var assistantBodies = document.querySelectorAll('.ds-markdown.ds-assistant-message-main-content, [class*="assistant-message-main-content"]');
