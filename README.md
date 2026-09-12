@@ -1,113 +1,120 @@
-# WebAgent
+# WebAgent DSH Core
 
-WebAgent 是共享同一本地 Runtime 的多 Provider 工作台。当前架构由纯 Node
-Runtime、浏览器/PWA 工作台与系统 Edge Provider Worker 组成；`webagent` CLI
-和 PWA 是地位相同的客户端。DeepSeek、Qwen、ChatGPT 与任意 OpenAI 兼容
-端点只是模型 Provider，不再打包 Electron 或额外 Chromium。
+On a host where the optional TUI profile is installed, launch the terminal UI
+against the active WebAgent Runtime with:
+
+```sh
+webagent-dsh-tui
+```
+
+WebAgent DSH Core 是官方 DeepSeek Harness 的本地网页模型传输层。DSH
+负责会话、规划、工具、Skill、审批、子代理、上下文压缩和工作区策略；本项目只负责：
+
+- 维护隔离的 DeepSeek 网页登录 Profile；
+- 从网页原始 SSE 获取思考、正文和工具协议；
+- 向 DSH 提供本地 OpenAI 兼容模型 `deepseek.web`；
+- 处理继续生成、限速重试、多账号切换和远端对话清理；
+- 使用 DeepSeek 网页原生搜索替代计费 API 搜索。
+- 通过当前 `chat.qwen.ai` 网页协议提供 Qwen 文本、原生搜索、生图和语音转写 API。
+
+新入口不会加载旧 WebAgent 内置 Agent、工具执行器、工作记忆、Bot、移动网关、
+旧 Qwen DOM/ChatGPT 适配器或 React 工作台。完整旧版保存在 Git 分支
+`archive/pre-dsh-core-20260912` 和标签 `pre-dsh-core-20260912`。
+
+## 环境
+
+- Node.js 20 或更高版本；
+- Microsoft Edge、Google Chrome，或 Playwright 安装的 Chromium；
+- 首次登录需要可见图形会话。无桌面 Linux 可以使用 Xvfb + VNC/noVNC。
 
 ## 启动
 
+Windows（默认使用系统 Edge）：
+
 ```powershell
 npm install
-
-# 日常启动已构建的 Renderer，不重新构建；自动打开默认浏览器
-npm run launch
-
-# 修改前端源码后才使用（会先重新构建 Renderer）
-npm start
+npm run launch -- --workspace D:\Work\WAWorkSpace
 ```
 
-Provider Worker 默认使用无头系统 Edge，不会为每次请求或审批弹出额外浏览器。
-只有检测到 Provider 未登录时，WebAgent 才使用同一隔离配置目录临时打开登录页；
-登录成功后窗口自动关闭，原 Run 在无头 Worker 中恢复。调试 DOM 时可显式使用
-`npm run launch -- --headed-workers` 恢复可见 Worker。
+Linux（使用 Playwright Chromium）：
 
-也可以只启动共享 Runtime，不打开工作台：
-
-```powershell
-npm run start:runtime
+```bash
+npm install
+npx playwright-core install chromium
+npm run launch -- --workspace "$HOME/workspace" --no-open
 ```
 
-## DeepSeek Harness
+如果使用系统 Chrome：
 
-项目固定使用官方 `@deepseek-ai/dsh` 依赖，并在 WebAgent 内管理它的 WebUI
-sidecar。打开 Activity Bar 中的 **DeepSeek Harness**，WebAgent 会自动：
-
-1. 在 `127.0.0.1` 的空闲端口启动 `dsh web`；
-2. 将官方 DSH WebUI 嵌入工作台；
-3. 为 DSH 注册 `WebAgent · DeepSeek Web` OpenAI 兼容 Provider；
-4. 将模型请求转发给已登录的 DeepSeek 网页；
-5. 把网页返回的 `Calling:` 协议转换为原生 OpenAI `tool_calls`，工具仍由
-   DSH 自己执行，WebAgent 不会重复执行；
-6. 每轮安全清理临时 WebAgent/DeepSeek 远端会话，避免测试对话堆积。
-
-Runtime Token 只通过子进程环境变量传递，不写入 DSH 的 `settings.yaml`。
-DSH WebUI 没有对外认证，因此始终只绑定 loopback，不开放到局域网。
-
-官方源码参考：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。
-
-## Qianwen 网关模型
-
-`qwen.gateway`（界面显示 **Qianwen 网关模型**）使用 WebAgent 管理的
-[Rogator](https://github.com/nichengfuben/rogator) 侧车。账户与模型服务页可完成
-固定版本安装、Qwen 账号配置、启动和停止。该侧车始终绑定 `127.0.0.1`，并把
-Rogator 的 `[upstream].enabled` 锁定为 `["qwen"]`；WebAgent 不接入 Rogator 的
-DeepSeek 网页逆向实现。
-
-WebAgent/DSH 继续拥有消息顺序、工具和 Agent 循环，发往 Rogator 的请求不携带
-工具清单，避免 entml 与 DSH 双重注入。Qwen 原生思考和正文会分别流式返回，
-取消 Run 会同步中止侧车请求。账号密码由操作系统 CredentialVault 加密保存（Windows
-使用 DPAPI），只有
-侧车运行期间才临时生成 Rogator 所需的账号 CSV，停止时立即清除。
-
-## 浏览器 Worker 与登录
-
-网页 Provider 使用系统安装的 Microsoft Edge。WebAgent 为 DeepSeek、Qwen、
-ChatGPT 和 Qwen Gateway 分别建立 `~/.webagent/browser-profiles/` 下的专属
-持久 Profile；不会读取或接管用户日常 Edge Profile。每个 Provider 共享登录态，
-每个活跃 Run 独占一个 Page。由 Electron 5.x 迁移到 Node 6.x 后，各网页平台需
-在新的专属 Profile 中重新登录一次，旧 Electron 登录目录不会被自动删除。
-
-PWA 与 Runtime 通过同源代理通信。启动器生成一次性票据并换取
-`HttpOnly; SameSite=Strict` Cookie，Runtime Bearer Token 不会写入浏览器 URL、
-localStorage 或前端构建产物。
-
-## 三种会话模式
-
-- `chat`：普通对话。服务端强制关闭文件、Runtime 工具、Skill、MCP、
-  Subagent 和记忆写入；支持 Provider 原生思考/搜索以及 Renderer 离线
-  Mermaid、KaTeX、`wa-plot`、Typst/CeTZ 预览。
-- `project`：绑定项目目录，开放工程工具、审批、Skill、项目记忆、
-  Subagent 和 Agent Cluster。
-- `work`：默认在 `D:\Work\WAWorkSpace` 中完成日常办公，按回合写入每日
-  记录并提炼 `MEMORY.md`，产物自动归档到安全的工作子目录。
-
-有消息的会话不能原地提升权限；转换模式会创建新会话并携带确认后的摘要。
-
-CLI 示例：
-
-```powershell
-webagent --mode chat -m chatgpt.web -p "你好"
-webagent --project D:\Code\Project\Example -m deepseek.expert -p "分析并验证项目"
-webagent --mode work --work-root D:\Work\WAWorkSpace -p "整理今天的会议记录"
+```bash
+npm run launch -- --browser-channel chrome --workspace "$HOME/workspace" --no-open
 ```
 
-新 Runtime 信息与数据位于 `~/.webagent`。过渡版本继续兼容 `dsagent`
-命令、`window.dsagent`、`.dsa` 只读回退和 `X-DSAgent-*` 请求头；新入口为
-`window.webagent` 与 `X-WebAgent-*`。
+启动后终端会输出两个仅绑定 `127.0.0.1` 的地址：Provider API 和带一次性认证
+Token 的 DSH WebUI。远程机器请使用 SSH 端口转发，不要把 DSH 或 Runtime 直接暴露
+到公网：
+
+```bash
+ssh -L 3080:127.0.0.1:3080 -L 5858:127.0.0.1:5858 -L 6080:127.0.0.1:6080 user@server
+```
+
+后台服务运行时可随时生成一个五分钟内有效、仅可使用一次的 DSH 登录地址：
+
+```bash
+webagent-dsh-url
+```
+
+打开该地址后，Runtime 只负责把内部 DSH 会话 Cookie 写入 `127.0.0.1`，随即
+跳转到 DSH WebUI；Cookie 不会显示在命令行或 URL 中。
+
+无桌面服务器安装 noVNC 后，首次模型请求触发登录窗口时，可在 SSH 转发已建立的
+前提下打开 `http://127.0.0.1:6080/vnc.html` 完成登录。VNC 和 noVNC 都只监听
+远端 loopback，不能绕过 SSH 隧道访问。
+
+## 账号
+
+浏览器账号保存在 `$WEBAGENT_HOME/browser-profiles`，默认沿用
+`~/.webagent/browser-profiles`。示例 Linux systemd 服务显式使用隔离目录
+`~/.webagent-dsh`。Windows 浏览器 Profile 不应复制到 Linux；
+首次部署需要在 Linux Profile 中重新登录。多账号顺序、网页限速重试和循环切换仍由
+Provider 传输层负责。
+
+## 安全边界
+
+- Runtime 和 DSH 只监听 loopback；
+- Runtime Bearer Token 只写入用户目录下的 `runtime.json` 并通过子进程环境传给 DSH；
+- 网页模型不执行本地工具，工具调用转换后由 DSH 校验和执行；
+- DeepSeek 正文和思考全部来自原始 SSE，不读取或修改系统剪贴板；
+- 付费 `web-search-deepseek` provider 被禁用；DSH 原生 `web_search` 保留，并可在“插件 → 插件配置 → 网页搜索”中选择 DeepSeek 或 Qwen 网页账号。
+
+## Qwen 网页能力
+
+Qwen 使用独立的 `chat.qwen.ai` 浏览器 Profile；首次使用时在可见浏览器或
+noVNC 中完成登录。DSH 会得到四个显式工具，普通模式可用，极简模式保持原生工具集
+不变：
+
+- `qianwen_text`：关闭 Qwen 云端工具的纯文本回复，可选择 Qwen3.8-Max 或 Qwen3.7-Plus；
+- `qianwen_search`：仅本次请求启用原生网页搜索；
+- `qianwen_image`：选择 Qwen-Image 3.0/2.0 和画面比例，下载成品到工作区；
+- `qianwen_voice`：把工作区中的 WAV/MP3/M4A/AAC/OGG/OPUS 转成文字。
+
+DSH 模型选择器提供 `qwen.text.web.3.8-max` 和
+`qwen.text.web.3.7-plus`。旧 `qwen.text.web` 仅作为已有会话的隐藏兼容
+别名保留。两个文本模型都使用 SSE，并将思考增量作为 `reasoning_content`
+传给 DSH；可选档位为关闭、低、中、高。`qwen.search.web` 与
+`qwen.image.web` 仅是插件调用 Runtime 时使用的内部能力端点，不进入
+DSH 的 LLM 模型选择器。生图的非流式响应会同时在顶层
+`images` 和 `choices[0].message.images` 返回图片 URL；流式响应在最终
+`delta.images` 中返回。语音输入使用认证后的
+`POST /api/qwen/voice/transcriptions`，JSON 字段为 `audio_base64`、
+`filename`、`content_type` 和可选 `language`。
+
+该传输层按真实网页的当前字段发送 `t2t`、`search` 或 `t2i` 请求；不会通过
+提示词伪装搜索/生图，也不会在普通文本请求中偷偷打开网页搜索。
 
 ## 验证
 
-```powershell
+```bash
 npm test
-npm run typecheck
-npm run build:renderer
-npm run test:e2e
-npm run smoke:cli
-```
-
-大型隔离验收项目可通过以下命令生成；脚本拒绝覆盖非空目录：
-
-```powershell
-node scripts/generate-large-test-project.js D:\Code\Project\WebAgentLargeTest
+npm run smoke
 ```

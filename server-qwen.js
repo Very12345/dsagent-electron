@@ -26,6 +26,7 @@ function createQwenServer(qwenViewRef) {
         return { id, provider: 'qwen', displayName, webLabel, description, hidden: !!hidden, capabilities: QWEN_CAPABILITIES };
     }
     const MODELS = {
+        'qwen.image.web': webModel('qwen.image.web', 'Qianwen Image - Web', 'Qwen3.8-Max', '网页生图专用模型；返回生成图片 URL'),
         'qwen.default': webModel('qwen.default', 'Qwen3.7 千问（兼容）', 'Qwen3.7-千问', '原 qwen.default 兼容别名', true),
         'qwen.3.7': webModel('qwen.3.7', 'Qwen3.7 千问', 'Qwen3.7-千问', '综合 AI 助手，适合工作、学习与生活问答'),
         'qwen.3.8-max': webModel('qwen.3.8-max', 'Qwen3.8 Max', 'Qwen3.8-Max', '最新 Max 旗舰模型，支持视觉理解'),
@@ -265,8 +266,9 @@ function createQwenServer(qwenViewRef) {
                         var now = Date.now();
                         // 主信号：曾经生成中，现在停止按钮消失 → 答完
                         if (wasGen && !gen) { if (window.__qwen._navigating !== undefined) window.__qwen._navigating = false; return {success:true, done:true, reason:'stop-btn-gone'}; }
-                        // 检测图片生成卡片（AI 图片回复没有停止按钮，用 data-card-type 信号）
-                        var imgCard = document.querySelector('[data-card-type="ai_generate_image_list"]');
+                        // 检测图片生成卡片。新版单图模式不再保证使用
+                        // ai_generate_image_list，交给注入层的作用域解析器判断。
+                        var imgCard = window.__qwen.getLastImageUrls && window.__qwen.getLastImageUrls().length > 0;
                         if (imgCard && !gen) { if (window.__qwen._navigating !== undefined) window.__qwen._navigating = false; return {success:true, done:true, reason:'image-card', hasImages:true}; }
                         // 前 12s 还没见到生成 → 继续等（发送到进入生成态有延迟）
                         // 超过 12s 仍 wasGen=false → 发送可能失败，报错

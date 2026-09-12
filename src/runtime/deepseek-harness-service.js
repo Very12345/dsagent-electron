@@ -9,7 +9,7 @@ const { spawn } = require('child_process');
 const yaml = require('js-yaml');
 const WebSocket = require('ws');
 
-const DEFAULT_VERSION = '0.1.5-rc.1';
+const DEFAULT_VERSION = '0.1.5-rc.2';
 const RETIRED_MANAGED_PRESETS = Object.freeze(['anchored-standard', 'router-standard']);
 
 function atomicWrite(file, content) {
@@ -92,6 +92,8 @@ class DeepSeekHarnessService {
     this.runtimeToken = String(options.runtimeToken || '');
     this.home = path.resolve(options.home || path.join(os.homedir(), '.webagent', 'deepseek-harness'));
     this.version = options.version || DEFAULT_VERSION;
+    this.coreOnly = !!options.coreOnly;
+    this.dshBin = options.dshBin ? path.resolve(options.dshBin) : '';
     this.defaultWorkspace = path.resolve(options.defaultWorkspace || (
       process.platform === 'win32' && fs.existsSync('D:\\Work\\WAWorkSpace')
         ? 'D:\\Work\\WAWorkSpace'
@@ -157,8 +159,8 @@ class DeepSeekHarnessService {
     this.error = '';
     this.logs = [];
     this.webModelsRegistered = false;
-    this._removeRetiredManagedPresets();
-    this._installStableMinimalPreset();
+    this._removeRetiredManagedPresets(process.platform === 'win32' ? [] : ['webagent-minimal-stable']);
+    if (process.platform === 'win32') this._installStableMinimalPreset();
     this._writeSettings();
     const env = Object.assign({}, process.env, {
       DSH_HOME: this.home,
@@ -242,7 +244,17 @@ class DeepSeekHarnessService {
     return this.status();
   }
 
-  _bin() { return path.join(this.root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'); }
+  async restart(input) {
+    const currentWorkspace = this.workspace;
+    const currentPort = this.port;
+    await this.stop();
+    return this.start({
+      workspace: input && input.workspace || currentWorkspace,
+      port: input && input.port || currentPort || 3080
+    });
+  }
+
+  _bin() { return this.dshBin || path.join(this.root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'); }
 
   _isDirectory(value) {
     try { return fs.statSync(value).isDirectory(); }
@@ -395,7 +407,7 @@ class DeepSeekHarnessService {
 
   _pluginPatch() { return path.join(this.home, 'webagent-integration.patch.yml'); }
 
-  _removeRetiredManagedPresets() {
+  _removeRetiredManagedPresets(additionalIds) {
     const presetRoot = path.join(this.home, '.agent-presets');
     if (!fs.existsSync(presetRoot)) {
       this.presets = [];
@@ -403,7 +415,7 @@ class DeepSeekHarnessService {
     }
     const rootPrefix = path.resolve(presetRoot) + path.sep;
     const removed = [];
-    for (const id of RETIRED_MANAGED_PRESETS) {
+    for (const id of RETIRED_MANAGED_PRESETS.concat(Array.isArray(additionalIds) ? additionalIds : [])) {
       const target = path.resolve(presetRoot, id);
       const marker = path.join(target, '.webagent-managed.json');
       if (!target.startsWith(rootPrefix) || !fs.existsSync(target)) continue;
@@ -463,7 +475,7 @@ class DeepSeekHarnessService {
   }
 
   _webAgentProvider() {
-    return {
+    const provider = {
       displayName: 'WebAgent - Web Models',
       apiKeyEnv: 'WEBAGENT_DSH_TOKEN',
       api: 'openai-completions',
@@ -492,6 +504,12 @@ class DeepSeekHarnessService {
         { id: 'chatgpt.web', name: 'ChatGPT - Web', input: ['text'], contextWindow: 128000, maxTokens: 16384, reasoningEfforts: false }
       ]
     };
+    if (this.coreOnly) provider.models = [
+      provider.models.find((model) => model.id === 'deepseek.web'),
+      { id: 'qwen.text.web.3.8-max', name: 'Qwen3.8-Max - Web', input: ['text', 'image'], contextWindow: 256000, maxTokens: 32768, reasoningEfforts: { off: 'none', low: 'low', medium: 'medium', high: 'high' } },
+      { id: 'qwen.text.web.3.7-plus', name: 'Qwen3.7-Plus - Web', input: ['text', 'image'], contextWindow: 256000, maxTokens: 32768, reasoningEfforts: { off: 'none', low: 'low', medium: 'medium', high: 'high' } }
+    ].filter(Boolean);
+    return provider;
   }
 
   async _hasRegisteredWebAgentProvider() {
@@ -583,7 +601,7 @@ class DeepSeekHarnessService {
     atomicWrite(this._pluginPatch(), yaml.dump([
       { id: 'llm-pi-ai', config: { providers: { webagent: this._webAgentProvider() } } },
       { id: 'agent-default-model', config: { provider: 'webagent', model: 'deepseek.web' } },
-      { id: 'web', config: { searchProvider: 'webagent-deepseek-web', fetchProvider: 'http' } },
+      { id: 'web', config: { searchProvider: 'webagent-web-search', fetchProvider: 'http' } },
       { id: 'web-search-deepseek', disabled: true },
       { id: 'tool-web', config: { fetch: true, searchTimeoutMs: 180000, searchMaxQueries: 2 } },
       { insert: [{ id: 'webagent-integration', name: '@webagent/dsh-integration' }] }

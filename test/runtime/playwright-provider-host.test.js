@@ -108,7 +108,7 @@ test('one persistent Edge context is reused per provider while workers get separ
     assert.equal(f.launches[0].options.headless, true);
     assert.ok(first.profileDir.startsWith(path.resolve(f.profilesRoot) + path.sep));
     assert.equal(first.webContents.getURL(), 'https://chat.deepseek.com/');
-    assert.equal(qwen.webContents.getURL(), 'https://www.qianwen.com/');
+    assert.equal(qwen.webContents.getURL(), 'https://chat.qwen.ai/');
     assert.ok(f.launches[0].scripts.some((script) => String(script).includes('__webagentRawCompletionAfter')));
     assert.ok(f.launches[0].scripts.some((script) => String(script).includes('__webagentResetRawCompletions')));
     assert.ok(!f.launches[1].scripts.some((script) => String(script).includes('__webagentRawCompletionAfter')));
@@ -257,7 +257,11 @@ test('DeepSeek debug browser visibility persists and launches a headed provider 
     assert.equal(listing.browser_visible, true);
     const worker = await f.host.createWorker('deepseek');
     assert.equal(f.launches[0].options.headless, false);
+    assert.equal(f.launches[0].pages().length, 2);
+    assert.equal(f.launches[0].pages()[0].url(), 'https://chat.deepseek.com/');
+    assert.notEqual(f.launches[0].pages()[0], worker.page);
     await worker.destroy();
+    assert.equal(f.launches[0].pages()[0].isClosed(), false);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.profilesRoot, 'accounts.json'), 'utf8')).providers.deepseek.browser_visible, true);
     const hidden = await f.host.setBrowserVisible('deepseek', false);
     assert.equal(hidden.browser_visible, false);
@@ -291,6 +295,55 @@ test('webContents maps JavaScript, keyboard, mouse, screenshot and Electron-like
     await worker.destroy();
     assert.equal(worker.webContents.isDestroyed(), true);
   } finally { await cleanup(f); }
+});
+
+test('Continue automation targets an accessible button and never response text', async () => {
+  const page = new MockPage({});
+  page.context = () => null;
+  let clicked = 0;
+  page.getByText = () => { throw new Error('unrestricted text matching must not be used'); };
+  page.getByRole = (role, options) => {
+    assert.equal(role, 'button');
+    assert.equal(options.name, 'Continue');
+    return {
+      count: async () => 1,
+      nth: () => ({
+        isVisible: async () => true,
+        isEnabled: async () => true,
+        click: async () => { clicked += 1; }
+      })
+    };
+  };
+  const worker = new PlaywrightProviderWorker({ navigationTimeout: 1000, _forgetWorker: () => {} }, 'deepseek', 'profile', page);
+  const result = await worker.webContents.clickVisibleButton(['Continue']);
+  assert.equal(result.clicked, true);
+  assert.equal(result.method, 'playwright-button');
+  assert.equal(clicked, 1);
+});
+
+test('Web Search state uses a trusted control click and verifies aria-pressed', async () => {
+  const page = new MockPage({});
+  page.context = () => null;
+  page.waitForTimeout = async () => {};
+  let pressed = 'true';
+  let clicks = 0;
+  const candidate = {
+    isVisible: async () => true,
+    getAttribute: async (name) => name === 'aria-pressed' ? pressed : name === 'class' ? 'ds-toggle-button ds-toggle-button--m' : null,
+    innerText: async () => 'Search',
+    textContent: async () => 'Search',
+    click: async () => { clicks += 1; pressed = 'false'; }
+  };
+  page.locator = (selector) => {
+    assert.match(selector, /aria-pressed/);
+    return { count: async () => 1, nth: () => candidate };
+  };
+  const worker = new PlaywrightProviderWorker({ navigationTimeout: 1000, _forgetWorker: () => {} }, 'deepseek', 'profile', page);
+  const result = await worker.webContents.setVisibleToggle(['Search'], false);
+  assert.equal(result.success, true);
+  assert.equal(result.verified, true);
+  assert.equal(result.source, 'aria-pressed');
+  assert.equal(clicks, 1);
 });
 
 test('DeepSeek raw SSE cursor excludes a response whose request began before reset', async () => {

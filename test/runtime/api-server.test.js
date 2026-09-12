@@ -775,7 +775,8 @@ test('DeepSeek Harness lifecycle is exposed through the authenticated Runtime AP
   const harness = {
     status: () => ({ installed: true, running: false, version: 'test' }),
     start: async (input) => { calls.push(['start', input]); return { installed: true, running: true, url: 'http://127.0.0.1:3080' }; },
-    stop: async () => { calls.push(['stop']); return { installed: true, running: false }; }
+    stop: async () => { calls.push(['stop']); return { installed: true, running: false }; },
+    restart: async (input) => { calls.push(['restart', input]); return { installed: true, running: true, url: 'http://127.0.0.1:3080' }; }
   };
   const f = await fixture();
   f.api.harness = harness;
@@ -783,7 +784,8 @@ test('DeepSeek Harness lifecycle is exposed through the authenticated Runtime AP
     assert.equal((await request(f.port, '/api/harness')).data.version, 'test');
     assert.equal((await request(f.port, '/api/harness/start', { method: 'POST', body: { workspace: 'D:/Code' } })).data.running, true);
     assert.equal((await request(f.port, '/api/harness/stop', { method: 'POST', body: {} })).data.running, false);
-    assert.deepEqual(calls, [['start', { workspace: 'D:/Code' }], ['stop']]);
+    assert.equal((await request(f.port, '/api/harness/restart', { method: 'POST', body: {} })).data.running, true);
+    assert.deepEqual(calls, [['start', { workspace: 'D:/Code' }], ['stop'], ['restart', {}]]);
   } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 

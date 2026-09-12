@@ -4,7 +4,7 @@
 'use strict';
 
 const dirtyJson = require('dirty-json');
-const { parseDsmlCalls, completeDsmlSuffix } = require('./src/runtime/deepseek-dsml');
+const { parseDsmlCalls, dsmlMarkerIndex, completeDsmlSuffix } = require('./src/runtime/deepseek-dsml');
 
 const COMPLETION_POLL_MS = 100;
 const NATIVE_IDLE_POLLS = 3;
@@ -18,6 +18,12 @@ const MAX_REASONING_LOOP_RECOVERIES = 2;
 function detectReasoningLoop(value) {
     const source = String(value || '');
     if (source.length < 80) return null;
+    // Repeated protocol tags are normal in a batch of parallel tool calls.
+    // Detecting the repeated <invoke>/<parameter> lines as prose previously
+    // stopped a valid DSML response and injected LOOP_RECOVERY into a turn
+    // even when Deep Think was disabled. Tool syntax has its own structural
+    // validation and repair path, so the prose-loop detector must not touch it.
+    if (dsmlMarkerIndex(source) >= 0 || /(?:```|~~~)dsh[-_]tool[-_]call|<dsh[-_]tool[-_]call>/i.test(source)) return null;
     const segments = source
         .split(/(?:\r?\n)+|(?<=[.!?。！？])\s+/)
         .map((part) => part.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').replace(/\s+/g, ' ').trim().toLowerCase())
@@ -313,10 +319,12 @@ function createDeepseekServer(deepseekViewRef) {
     let pollPaused = false;
     let rawResponseCursor = { host: 0, stream: 0 };
     let rawResponseAggregate = createRawResponseAggregate();
+    let lastRawResponse = null;
 
     async function resetRawResponseCursor() {
         const view = getView();
         rawResponseAggregate = createRawResponseAggregate();
+        lastRawResponse = null;
         rawResponseCursor = {
             host: view && typeof view.rawResponseCursor === 'function' ? view.rawResponseCursor() : 0,
             stream: view && typeof view.resetRawCompletionStreams === 'function'
@@ -332,7 +340,8 @@ function createDeepseekServer(deepseekViewRef) {
             const streamed = await view.completionStreamAfter(rawResponseCursor.stream);
             if (streamed && streamed.text) {
                 const parsed = parseDeepseekRawSse(streamed.text);
-                return mergeRawResponseRecord(rawResponseAggregate, streamed, Object.assign({ pending: !streamed.done && !streamed.logicalDone }, parsed));
+                lastRawResponse = mergeRawResponseRecord(rawResponseAggregate, streamed, Object.assign({ pending: !streamed.done && !streamed.logicalDone }, parsed));
+                return lastRawResponse;
             }
             if (streamed) return {
                 pending: !streamed.done,
@@ -346,12 +355,23 @@ function createDeepseekServer(deepseekViewRef) {
 
     async function clickContinueGenerating(allowClick) {
         const labels = ['继续生成', '继续回答', 'Continue', 'Continue generating', 'Continue response'];
+        const view = getView();
+        const webContents = view && view.webContents;
+        // Use the accessible button role first. Never use an unrestricted text
+        // locator here: assistant content itself may legitimately be exactly
+        // "Continue" and must not be clicked.
+        if (webContents && typeof webContents.clickVisibleButton === 'function') {
+            try {
+                const nativeButton = await webContents.clickVisibleButton(labels, { timeout: 1500, click: allowClick !== false });
+                if (nativeButton && nativeButton.found) return nativeButton;
+            } catch (_) {}
+        }
         const match = await execJs(`(function(){
             var allowClick = ${allowClick === false ? 'false' : 'true'};
             var labels = ['继续生成','继续回答','Continue','Continue generating','Continue response'];
             var nodes = Array.from(document.querySelectorAll('span.ds-button__content,button,[role="button"],.ds-button'));
             var match = null;
-            for (var i = 0; i < nodes.length; i += 1) {
+            for (var i = nodes.length - 1; i >= 0; i -= 1) {
                 var node = nodes[i];
                 var label = String(node.getAttribute && node.getAttribute('aria-label') || node.textContent || '').replace(/\\s+/g, ' ').trim();
                 if (labels.indexOf(label) < 0) continue;
@@ -368,14 +388,6 @@ function createDeepseekServer(deepseekViewRef) {
             return {found:true,clicked:false,label:label,x:rect.left+rect.width/2,y:rect.top+rect.height/2,tag:String(control.tagName||''),role:String(control.getAttribute&&control.getAttribute('role')||''),className:String(control.className||'')};
         })();`);
         if (!match || !match.found || allowClick === false || match.clicked) return match || { found: false, clicked: false };
-        const view = getView();
-        const webContents = view && view.webContents;
-        if (webContents && typeof webContents.clickVisibleText === 'function') {
-            try {
-                const nativeClick = await webContents.clickVisibleText(labels, { timeout: 1500 });
-                if (nativeClick && nativeClick.clicked) return nativeClick;
-            } catch (_) {}
-        }
         if (webContents && typeof webContents.sendInputEvent === 'function' && Number.isFinite(match.x) && Number.isFinite(match.y)) {
             await Promise.resolve(webContents.sendInputEvent({ type: 'mouseMove', x: match.x, y: match.y }));
             await Promise.resolve(webContents.sendInputEvent({ type: 'mouseDown', x: match.x, y: match.y, button: 'left', clickCount: 1 }));
@@ -385,7 +397,7 @@ function createDeepseekServer(deepseekViewRef) {
         const fallback = await execJs(`(function(){
             var labels=['继续生成','继续回答','Continue','Continue generating','Continue response'];
             var nodes=Array.from(document.querySelectorAll('span.ds-button__content,button,[role="button"],.ds-button'));
-            for(var i=0;i<nodes.length;i+=1){var label=String(nodes[i].getAttribute&&nodes[i].getAttribute('aria-label')||nodes[i].textContent||'').replace(/\\s+/g,' ').trim();if(labels.indexOf(label)<0)continue;var control=nodes[i].closest&&nodes[i].closest('button,[role="button"],.ds-button')||nodes[i];control.click();return {found:true,clicked:true,label:label,trusted:false};}return {found:false,clicked:false};
+            for(var i=nodes.length-1;i>=0;i-=1){var label=String(nodes[i].getAttribute&&nodes[i].getAttribute('aria-label')||nodes[i].textContent||'').replace(/\\s+/g,' ').trim();if(labels.indexOf(label)<0)continue;var control=nodes[i].closest&&nodes[i].closest('button,[role="button"],.ds-button')||nodes[i];control.click();return {found:true,clicked:true,label:label,trusted:false};}return {found:false,clicked:false};
         })();`);
         return fallback || match;
     }
@@ -591,9 +603,19 @@ function createDeepseekServer(deepseekViewRef) {
             }
 
             case 'setWebSearch': {
-                const js = args.enable
-                    ? `window.__dsagent_enableWebSearch ? (window.__dsagent_enableWebSearch(), {success:true}) : {success:false, error:'enableWebSearch not available'};`
-                    : `window.__dsagent_disableWebSearch ? (window.__dsagent_disableWebSearch(), {success:true}) : {success:false, error:'disableWebSearch not available'};`;
+                const view = getView();
+                const webContents = view && view.webContents;
+                if (webContents && typeof webContents.setVisibleToggle === 'function') {
+                    return await webContents.setVisibleToggle(
+                        ['联网搜索', '智能搜索', '搜索', 'Search', 'Web Search', 'Web search'],
+                        !!args.enable,
+                        { retries: 3 }
+                    );
+                }
+                const js = `(async function(){
+                    if (!window.__dsagent_setWebSearch) return {success:false,error:'setWebSearch not available'};
+                    return await window.__dsagent_setWebSearch(${!!args.enable});
+                })();`;
                 return await execJs(js);
             }
 
@@ -704,6 +726,8 @@ function createDeepseekServer(deepseekViewRef) {
                           ? 'DeepSeek webpage context window exceeded; compact the Harness session and continue in a new conversation'
                         : code === 'provider_busy'
                           ? 'DeepSeek webpage is temporarily busy; retry after ' + String(outcome.retryAfter || 30) + ' seconds'
+                        : code === 'provider_sse_unavailable'
+                          ? 'DeepSeek accepted the page action but no matching completion SSE stream was captured within ' + String(Math.ceil((args.initialActivityTimeout || 20000) / 1000)) + ' seconds'
                           : 'DeepSeek response incomplete: ' + outcome.reason;
                     return { success: false, error: message, code, retryAfter: outcome.retryAfter, data: outcome };
                 }
@@ -823,8 +847,8 @@ function createDeepseekServer(deepseekViewRef) {
                 // preserve PowerShell variables and protocol markup before the
                 // page's Markdown/KaTeX/link renderer mutates the visible DOM.
                 for (let rawAttempt = 0; rawAttempt < 40; rawAttempt += 1) {
-                    const raw = await currentRawResponse();
-                    if (raw && raw.finished && (raw.markdown || raw.reasoning)) {
+                    const raw = await currentRawResponse() || lastRawResponse;
+                    if (raw && (raw.finished || raw.pending === false) && (raw.markdown || raw.reasoning)) {
                         const reasoningToolCall = args.allowReasoningToolCall && !String(raw.markdown || '').trim()
                             ? extractDshToolCallsFromReasoning(raw.reasoning)
                             : '';
@@ -844,7 +868,7 @@ function createDeepseekServer(deepseekViewRef) {
             case 'getConversationMetadata': {
                 const js = `(function(){
                     var here=(location.pathname||'').replace(/\\/$/,'');
-                    var links=Array.from(document.querySelectorAll('a[href*="/chat/"]'));
+                    var links=Array.from(document.querySelectorAll('a[href*="/chat/"],a[href*="/a/chat/s/"]'));
                     var active=links.find(function(a){try{return new URL(a.href,location.href).pathname.replace(/\\/$/,'')===here;}catch(e){return false;}});
                     var title=active&&((active.querySelector('[class*="title"],[class*="name"]')||active).textContent||'').trim();
                     return {success:true,title:title.slice(0,120),url:location.href};
@@ -856,7 +880,7 @@ function createDeepseekServer(deepseekViewRef) {
             case 'listConversations': {
                 const rows = await execJs(`(function(){
                     if (window.__dsagent_listConversations) return window.__dsagent_listConversations();
-                    return Array.from(document.querySelectorAll('a[href*="/chat/"]')).map(function(a){return {title:(a.textContent||'').trim(),href:a.href};});
+                    return Array.from(document.querySelectorAll('a[href*="/chat/"],a[href*="/a/chat/s/"]')).map(function(a){return {title:(a.textContent||'').trim(),href:a.href};});
                 })();`);
                 return { success: true, data: (Array.isArray(rows) ? rows : []).map(function(row) {
                     var href = row && (row.url || row.href) || '';
@@ -929,6 +953,8 @@ function createDeepseekServer(deepseekViewRef) {
         const start = Date.now();
         const initialActivityTimeout = Math.max(5000, Number(options.initialActivityTimeout) || 20000);
         let rawSeen = false;
+        let lastRaw = null;
+        let rawMissingSince = 0;
         let lastSignature = '';
         let lastActivityAt = start;
         let continuations = 0;
@@ -947,6 +973,21 @@ function createDeepseekServer(deepseekViewRef) {
             let raw = null;
             try { raw = await currentRawResponse(); }
             catch (error) { return { done: false, reason: 'sse_capture_error', code: 'provider_sse_error', error: error.message }; }
+            if (raw) {
+                lastRaw = raw;
+                rawMissingSince = 0;
+            } else if (rawSeen && lastRaw) {
+                // A SPA navigation can discard the page-fetch record between
+                // two polls after we have already streamed its content. Never
+                // rewrite that observed response as "SSE unavailable". Keep
+                // the last authoritative bytes; after a short consecutive
+                // absence, the old document/request is necessarily over.
+                if (!rawMissingSince) rawMissingSince = Date.now();
+                raw = Object.assign({}, lastRaw, {
+                    pending: Date.now() - rawMissingSince < 500 ? !!lastRaw.pending : false,
+                    captureRecordMissing: true
+                });
+            }
             if (raw) {
                 rawSeen = true;
                 const recordKey = String(raw.recordKey || '');
@@ -1044,7 +1085,9 @@ function createDeepseekServer(deepseekViewRef) {
                         continue;
                     }
                 }
-                if (raw.finished) {
+                const streamEnded = raw.finished || raw.pending === false;
+                if (streamEnded) {
+                    lastRawResponse = raw;
                     if (finishedRecord !== recordKey) {
                         finishedRecord = recordKey;
                         finishedSeenAt = Date.now();
@@ -1070,11 +1113,11 @@ function createDeepseekServer(deepseekViewRef) {
                         }
                         return { done: false, reason: 'empty_sse_response', code: 'provider_sse_empty', continuations };
                     }
-                    return { done: true, reason: 'raw_network_finished', rawTransport: true, continuations, reasoningLoopRecoveries };
+                    return { done: true, reason: raw.finished ? 'raw_network_finished' : 'raw_network_ended', rawTransport: true, continuations, reasoningLoopRecoveries };
                 }
                 if (raw.error && !raw.pending) return { done: false, reason: 'sse_capture_error', code: 'provider_sse_error', error: raw.error, continuations };
                 if (Date.now() - lastActivityAt >= 90000) return { done: false, reason: 'sse_stalled', code: 'provider_stream_stalled', continuations };
-            } else if (Date.now() - start >= initialActivityTimeout) {
+            } else if (!rawSeen && Date.now() - start >= initialActivityTimeout) {
                 const limit = await currentUsageLimit();
                 if (limit) return { done: false, reason: limit.reason || 'rate_limited', code: limit.code || 'out_of_usage', retryAfter: limit.retryAfter || 60 };
                 return { done: false, reason: 'sse_unavailable', code: 'provider_sse_unavailable' };

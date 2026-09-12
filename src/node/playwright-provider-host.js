@@ -12,8 +12,8 @@ const PROVIDERS = Object.freeze({
     login: 'https://chat.deepseek.com/sign_in'
   },
   qwen: {
-    home: 'https://www.qianwen.com/',
-    login: 'https://www.qianwen.com/'
+    home: 'https://chat.qwen.ai/',
+    login: 'https://chat.qwen.ai/auth?action=signin'
   },
   'qwen-gateway': {
     home: 'https://chat.qwen.ai/',
@@ -24,6 +24,19 @@ const PROVIDERS = Object.freeze({
     login: 'https://chatgpt.com/'
   }
 });
+
+async function pageHasVisibleLoginControl(page) {
+  if (!page || typeof page.frames !== 'function') return false;
+  for (const frame of page.frames()) {
+    if (!frame || typeof frame.getByText !== 'function') continue;
+    const locator = frame.getByText(/^(?:登录|登入|Sign in|Log in|Login)$/i, { exact: true });
+    const count = Math.min(20, await locator.count().catch(() => 0));
+    for (let index = 0; index < count; index += 1) {
+      if (await locator.nth(index).isVisible().catch(() => false)) return true;
+    }
+  }
+  return false;
+}
 
 const MODIFIER_KEYS = Object.freeze({
   alt: 'Alt',
@@ -240,6 +253,86 @@ class PlaywrightWebContents extends EventEmitter {
       }
     }
     return { found: false, clicked: false };
+  }
+
+  async clickVisibleButton(labels, options) {
+    if (this.isDestroyed()) throw Object.assign(new Error('Provider page is destroyed'), { code: 'provider_page_destroyed' });
+    if (!this.page || typeof this.page.getByRole !== 'function') return { found: false, clicked: false };
+    const timeout = Math.max(250, Number(options && options.timeout) || 1500);
+    const click = !(options && options.click === false);
+    for (const label of Array.isArray(labels) ? labels : [labels]) {
+      // Restrict matching to accessible buttons. A model response, code block,
+      // or search result whose complete text is "Continue" must never be
+      // eligible for provider-control automation.
+      const locator = this.page.getByRole('button', { name: String(label || ''), exact: true });
+      const count = await locator.count().catch(() => 0);
+      for (let index = count - 1; index >= 0; index -= 1) {
+        const candidate = locator.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        if (!await candidate.isEnabled().catch(() => true)) continue;
+        if (!click) return { found: true, clicked: false, label: String(label || ''), trusted: true, method: 'playwright-button' };
+        try {
+          await candidate.click({ timeout });
+          return { found: true, clicked: true, label: String(label || ''), trusted: true, method: 'playwright-button' };
+        } catch (_) {}
+      }
+    }
+    return { found: false, clicked: false };
+  }
+
+  async setVisibleToggle(labels, enabled, options) {
+    if (this.isDestroyed()) throw Object.assign(new Error('Provider page is destroyed'), { code: 'provider_page_destroyed' });
+    if (!this.page || typeof this.page.locator !== 'function') return { success: false, error: 'Provider toggle locator is unavailable' };
+    const expected = !!enabled;
+    const wanted = (Array.isArray(labels) ? labels : [labels]).map((value) => String(value || '').replace(/\s+/g, ' ').trim());
+    const retries = Math.max(1, Math.min(5, Number(options && options.retries) || 3));
+    const selector = 'button,[role="button"],[role="switch"],[aria-pressed],.ds-toggle-button';
+    const stateOf = async (candidate) => {
+      for (const name of ['aria-pressed', 'aria-checked', 'data-active', 'data-selected', 'data-checked']) {
+        const value = await candidate.getAttribute(name).catch(() => null);
+        if (value === 'true') return { known: true, active: true, source: name };
+        if (value === 'false') return { known: true, active: false, source: name };
+      }
+      const dataState = String(await candidate.getAttribute('data-state').catch(() => '') || '').toLowerCase();
+      if (/^(?:on|active|selected|checked|open)$/.test(dataState)) return { known: true, active: true, source: 'data-state' };
+      if (/^(?:off|inactive|unselected|unchecked|closed)$/.test(dataState)) return { known: true, active: false, source: 'data-state' };
+      const className = String(await candidate.getAttribute('class').catch(() => '') || '').toLowerCase();
+      if (/(?:^|[\s_-])(?:active|selected|checked|on)(?:$|[\s_-])/.test(className)) return { known: true, active: true, source: 'class' };
+      if (/(?:^|[\s_-])(?:inactive|unselected|unchecked|off)(?:$|[\s_-])/.test(className)) return { known: true, active: false, source: 'class' };
+      return { known: false, active: false, source: '' };
+    };
+    const locate = async () => {
+      const controls = this.page.locator(selector);
+      const count = await controls.count().catch(() => 0);
+      for (let index = count - 1; index >= 0; index -= 1) {
+        const candidate = controls.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        const aria = await candidate.getAttribute('aria-label').catch(() => '');
+        const content = aria || await candidate.innerText().catch(() => candidate.textContent().catch(() => ''));
+        const label = String(content || '').replace(/\s+/g, ' ').trim();
+        if (!wanted.includes(label)) continue;
+        return { candidate, label, state: await stateOf(candidate) };
+      }
+      return null;
+    };
+    let observed = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      observed = await locate();
+      if (!observed) return { success: false, enabled: expected, verified: false, error: 'Web Search toggle not found' };
+      if (observed.state.known && observed.state.active === expected) {
+        return { success: true, enabled: expected, verified: true, source: observed.state.source, method: 'playwright-toggle' };
+      }
+      if (!observed.state.known && !expected) {
+        return { success: true, enabled: false, verified: false, method: 'playwright-toggle' };
+      }
+      if (attempt >= retries) break;
+      try { await observed.candidate.click({ timeout: 1500 }); }
+      catch (_) {}
+      if (typeof this.page.waitForTimeout === 'function') await this.page.waitForTimeout(250);
+      else await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    const actual = observed && observed.state && observed.state.known ? observed.state.active : null;
+    return { success: false, enabled: expected, verified: actual !== null, actual, error: 'Web Search toggle did not reach requested state' };
   }
 
   async capturePage(rect) {
@@ -629,6 +722,22 @@ class PlaywrightProviderHost {
           await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
         }
       }
+      // A persistent Chromium context always owns an initial about:blank page.
+      // When debug visibility is enabled, keep that unleased page on the real
+      // provider home so noVNC shows useful state even though Qwen requests
+      // themselves use cookies plus HTTP/SSE and create no worker tab.
+      if (launchOptions.headless === false) {
+        const pages = typeof context.pages === 'function' ? context.pages() : [];
+        const monitor = pages.find((page) => page
+          && !(typeof page.isClosed === 'function' && page.isClosed())
+          && typeof page.url === 'function'
+          && page.url() === 'about:blank') || await context.newPage();
+        await monitor.goto(this.providerUrls[provider].home, {
+          waitUntil: 'domcontentloaded',
+          timeout: this.navigationTimeout
+        }).catch(() => {});
+        if (typeof monitor.bringToFront === 'function') await monitor.bringToFront().catch(() => {});
+      }
     }
     catch (error) {
       if (context && typeof context.close === 'function') await context.close().catch(() => {});
@@ -810,6 +919,7 @@ class PlaywrightProviderHost {
   }
 
   async _waitForAuthentication(provider, page, signal) {
+    const startedAt = Date.now();
     const deadline = Date.now() + this.loginTimeout;
     const selector = provider === 'deepseek'
       ? 'textarea[placeholder], [contenteditable="true"][role="textbox"]'
@@ -821,10 +931,21 @@ class PlaywrightProviderHost {
       if (!page || (typeof page.isClosed === 'function' && page.isClosed())) throw Object.assign(new Error('Login window was closed before authentication completed'), { code: 'provider_login_cancelled' });
       const authenticated = this.authenticationProbe
         ? await this.authenticationProbe(provider, page)
-        : await page.evaluate((editorSelector) => {
+        : await page.evaluate(({ editorSelector, provider }) => {
           const path = location.pathname || '';
-          return !!document.querySelector(editorSelector) && !/sign[_-]?in|login/i.test(path);
-        }, selector).catch(() => false);
+          const loginLines = String(document.body && document.body.innerText || '').split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim());
+          const loginVisible = loginLines.some((text) => /^(?:登录|登入|Sign in|Log in|Login)$/i.test(text)) || Array.from(document.querySelectorAll('button,a,[role="button"],span,div')).some((node) => {
+            const text = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            return /^(?:登录|登入|Log in|Login|Sign in)$/i.test(text) && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          });
+          return !!document.querySelector(editorSelector) && !/sign[_-]?in|login/i.test(path) && !(provider === 'qwen' && loginVisible);
+        }, { editorSelector: selector, provider }).catch(() => false);
+      if (provider === 'qwen' && (Date.now() - startedAt < 3000 || await pageHasVisibleLoginControl(page))) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        continue;
+      }
       if (authenticated) return true;
       await new Promise((resolve) => setTimeout(resolve, 400));
     }

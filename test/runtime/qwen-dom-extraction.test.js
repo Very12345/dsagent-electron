@@ -146,3 +146,70 @@ test('Qianwen web model selector clicks the requested concrete model and confirm
   assert.equal(result.model, 'Qwen3.8-Max');
   assert.equal(sandbox.window.__qwen.getCurrentModel(), 'Qwen3.8-Max');
 });
+
+test('Qianwen accepts one stable generated image from the current single-image card', async () => {
+  let now = 0;
+  const image = {
+    currentSrc: 'https://workspace-zb-cdn.qianwen.com/generated-single.png',
+    src: 'https://workspace-zb-cdn.qianwen.com/generated-single.png',
+    naturalWidth: 1024,
+    naturalHeight: 1024,
+    width: 512,
+    height: 512,
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ width: 512, height: 512 }),
+    closest: () => null
+  };
+  const card = {
+    textContent: '',
+    querySelectorAll: (selector) => selector === 'img' ? [image] : [],
+    querySelector: () => null,
+    closest: () => null
+  };
+  const assistantMessage = {
+    textContent: '',
+    parentElement: null,
+    querySelector: (selector) => selector.includes('data-ppt-id') ? null : selector.includes('.qk-markdown') ? assistantContent : null,
+    querySelectorAll: (selector) => selector.includes('generate_image') || selector.includes('generated-image') ? [card] : selector.includes('.qk-markdown') ? [assistantContent] : selector === 'img' ? [image] : [],
+    closest: () => null,
+    cloneNode: () => textClone('')
+  };
+  const assistantContent = {
+    innerText: '', textContent: '', parentElement: assistantMessage,
+    querySelector: () => null, querySelectorAll: () => [], cloneNode: () => textClone(''),
+    closest(selector) { return selector.includes('data-message-author-role="assistant"') ? assistantMessage : null; }
+  };
+  const disabledSend = { disabled: true };
+  const document = {
+    body: { innerText: '' }, documentElement: {},
+    querySelector(selector) {
+      if (selector === 'button[aria-label="发送消息"][disabled]') return disabledSend;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === 'button') return [];
+      if (selector.includes('data-message-author-role="assistant"') && selector.includes('.qk-markdown')) return [assistantContent];
+      if (selector.includes('data-card-type*="generate_image"')) return [card];
+      return [];
+    }
+  };
+  const FastDate = class extends Date { static now() { return now; } };
+  const fastTimeout = (callback, delay) => { now += Math.max(Number(delay) || 0, 600); queueMicrotask(callback); return 1; };
+  const sandbox = {
+    document,
+    location: { href: 'https://www.qianwen.com/chat/single-image' },
+    console: { log() {}, warn() {}, error() {} },
+    MutationObserver: class { observe() {} },
+    setTimeout: fastTimeout, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    Array, Object, String, Number, Boolean, Date: FastDate, Math, Promise, RegExp,
+    window: null
+  };
+  sandbox.window = sandbox;
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'inject-qwen.js'), 'utf8');
+  vm.runInNewContext(source, sandbox, { filename: 'inject-qwen.js' });
+
+  assert.deepEqual(Array.from(sandbox.window.__qwen.getLastImageUrls()), ['https://workspace-zb-cdn.qianwen.com/generated-single.png']);
+  assert.equal(sandbox.window.__qwen.detectResponseType().type, 'image');
+  assert.equal((await sandbox.window.__qwen.waitForDrawResponse(10000)).success, true);
+});

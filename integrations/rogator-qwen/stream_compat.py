@@ -24,6 +24,11 @@ def _tool_fence(delta: Dict[str, Any]) -> str:
             continue
         function = candidate.get("function") if isinstance(candidate.get("function"), dict) else candidate
         name = str(function.get("name") or candidate.get("name") or "").strip()
+        # Native Qwen webpage tools are executed by Qwen itself. They are
+        # progress events, not Harness-local function calls, and must not be
+        # serialized into the answer as dsh-tool-call fences.
+        if name.lower() in {"web_search", "search", "image_gen_tool"}:
+            continue
         arguments = function.get("arguments", candidate.get("arguments"))
         if not name or arguments is None:
             continue
@@ -44,6 +49,8 @@ def _tool_fence(delta: Dict[str, Any]) -> str:
     function = delta.get("function_call")
     if not fences and isinstance(function, dict):
         name = str(function.get("name") or "").strip()
+        if name.lower() in {"web_search", "search", "image_gen_tool"}:
+            return ""
         arguments = function.get("arguments")
         if isinstance(arguments, str):
             try:
@@ -75,9 +82,35 @@ def make_webagent_parser(original: Callable[[str], Optional[Dict[str, Any]]]):
             fence = _tool_fence(delta)
             if fence:
                 return {"type": "answer", "content": fence}
+        event = original(data_str)
+        if isinstance(event, dict) and event.get("type") == "image_gen_tool":
+            urls = [str(url) for url in event.get("urls") or [] if str(url).startswith(("http://", "https://"))]
+            if urls:
+                content = "\n".join(
+                    f'<webagent_qwen_image url="{url}" />\n![Qwen generated image]({url})'
+                    for url in urls
+                )
+                return {"type": "answer", "content": content}
+        if isinstance(event, dict) and event.get("type") == "image_gen":
+            content = str(event.get("content") or "")
+            if content:
+                return {"type": "answer", "content": content}
+        if isinstance(delta, dict) and delta.get("phase") == "web_search":
+            info = (delta.get("extra") or {}).get("web_search_info") or []
+            sources = []
+            for item in info if isinstance(info, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url.startswith(("http://", "https://")):
+                    continue
+                title = str(item.get("title") or url).strip().replace("[", "").replace("]", "")
+                sources.append(f"[{title}]({url})")
+            if sources:
+                return {"type": "answer", "content": "\n".join(sources)}
         role = delta.get("role") if isinstance(delta, dict) else None
         if not role or role == "assistant":
-            return original(data_str)
+            return event
 
         # Qwen also emits a role=function boundary without a call payload.
         # Remove that boundary marker and let Rogator parse any accompanying

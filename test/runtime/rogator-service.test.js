@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { RogatorService, ROGATOR_REVISION, dshGatewayMessages, runtimeGatewayMessages, residualQwenToolFence, dshTextToolFences, gatewayModels, toolCallFences, providerToolCompatibility, compileProviderToolCall, compactExecutedMutationArguments } = require('../../src/runtime/rogator-service');
+const { RogatorService, ROGATOR_REVISION, dshGatewayMessages, runtimeGatewayMessages, residualQwenToolFence, dshTextToolFences, gatewayModels, toolCallFences, providerToolCompatibility, compileProviderToolCall, compactExecutedMutationArguments, qwenImageUrls } = require('../../src/runtime/rogator-service');
 
 // Unit tests should not inherit the production account-protection delay.
 // Individual limiter/retry tests below opt into small deterministic values.
@@ -507,6 +507,27 @@ test('Qianwen DSH transport preserves native image attachments and message roles
   assert.equal(messages[1].content[1].image_url.url, 'data:image/png;base64,AAAA');
 });
 
+test('Qianwen DSH transport keeps real-sized read_image payloads and deduplicates repeats', () => {
+  const imageUrl = 'data:image/jpeg;base64,' + 'A'.repeat(260000);
+  const messages = [
+    { role: 'developer', content: 'Harness prompt' },
+    { role: 'user', content: 'Solve the image puzzle.' }
+  ];
+  for (let index = 0; index < 4; index += 1) {
+    messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'call_' + index, function: { name: 'read', arguments: '{}' } }] });
+    messages.push({ role: 'tool', tool_call_id: 'call_' + index, content: 'evidence-' + index + '-' + 'x'.repeat(5000) });
+  }
+  messages.push({ role: 'user', content: [{ type: 'text', text: 'Attached image from read_image' }, { type: 'image_url', image_url: { url: imageUrl } }] });
+  messages.push({ role: 'assistant', content: 'I need to inspect it.' });
+  messages.push({ role: 'user', content: [{ type: 'text', text: 'Same image returned again' }, { type: 'image_url', image_url: { url: imageUrl } }] });
+  const value = dshGatewayMessages({ messages, run: { prompt_passthrough: true } });
+  const imageParts = value.flatMap((message) => Array.isArray(message.content) ? message.content : [])
+    .filter((part) => part && part.type === 'image_url');
+  assert.equal(imageParts.length, 1);
+  assert.equal(imageParts[0].image_url.url, imageUrl);
+  assert.match(JSON.stringify(value), /Same image returned again/);
+});
+
 test('Qianwen DSH transport preserves the original goal and recent ordered tool evidence within its webpage budget', () => {
   const messages = [{ role: 'developer', content: 'Harness prompt' }, { role: 'user', content: 'Build the requested plugin.' }];
   for (let index = 0; index < 8; index += 1) {
@@ -777,11 +798,90 @@ test('Qianwen gateway exposes concrete models and maps each request to its Rogat
   service.process = { exitCode: null };
   service.port = 18932;
   assert.deepEqual(gatewayModels().filter((model) => !model.hidden).map((model) => model.id), [
+    'qwen.text.web.3.8-max', 'qwen.text.web.3.7-plus', 'qwen.search.web', 'qwen.image.web',
     'qwen.gateway.3.8-max', 'qwen.gateway.3.7-max', 'qwen.gateway.3.7-plus', 'qwen.gateway.3.6-plus'
   ]);
   assert.deepEqual(gatewayModels().find((model) => model.id === 'qwen.gateway.3.8-max').capabilities.reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'auto']);
   await service.complete({ model: 'qwen.gateway.3.8-max', messages: [{ role: 'user', content: 'test' }], run: { id: 'run-model' } });
   assert.equal(requestBody.model, 'qwen3-8-max');
+});
+
+test('selectable Qwen text models stream reasoning and answer deltas with DSH tools present', async () => {
+  const requests = [];
+  let reasoning = '';
+  let content = '';
+  const service = new RogatorService({
+    home: temporaryHome(),
+    fetch: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return new Response([
+        'data: {"choices":[{"delta":{"reasoning_content":"step one"}}]}',
+        '',
+        'data: {"choices":[{"delta":{"content":"answer"}}]}',
+        '',
+        'data: [DONE]',
+        ''
+      ].join('\n'), { status: 200 });
+    }
+  });
+  service.process = { exitCode: null };
+  service.port = 18932;
+  const tools = [{ name: 'read', description: 'Read file', parameters: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } }];
+  const result = await service.complete({
+    model: 'qwen.text.web.3.8-max',
+    messages: [{ role: 'user', content: 'test' }],
+    run: { id: 'run-stream-reasoning', prompt_passthrough: true, reasoning_effort: 'medium', provider_tools: tools },
+    onReasoningProgress: (value) => { reasoning = value; },
+    onProgress: (value) => { content = value; }
+  });
+  assert.equal(requests[0].model, 'qwen3-8-max');
+  assert.equal(requests[0].stream, true);
+  assert.equal(requests[0].reasoning_effort, 'medium');
+  assert.equal(reasoning, 'step one');
+  assert.equal(content, 'answer');
+  assert.equal(result.reasoning, 'step one');
+  assert.equal(result.content, 'answer');
+});
+
+test('chat.qwen.ai capability models carry an internal mode marker and preserve generated image URLs', async () => {
+  const requests = [];
+  const imageUrl = 'https://cdn.qwen.example/generated.png';
+  const service = new RogatorService({
+    home: temporaryHome(),
+    fetch: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return new Response('data: ' + JSON.stringify({ choices: [{ delta: { content: '<webagent_qwen_image url="' + imageUrl + '" />\n![Qwen generated image](' + imageUrl + ')' } }] }) + '\n\ndata: [DONE]\n\n', { status: 200 });
+    }
+  });
+  service.process = { exitCode: null };
+  service.port = 18932;
+  const result = await service.complete({ model: 'qwen.image.web', messages: [{ role: 'user', content: '画一只猫' }], run: { id: 'run-image', reasoning_effort: 'none' } });
+  assert.match(requests[0].messages[0].content, /webagent_qwen_mode value="image"/);
+  assert.equal(requests[0].model, 'qwen3-7-plus');
+  assert.deepEqual(result.images, [imageUrl]);
+});
+
+test('current Qwen t2i bare CDN answers are promoted to image results', () => {
+  const url = 'https://cdn.qwenlm.ai/output/user/t2i/job/generated.png?key=signed';
+  assert.deepEqual(qwenImageUrls(url), [url]);
+});
+
+test('Qianwen voice API forwards audio as multipart and returns transcription text', async () => {
+  let received;
+  const service = new RogatorService({
+    home: temporaryHome(),
+    fetch: async (url, options) => {
+      received = { url, method: options.method, body: options.body };
+      return new Response(JSON.stringify({ text: '语音测试' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+  });
+  service.process = { exitCode: null };
+  service.port = 18932;
+  const result = await service.transcribeAudio({ bytes: Buffer.from('RIFF-test'), filename: 'test.wav', contentType: 'audio/wav', language: 'zh-CN' });
+  assert.match(received.url, /\/v1\/audio\/transcriptions$/);
+  assert.equal(received.method, 'POST');
+  assert.ok(received.body instanceof FormData);
+  assert.equal(result.text, '语音测试');
 });
 
 test('Qianwen gateway forwards every supported reasoning effort without downgrading it', async () => {
@@ -1033,4 +1133,30 @@ test('Rogator wrapper converts Qwen function roles without triggering the upstre
   assert.equal(parsed[2].type, 'fallback');
   assert.equal(parsed[3].type, 'fallback');
   assert.doesNotMatch(parsed[3].raw, /"role"/);
+});
+
+test('Rogator wrapper does not expose Qwen native web search as a DSH tool call', () => {
+  const modulePath = path.resolve(__dirname, '../../integrations/rogator-qwen/stream_compat.py');
+  const script = [
+    'import importlib.util, json, sys',
+    'spec=importlib.util.spec_from_file_location("stream_compat", sys.argv[1])',
+    'mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)',
+    'fallback=lambda raw: {"type":"fallback","raw":raw}',
+    'parse=mod.make_webagent_parser(fallback)',
+    'event={"choices":[{"delta":{"role":"assistant","function_call":{"name":"web_search","arguments":"{\\"queries\\":[\\"DSH\\"]}"}}}]}',
+    'print(json.dumps(parse(json.dumps(event)), ensure_ascii=False))'
+  ].join(';');
+  const result = spawnSync('python', ['-c', script, modulePath], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout.trim());
+  assert.equal(parsed.type, 'fallback');
+  assert.doesNotMatch(parsed.raw, /dsh-tool-call/);
+});
+
+test('Qwen wrapper reuses browser cookies for STS uploads and fails closed on missing images', () => {
+  const runner = fs.readFileSync(path.resolve(__dirname, '../../integrations/rogator-qwen/webagent_runner.py'), 'utf8');
+  assert.match(runner, /cookies=cookies/);
+  assert.ok(runner.indexOf('/api\/v2\/files\/getstsToken') < runner.indexOf('/api\/v1\/files\/getstsToken'));
+  assert.match(runner, /Qwen image upload incomplete/);
+  assert.match(runner, /qwen_oss\._upload_base64_images = _webagent_upload_base64_images/);
 });

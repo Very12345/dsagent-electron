@@ -45,6 +45,7 @@
     Q.ready = true;
 
     var QWEN_WEB_MODEL_LABELS = {
+        'qwen.image.web': 'Qwen3.8-Max',
         'qwen.default': 'Qwen3.7-千问',
         'qwen.3.7': 'Qwen3.7-千问',
         'qwen.3.8-max': 'Qwen3.8-Max',
@@ -760,21 +761,12 @@
             }
 
             function getImageSignature() {
-                var card = document.querySelector('[data-card-type="ai_generate_image_list"]');
-                if (!card) return '';
-                var imgs = card.querySelectorAll('img');
-                var sigs = [];
-                for (var ii = 0; ii < imgs.length; ii++) {
-                    var src = imgs[ii].currentSrc || imgs[ii].src || '';
-                    var width = imgs[ii].naturalWidth || imgs[ii].width || 0;
-                    var height = imgs[ii].naturalHeight || imgs[ii].height || 0;
-                    if (src && !/^data:|^blob:/i.test(src) && width >= 256 && height >= 256) sigs.push(src + '|w=' + width + '|h=' + height);
-                }
-                // Qwen-Image currently renders a four-variant grid. Waiting for
-                // all four full-size assets prevents the first completed tile
-                // (often around 20%) from ending the Runtime run early.
-                if (sigs.length < 4) return '';
-                return sigs.join('||');
+                // Qianwen used to return a four-variant grid, but the current
+                // image mode may return one large result. Reuse the scoped
+                // extractor so singular cards and renamed card wrappers share
+                // exactly the same acceptance rules as the final extraction.
+                var urls = Q.getLastImageUrls ? Q.getLastImageUrls() : [];
+                return urls.length ? urls.join('||') : '';
             }
 
             function check() {
@@ -1085,23 +1077,49 @@
     Q.getLastAssistantScope = assistantMessageScope;
 
     // 获取最后回复中的图片 URL
-    // Qwen 图片结构：<div class="imageItem-xxx imageWrapper-xxx complete-xxx"><img src="https://workspace-zb-cdn.qianwen.com/..."></div>
+    // Qwen 图片结构既可能是旧四图卡，也可能是新版单图结果。
     Q.getLastImageUrls = function() {
         var urls = [];
         var scope = assistantMessageScope();
-        var cards = scope && scope.querySelectorAll ? scope.querySelectorAll('[data-card-type="ai_generate_image_list"]') : [];
+        var cardSelector = '[data-card-type="ai_generate_image_list"], [data-card-type*="generate_image"], [data-card-type*="image_generate"], [data-testid*="generated-image"], [data-testid*="image-generation"]';
+        var cards = scope && scope.querySelectorAll ? scope.querySelectorAll(cardSelector) : [];
+        if ((!cards || !cards.length) && document.querySelectorAll) {
+            cards = Array.from(document.querySelectorAll(cardSelector)).filter(function(node) {
+                return !isInsideUserMessage(node) && !isInsideComposer(node);
+            });
+        }
         var card = cards.length ? cards[cards.length - 1] : null;
         var root = card || scope;
         if (!root) return urls;
 
-        // 方式一：图片卡中的全尺寸图片。Qwen 的哈希类名会变，尺寸和
-        // 卡片归属比 imageItem/complete 类名稳定。
+        function imageUrl(image) {
+            var candidates = [
+                image.currentSrc,
+                image.src,
+                image.getAttribute && image.getAttribute('data-src'),
+                image.getAttribute && image.getAttribute('data-original')
+            ];
+            var srcset = image.getAttribute && image.getAttribute('srcset');
+            if (srcset) {
+                var last = srcset.split(',').map(function(item) { return item.trim().split(/\s+/)[0]; }).filter(Boolean).pop();
+                if (last) candidates.unshift(last);
+            }
+            for (var ci = 0; ci < candidates.length; ci++) {
+                var value = String(candidates[ci] || '').trim();
+                if (value && !/^data:|^blob:/i.test(value)) return value;
+            }
+            return '';
+        }
+
+        // 图片卡中的完整结果。尺寸与助手回复归属比哈希类名稳定；
+        // 192px 下限排除头像和工具栏图标，同时兼容缩小后的单图预览。
         var imageItems = root.querySelectorAll('img');
         for (var i = 0; i < imageItems.length; i++) {
-            var src = imageItems[i].currentSrc || imageItems[i].src || '';
+            var src = imageUrl(imageItems[i]);
             var width = imageItems[i].naturalWidth || imageItems[i].width || 0;
             var height = imageItems[i].naturalHeight || imageItems[i].height || 0;
-            if (src && !/^data:|^blob:/i.test(src) && width >= 256 && height >= 256 && urls.indexOf(src) === -1) {
+            var rect = imageItems[i].getBoundingClientRect ? imageItems[i].getBoundingClientRect() : { width: 0, height: 0 };
+            if (src && Math.max(width, rect.width || 0) >= 192 && Math.max(height, rect.height || 0) >= 192 && urls.indexOf(src) === -1) {
                 urls.push(src);
             }
         }
@@ -1111,8 +1129,9 @@
             if (scope) {
                 var imgs = scope.querySelectorAll('img');
                 for (var i = 0; i < imgs.length; i++) {
-                    var src = imgs[i].src || '';
-                    if (src && (imgs[i].naturalWidth || imgs[i].width || 0) >= 128 && (imgs[i].naturalHeight || imgs[i].height || 0) >= 128 && urls.indexOf(src) === -1) {
+                    var src = imageUrl(imgs[i]);
+                    var rect = imgs[i].getBoundingClientRect ? imgs[i].getBoundingClientRect() : { width: 0, height: 0 };
+                    if (src && Math.max(imgs[i].naturalWidth || imgs[i].width || 0, rect.width || 0) >= 192 && Math.max(imgs[i].naturalHeight || imgs[i].height || 0, rect.height || 0) >= 192 && urls.indexOf(src) === -1) {
                         urls.push(src);
                     }
                 }
@@ -1929,10 +1948,9 @@
 
     // 检测回复类型：text / image / ppt
     Q.detectResponseType = function() {
-        // 图片生成卡片特征：data-card-type="ai_generate_image_list"
+        // 新版可能只渲染一张图且不再使用旧的 image_list 卡片名。
+        if (Q.getLastImageUrls && Q.getLastImageUrls().length) return { type: 'image' };
         var scope = assistantMessageScope();
-        var imgCard = scope && scope.querySelector('[data-card-type="ai_generate_image_list"]');
-        if (imgCard) return { type: 'image' };
         // PPT 卡片特征：data-ppt-id
         var pptCard = scope && scope.querySelector('[data-ppt-id]');
         if (pptCard) return { type: 'ppt' };

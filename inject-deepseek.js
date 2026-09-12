@@ -7,7 +7,20 @@
     window.__dsagent_injected = true;
 
     // 引用 engine（agent-engine.js 已加载在同一上下文）
-    var E = window.__dsagent_engine;
+    // The DSH-core transport intentionally does not inject the retired webpage
+    // Agent engine. Keep only the tiny compatibility surface needed by the
+    // transport/status functions; execution remains disabled and DSH owns all
+    // tools, skills, approvals and planning.
+    var E = window.__dsagent_engine || {
+        _config: { confirmMode: 'always', contextCompressThreshold: Number.MAX_SAFE_INTEGER },
+        loadConfig: async function() {},
+        saveConfirmMode: function() {},
+        confirmCommand: async function() { return false; },
+        buildContextCompressPrompt: async function() { return ''; },
+        classifyCommands: function() { return { qwCommands: [], localCommands: [] }; },
+        execOneCommand: async function() { return null; },
+        forwardResult: function() {}
+    };
 
     // DeepSeek 网页端已统一模型；保留字段仅供旧调用方兼容。
     window._dsAgentMode = window._dsAgentMode || 'unified';
@@ -252,21 +265,77 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
         return null;
     }
 
+    function toggleState(el) {
+        if (!el) return { known: false, active: false };
+        var nodes = [el].concat(Array.from(el.querySelectorAll ? el.querySelectorAll('[aria-pressed],[aria-checked],[data-state],[data-active],[data-selected],[data-checked],input[type="checkbox"]') : []));
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            if (node.matches && node.matches('input[type="checkbox"]')) return { known: true, active: !!node.checked };
+            var booleanAttrs = ['aria-pressed', 'aria-checked', 'data-active', 'data-selected', 'data-checked'];
+            for (var ai = 0; ai < booleanAttrs.length; ai++) {
+                var value = node.getAttribute && node.getAttribute(booleanAttrs[ai]);
+                if (value === 'true') return { known: true, active: true };
+                if (value === 'false') return { known: true, active: false };
+            }
+            var state = String(node.getAttribute && node.getAttribute('data-state') || '').toLowerCase();
+            if (/^(?:on|active|selected|checked|open)$/.test(state)) return { known: true, active: true };
+            if (/^(?:off|inactive|unselected|unchecked|closed)$/.test(state)) return { known: true, active: false };
+        }
+        var className = nodes.map(function(node) { return String(node.className || ''); }).join(' ').toLowerCase();
+        if (/(?:^|[\s_-])(?:active|selected|checked|on)(?:$|[\s_-])/.test(className)) return { known: true, active: true };
+        if (/(?:^|[\s_-])(?:inactive|unselected|unchecked|off)(?:$|[\s_-])/.test(className)) return { known: true, active: false };
+        return { known: false, active: false };
+    }
+
     function isToggleActive(el) {
-        return el.getAttribute('aria-pressed') === 'true' || el.classList.contains('active');
+        return toggleState(el).active;
+    }
+
+    function findWebSearchToggle() {
+        return findToggleByLabel('联网搜索') || findToggleByLabel('智能搜索') || findToggleByLabel('搜索') || findToggleByLabel('Search') || findToggleByLabel('Web Search') || findToggleByLabel('Web search');
+    }
+
+    function setWebSearch(enable, maxRetries) {
+        enable = !!enable;
+        if (maxRetries === undefined) maxRetries = 5;
+        return new Promise(function(resolve) {
+            var attempt = 0;
+            function finish(success, verified, state, error) {
+                if (success) window.__dsagent_webSearchExpectedState = enable;
+                resolve({ success: success, enabled: success ? enable : !!(state && state.active), verified: !!verified, error: error || '' });
+            }
+            function apply() {
+                attempt++;
+                var toggle = findWebSearchToggle();
+                if (!toggle) {
+                    if (attempt < maxRetries) { setTimeout(apply, 300); return; }
+                    finish(false, false, null, 'Web Search toggle not found');
+                    return;
+                }
+                var state = toggleState(toggle);
+                if (state.known && state.active === enable) { finish(true, true, state); return; }
+                if (!state.known && window.__dsagent_webSearchExpectedState === enable) { finish(true, false, state); return; }
+                // With no observable state and no prior WebAgent action, do not
+                // click an ordinary (off) turn: an uncertain click could enable
+                // search. Enabling search still requires an explicit click.
+                if (!state.known && window.__dsagent_webSearchExpectedState === undefined && !enable) { finish(true, false, state); return; }
+                try { toggle.click(); } catch (error) { finish(false, false, state, error.message); return; }
+                setTimeout(function() {
+                    var current = findWebSearchToggle();
+                    var next = toggleState(current || toggle);
+                    if (next.known && next.active === enable) { finish(true, true, next); return; }
+                    if (!next.known) { finish(true, false, next); return; }
+                    if (attempt < maxRetries) { setTimeout(apply, 300); return; }
+                    finish(false, true, next, 'Web Search toggle did not reach requested state');
+                }, 300);
+            }
+            apply();
+        });
     }
 
     function tryToggleWebSearch(enable) {
-        try {
-            var toggle = findToggleByLabel('联网搜索') || findToggleByLabel('智能搜索') || findToggleByLabel('搜索');
-            if (!toggle) return false;
-            var active = isToggleActive(toggle);
-            if ((enable && !active) || (!enable && active)) {
-                toggle.click();
-                return true;
-            }
-            return active;
-        } catch(e) { return false; }
+        void setWebSearch(!!enable);
+        return true;
     }
 
     function setDeepThink(enable, maxRetries) {
@@ -281,18 +350,18 @@ var _wasAiGenerating = false;   // 全局：AI 是否正在生成（由 watcher 
                 for (var ti = 0; ti < allToggles.length; ti++) {
                     var t = allToggles[ti];
                     var span = t.querySelector('span');
-                    if (span && (span.textContent.includes('深度思考') || span.textContent.includes('Deep Think'))) {
+                    if (span && /(?:深度思考|Deep\s*Think)/i.test(span.textContent || '')) {
                         toggle = t;
                         break;
                     }
                 }
                 // 方法2：按 aria-label
                 if (!toggle) {
-                    toggle = document.querySelector('[aria-label="深度思考"], [aria-label="Deep Think"]');
+                    toggle = document.querySelector('[aria-label="深度思考"], [aria-label="Deep Think"], [aria-label="DeepThink"]');
                 }
                 // 方法3：fallback 到 findToggleByLabel
                 if (!toggle) {
-                    toggle = findToggleByLabel('深度思考');
+                    toggle = findToggleByLabel('深度思考') || findToggleByLabel('Deep Think') || findToggleByLabel('DeepThink');
                 }
                 if (!toggle) {
                     if (attempt < maxRetries) { setTimeout(tryToggle, 500); return; }
@@ -770,8 +839,7 @@ async function deleteCurrentConversation() {
         var delBtn = await findDeleteButton(convItems[0]);
         if (delBtn) {
             delBtn.click();
-            await sleep(2000);
-            var confirmBtn = findConfirmButton();
+            var confirmBtn = await waitForConfirmButton(5000);
             if (confirmBtn) { confirmBtn.click(); await sleep(1500); }
         }
     }
@@ -780,24 +848,35 @@ async function deleteCurrentConversation() {
     async function findNewChatButton() {
         var btn = document.querySelector(SELECTORS.newChatBtn);
         if (btn) return btn;
-        // 按文字搜索"开启新对话"按钮
-        var allBtns = document.querySelectorAll('button, a, [role="button"], div[tabindex]');
-        for (var bi = 0; bi < allBtns.length; bi++) {
-            if (allBtns[bi].textContent.trim().includes('开启新对话')) {
-                return allBtns[bi];
+        function byText() {
+            var labels = /^(?:开启新对话|新建对话|新对话|New chat|Start new chat)$/i;
+            var all = document.querySelectorAll('button, a, [role="button"], [tabindex]');
+            for (var bi = 0; bi < all.length; bi++) {
+                if (labels.test((all[bi].textContent || '').replace(/\s+/g, ' ').trim())) return all[bi];
             }
+            // The English layout renders "New chat" inside an unlabelled div.
+            // Start at an exact leaf and climb only to a small clickable owner,
+            // never to a sidebar container containing the whole conversation list.
+            var leaves = document.querySelectorAll('span, div, p');
+            for (var li = 0; li < leaves.length; li++) {
+                var leaf = leaves[li];
+                if (!labels.test((leaf.textContent || '').replace(/\s+/g, ' ').trim())) continue;
+                var owner = leaf;
+                for (var depth = 0; owner && owner !== document.body && depth < 6; depth++, owner = owner.parentElement) {
+                    var role = owner.getAttribute && owner.getAttribute('role');
+                    var style = window.getComputedStyle(owner);
+                    if (owner.tagName === 'BUTTON' || owner.tagName === 'A' || role === 'button' || owner.hasAttribute('tabindex') || style.cursor === 'pointer') return owner;
+                }
+            }
+            return null;
         }
+        btn = byText();
+        if (btn) return btn;
         var navToggle = document.querySelector(SELECTORS.navToggleBtn);
         if (navToggle) { navToggle.click(); await sleep(500); }
         btn = document.querySelector(SELECTORS.newChatBtn);
         if (btn) return btn;
-        allBtns = document.querySelectorAll('button, a, [role="button"], div[tabindex]');
-        for (var bi = 0; bi < allBtns.length; bi++) {
-            if (allBtns[bi].textContent.trim().includes('开启新对话')) {
-                return allBtns[bi];
-            }
-        }
-        return null;
+        return byText();
     }
 
     function resetContextState() {
@@ -855,34 +934,50 @@ async function deleteCurrentConversation() {
     }
 
     function findConfirmButton() {
-        var btn = document.querySelector(SELECTORS.confirmDeleteBtn);
-        if (btn) {
-            var style = window.getComputedStyle(btn);
-            if (style.display !== 'none' && style.visibility !== 'hidden' && (btn.offsetParent !== null || style.position === 'fixed')) return btn;
+        function visible(el) {
+            if (!el) return false;
+            var style = window.getComputedStyle(el);
+            var rect = el.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
         }
-        // 只搜 <button> 和 [role="button"]，避免 div[tabindex] 匹配到对话框容器
-        var allBtns = document.querySelectorAll('button, [role="button"]');
-        // 优先找"删除该对话"/"确认删除"（对话框中的红色确认按钮）
-        for (var bi = 0; bi < allBtns.length; bi++) {
-            var el = allBtns[bi];
-            var txt = el.textContent.trim();
-            if (txt.includes('删除该对话') || txt.includes('确认删除')) {
-                var style = window.getComputedStyle(el);
-                if (style.display !== 'none' && style.visibility !== 'hidden') {
-                    return el;
-                }
+        function label(el) {
+            return String(el.getAttribute && el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim();
+        }
+        function exactButton(root, labels) {
+            var buttons = Array.from(root.querySelectorAll('button, [role="button"]'));
+            for (var bi = buttons.length - 1; bi >= 0; bi--) {
+                if (visible(buttons[bi]) && labels.indexOf(label(buttons[bi])) >= 0) return buttons[bi];
             }
+            return null;
         }
-        // 备选：找"确认"/"确定"/"删除"
-        for (var bi = 0; bi < allBtns.length; bi++) {
-            var el = allBtns[bi];
-            var txt = el.textContent.trim();
-            if (txt === '确认' || txt === '确定' || txt === 'Confirm' || txt === 'Delete' || txt === '删除') {
-                var style = window.getComputedStyle(el);
-                if (style.display !== 'none' && style.visibility !== 'hidden') return el;
+        var destructive = ['删除对话', '删除该对话', '确认删除', 'Delete chat', 'Delete conversation'];
+        var generic = ['删除', '确认', '确定', 'Delete', 'Confirm'];
+        // Prefer the currently visible modal. This excludes sidebar actions,
+        // response text, and the adjacent Cancel button by construction.
+        var dialogs = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="modal"], [class*="dialog"]'));
+        for (var di = dialogs.length - 1; di >= 0; di--) {
+            if (!visible(dialogs[di])) continue;
+            var scoped = exactButton(dialogs[di], destructive) || exactButton(dialogs[di], generic);
+            if (scoped) return scoped;
+        }
+        // Some DeepSeek builds omit dialog semantics. Keep the fallback exact
+        // and button-only; never use contains("Delete") here.
+        var globalMatch = exactButton(document, destructive);
+        if (globalMatch) return globalMatch;
+        return exactButton(document, generic);
+    }
+
+    function waitForConfirmButton(timeout) {
+        var started = Date.now();
+        return new Promise(function(resolve) {
+            function poll() {
+                var button = findConfirmButton();
+                if (button) { resolve(button); return; }
+                if (Date.now() - started >= (timeout || 5000)) { resolve(null); return; }
+                setTimeout(poll, 150);
             }
-        }
-        return null;
+            poll();
+        });
     }
 
     function sleep(ms) {
@@ -1462,7 +1557,7 @@ async function deleteCurrentConversation() {
         for (var i = 0; i < spans.length; i++) {
             var txt = spans[i].textContent.trim();
             console.log('[Continue] span[' + i + '] textContent="' + txt + '"');
-            if (txt === '继续生成' || txt === 'Continue') {
+            if (txt === '继续生成' || txt === '继续回答' || txt === 'Continue' || txt === 'Continue generating' || txt === 'Continue response') {
                 var btn = spans[i].closest('div[role="button"], button');
                 console.log('[Continue] Matched! closest button/div=', btn ? btn.tagName + (btn.className ? ' class=' + btn.className : '') : 'null');
                 if (btn) return btn;
@@ -1473,7 +1568,7 @@ async function deleteCurrentConversation() {
         console.log('[Continue] Fallback: scanning ' + allBtns.length + ' button elements for text match');
         for (var j = 0; j < allBtns.length; j++) {
             var t = allBtns[j].textContent.trim();
-            if (t === '继续生成' || t === 'Continue') {
+            if (t === '继续生成' || t === '继续回答' || t === 'Continue' || t === 'Continue generating' || t === 'Continue response') {
                 console.log('[Continue] Fallback found match at index ' + j);
                 return allBtns[j];
             }
@@ -1872,8 +1967,9 @@ async function deleteCurrentConversation() {
             setModelMode('unified');
         };
         window.__dsagent_setDeepThink = async function(enable) { return await setDeepThink(!!enable); };
-        window.__dsagent_disableWebSearch = function() { tryToggleWebSearch(false); };
-        window.__dsagent_enableWebSearch = function() { tryToggleWebSearch(true); };
+        window.__dsagent_setWebSearch = function(enable) { return setWebSearch(!!enable); };
+        window.__dsagent_disableWebSearch = function() { return setWebSearch(false); };
+        window.__dsagent_enableWebSearch = function() { return setWebSearch(true); };
         var _thinkingPrimarySelector = '[class*="think-content"], [class*="reasoning-content"], [class*="thought-content"], .ds-think, [class*="ThinkContent"], [class*="thinking-content"]';
         var _thinkingFallbackSelector = '[class*="reasoning"], [class*="thought"], [class*="thinking"]';
         function currentThinkingElement() {
@@ -2040,8 +2136,7 @@ async function deleteCurrentConversation() {
             var delBtn = await findDeleteButton(targetConv);
             if (!delBtn) return { success: false, error: 'Delete button not found' };
             delBtn.click();
-            await sleep(2000);
-            var confirmBtn = findConfirmButton();
+            var confirmBtn = await waitForConfirmButton(5000);
             if (!confirmBtn) return { success: false, error: 'Confirm button not found' };
             confirmBtn.click();
             await sleep(1500);
@@ -2108,14 +2203,22 @@ async function deleteCurrentConversation() {
             }
 
             // 先创建新对话再设模式（原顺序：在对话页面上设模式才生效）
-            var newChatBtn = await findNewChatButton();
-            if (!newChatBtn) throw new Error('找不到新建对话按钮');
-            newChatBtn.click();
+            // A freshly leased worker opens chat.deepseek.com/. That URL is
+            // already the blank new-chat surface, so requiring a sidebar
+            // button there is both unnecessary and locale-fragile.
+            var pathname = '';
+            try { pathname = window.location.pathname.replace(/\/+$/, '') || '/'; } catch(e) {}
+            var alreadyBlank = pathname === '/' && !!getInputBox();
+            if (!alreadyBlank) {
+                var newChatBtn = await findNewChatButton();
+                if (!newChatBtn) throw new Error('找不到新建对话按钮（当前路径：' + pathname + '）');
+                newChatBtn.click();
+            }
 
             // 等待新页面加载完成
             var ta = null;
             for (var retry = 0; retry < 30; retry++) {
-                ta = document.querySelector('textarea');
+                ta = getInputBox();
                 if (ta) break;
                 await sleep(300);
             }
@@ -2125,8 +2228,8 @@ async function deleteCurrentConversation() {
 
             // 统一模型：先设置搜索，再设置思考。新版网页使用两个独立
             // ds-toggle-button，图片能力由附件输入触发，不再切换模型。
-            tryToggleWebSearch(!!enableWebSearch);
-            await sleep(300);
+            var searchState = await setWebSearch(!!enableWebSearch);
+            if (!searchState || !searchState.success) return searchState || { success: false, error: 'Unable to set Web Search state' };
             await setDeepThink(!!deepthink);
             await sleep(400);
 
@@ -2145,7 +2248,7 @@ async function deleteCurrentConversation() {
             if (!sendResult || sendResult.success === false) return sendResult || { success: false, code: 'provider_send_unconfirmed', error: 'DeepSeek did not accept the message' };
             var visibleConversationUrl = '';
             try { visibleConversationUrl = window.location.href; } catch(e) {}
-            if (!visibleConversationUrl || !/\/chat\/[^?#]+/.test(visibleConversationUrl)) {
+            if (!visibleConversationUrl || !/(?:\/chat\/|\/a\/chat\/s\/)[^?#]+/.test(visibleConversationUrl)) {
                 await sleep(1500);
                 try { visibleConversationUrl = window.location.href; } catch(e) {}
             }

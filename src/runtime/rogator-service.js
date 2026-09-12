@@ -3,14 +3,20 @@
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { compactValue, orderedMessages } = require('./dsh-web-codec');
 
 const ROGATOR_REPOSITORY = 'https://github.com/nichengfuben/rogator.git';
-const ROGATOR_REVISION = 'fccf6c237a2877a0ea2f67084181699cb20f7eb0';
+const ROGATOR_REVISION = 'ef0aa1165829b741f35699e89abfcc743df0445b';
 const DEFAULT_UPSTREAM_MODEL = 'qwen3-7-max';
 const QWEN_GATEWAY_REASONING_EFFORTS = Object.freeze(['none', 'low', 'medium', 'high', 'xhigh', 'max', 'auto']);
 const ROGATOR_MODELS = [
+  { id: 'qwen.text.web', upstream: 'qwen3-7-plus', displayName: 'Qwen Web Text（兼容）', mode: 'text', hidden: true },
+  { id: 'qwen.text.web.3.8-max', upstream: 'qwen3-8-max', displayName: 'Qwen3.8-Max - Web', mode: 'text' },
+  { id: 'qwen.text.web.3.7-plus', upstream: 'qwen3-7-plus', displayName: 'Qwen3.7-Plus - Web', mode: 'text' },
+  { id: 'qwen.search.web', upstream: 'qwen3-7-plus', displayName: 'Qwen Web Search', mode: 'search' },
+  { id: 'qwen.image.web', upstream: 'qwen3-7-plus', displayName: 'Qwen Web Image', mode: 'image' },
   { id: 'qwen.gateway', upstream: '', displayName: 'Qianwen 网关（兼容）', hidden: true },
   { id: 'qwen.gateway.3.8-max', upstream: 'qwen3-8-max', displayName: 'Qwen3.8 Max' },
   { id: 'qwen.gateway.3.7-max', upstream: 'qwen3-7-max', displayName: 'Qwen3.7 Max' },
@@ -25,13 +31,15 @@ function gatewayModels() {
     providerDisplayName: 'Qianwen 网关',
     displayName: entry.displayName,
     upstreamModel: entry.upstream,
-    description: entry.hidden ? '原 qwen.gateway 兼容别名' : '通过 Rogator 的 Qwen-only 本地网关访问 ' + entry.displayName,
+    mode: entry.mode || 'agent',
+    description: entry.hidden ? '原 qwen.gateway 兼容别名' : '通过 chat.qwen.ai 网页协议访问 ' + entry.displayName,
     hidden: !!entry.hidden,
     capabilities: {
       inputMaxLen: 256000,
       deepThink: true,
       reasoningEfforts: QWEN_GATEWAY_REASONING_EFFORTS.slice(),
-      multimodal: { input: ['text', 'image'], output: ['text'] }
+      multimodal: { input: ['text', 'image', 'audio'], output: entry.mode === 'image' ? ['text', 'image'] : ['text'] },
+      webSearch: entry.mode === 'search'
     }
   }));
 }
@@ -39,6 +47,35 @@ function gatewayModels() {
 function upstreamModel(modelId, fallback) {
   const entry = ROGATOR_MODELS.find((item) => item.id === String(modelId || ''));
   return entry && entry.upstream || fallback || DEFAULT_UPSTREAM_MODEL;
+}
+
+function qwenWebMode(modelId) {
+  const entry = ROGATOR_MODELS.find((item) => item.id === String(modelId || ''));
+  return entry && entry.mode || 'agent';
+}
+
+function qwenModeMarker(mode) {
+  return '<webagent_qwen_mode value="' + String(mode || 'text') + '"></webagent_qwen_mode>';
+}
+
+function qwenImageUrls(content) {
+  const source = String(content || '');
+  const urls = [];
+  const seen = new Set();
+  const add = (value) => {
+    const url = String(value || '').trim();
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) return;
+    seen.add(url); urls.push(url);
+  };
+  for (const match of source.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/gi)) add(match[1]);
+  for (const match of source.matchAll(/<webagent_qwen_image\s+url="([^"]+)"\s*\/?\s*>/gi)) add(match[1]);
+  // Current chat.qwen.ai t2i SSE can finish with the generated CDN URL as the
+  // entire answer instead of a Markdown image or image_gen_tool event.
+  for (const match of source.matchAll(/\bhttps?:\/\/[^\s<>"']+/gi)) {
+    const value = match[0].replace(/[),.;!?]+$/, '');
+    if (/cdn\.qwen(?:lm)?\.ai\/.*\/t2i\/|\/t2i\/.*\.(?:png|jpe?g|webp)(?:\?|$)|\.(?:png|jpe?g|webp)(?:\?|$)/i.test(value)) add(value);
+  }
+  return urls;
 }
 
 function gatewayError(message, code, status) {
@@ -50,9 +87,9 @@ function compactDshOrderedHistory(source, maxChars = 14000) {
   // roles, image URLs and exact tool-call ids. `orderedMessages()` is the
   // textual webpage codec and intentionally strips those fields, so it must
   // not be used for this provider-native transport.
-  const ordered = (Array.isArray(source) ? source : [])
+  const ordered = dedupeDshHistoryImages((Array.isArray(source) ? source : [])
     .filter(Boolean)
-    .map((message) => JSON.parse(JSON.stringify(message)));
+    .map((message) => JSON.parse(JSON.stringify(message))));
   const compactMessage = (message) => {
     const content = typeof message.content === 'string' ? message.content : '';
     // A loaded Skill is executable policy, not ordinary tool evidence. Cutting
@@ -72,23 +109,67 @@ function compactDshOrderedHistory(source, maxChars = 14000) {
   const latestSkillIndex = ordered.reduce((found, message, index) => message.role === 'tool'
     && /<skill_content\b/i.test(String(message.content || '')) ? index : found, -1);
   if (latestSkillIndex >= 0) maxChars = Math.max(maxChars, 32000);
-  const protectedIndexes = new Set([systemIndex, goalIndex, latestSkillIndex].filter((index) => index >= 0));
+  const imageIndexes = ordered.map((message, index) => messageContainsDshImage(message) ? index : -1).filter((index) => index >= 0);
+  const protectedIndexes = new Set([systemIndex, goalIndex, latestSkillIndex, ...imageIndexes].filter((index) => index >= 0));
   const chosen = [];
   let used = 0;
   for (const index of protectedIndexes) {
     const item = compactMessage(ordered[index]);
     chosen.push({ index, item });
-    used += JSON.stringify(item).length;
+    used += dshMessageBudgetSize(item);
   }
   for (let index = ordered.length - 1; index >= 0; index -= 1) {
     if (protectedIndexes.has(index)) continue;
     const item = compactMessage(ordered[index]);
-    const size = JSON.stringify(item).length;
+    const size = dshMessageBudgetSize(item);
     if (used + size > maxChars) continue;
     chosen.push({ index, item });
     used += size;
   }
   return chosen.sort((a, b) => a.index - b.index).map((entry) => entry.item);
+}
+
+function dshImageSource(part) {
+  if (!part || typeof part !== 'object') return '';
+  if (part.type === 'image_url') return String(part.image_url && (part.image_url.url || part.image_url) || '');
+  if (part.type === 'image' || part.type === 'input_image' || part.image_url) {
+    if (part.data) return 'data:' + String(part.mimeType || part.mime_type || 'image/png') + ';base64,' + String(part.data);
+    return String(part.image_url && (part.image_url.url || part.image_url) || part.url || '');
+  }
+  return '';
+}
+
+function messageContainsDshImage(message) {
+  return Array.isArray(message && message.content) && message.content.some((part) => !!dshImageSource(part));
+}
+
+function dshImageFingerprint(part) {
+  const source = dshImageSource(part);
+  return source ? crypto.createHash('sha256').update(source).digest('hex') : '';
+}
+
+function dedupeDshHistoryImages(messages) {
+  const seen = new Set();
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!Array.isArray(message && message.content)) continue;
+    message.content = message.content.filter((part) => {
+      const fingerprint = dshImageFingerprint(part);
+      if (!fingerprint) return true;
+      if (seen.has(fingerprint)) return false;
+      seen.add(fingerprint);
+      return true;
+    });
+  }
+  return messages;
+}
+
+function dshMessageBudgetSize(message) {
+  return JSON.stringify(message, function (key, value) {
+    if (typeof value === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(value)) return '[image payload: 1024 visual tokens]';
+    if (key === 'data' && this && /^(?:image|input_image)$/i.test(String(this.type || '')) && value) return '[image payload: 1024 visual tokens]';
+    return value;
+  }).length + (messageContainsDshImage(message) ? 4096 : 0);
 }
 
 function compactSchemaDescriptions(value) {
@@ -912,7 +993,11 @@ class RogatorService {
     options = options || {};
     this.home = path.resolve(options.home);
     this.source = path.resolve(options.source || path.join(this.home, 'source'));
-    this.python = options.python || process.env.WEBAGENT_ROGATOR_PYTHON || 'python';
+    this.systemPython = options.python || process.env.WEBAGENT_ROGATOR_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+    this.managedVenv = process.platform === 'win32' ? '' : path.join(this.home, 'venv');
+    this.managedPython = this.managedVenv ? path.join(this.managedVenv, 'bin', 'python') : '';
+    this.useManagedVenv = process.platform !== 'win32' && !options.python && !process.env.WEBAGENT_ROGATOR_PYTHON;
+    this.python = this.useManagedVenv && fs.existsSync(this.managedPython) ? this.managedPython : this.systemPython;
     this.repository = options.repository || ROGATOR_REPOSITORY;
     this.revision = options.revision || ROGATOR_REVISION;
     this.runner = options.runner || null;
@@ -972,6 +1057,7 @@ class RogatorService {
       backoff_seconds: this.backoffUntil > Date.now() ? Math.ceil((this.backoffUntil - Date.now()) / 1000) : 0,
       minimum_interval_ms: this.minimumIntervalMs,
       automatic_retries: this.automaticRetries,
+      python: this.python,
       queued_requests: this.queuedRequests,
       logs: this.logs.slice(-80)
       ,models: gatewayModels().filter((model) => !model.hidden).map((model) => ({ id: model.id, name: model.displayName, upstream: model.upstreamModel }))
@@ -1016,8 +1102,20 @@ class RogatorService {
       if (fs.existsSync(this.source)) throw gatewayError('Rogator source directory exists but is not a Git checkout', 'qwen_gateway_source_invalid', 409);
       await runCommand('git', ['clone', '--filter=blob:none', this.repository, this.source], { cwd: this.home });
     }
-    await runCommand('git', ['fetch', '--depth', '1', 'origin', this.revision], { cwd: this.source });
-    await runCommand('git', ['checkout', '--detach', this.revision], { cwd: this.source });
+    const currentRevision = (await runCommand('git', ['rev-parse', 'HEAD'], { cwd: this.source })).trim();
+    if (currentRevision !== this.revision) {
+      await runCommand('git', ['fetch', '--depth', '1', 'origin', this.revision], { cwd: this.source, timeout: 60000 });
+    }
+    // This is a managed dependency checkout. Rogator keeps a tracked runtime
+    // config file which WebAgent rewrites on every start, so a regular checkout
+    // can be blocked by that generated file during upgrades.
+    await runCommand('git', ['checkout', '--detach', '--force', this.revision], { cwd: this.source });
+    if (this.useManagedVenv) {
+      if (!fs.existsSync(this.managedPython)) {
+        await runCommand(this.systemPython, ['-m', 'venv', this.managedVenv], { cwd: this.home });
+      }
+      this.python = this.managedPython;
+    }
     await runCommand(this.python, ['-m', 'pip', 'install', '-r', 'requirements.txt'], { cwd: this.source });
     this.error = '';
     return this.status();
@@ -1394,15 +1492,16 @@ class RogatorService {
         if (instructions) messages.push({ role: 'system', content: instructions });
         for (const message of context.messages || []) messages.push(message);
       }
+      const webMode = qwenWebMode(context.model);
+      if (webMode !== 'agent') messages.unshift({ role: 'system', content: qwenModeMarker(webMode) });
       const body = {
         model: upstreamModel(context.model, settings.model),
         messages,
-        // Qwen's streaming web endpoint keeps consuming native function
-        // events after a call and may execute them in its remote sandbox.
-        // The non-streaming Rogator path stops correctly at finish_reason
-        // tool_calls, so use it only for agent rounds. Text-only chat keeps
-        // the existing incremental reasoning/answer stream.
-        stream: upstreamTools.length === 0,
+        // User-selectable Qwen text models keep the native SSE path even when
+        // DSH advertises local tools, so reasoning_content and answer deltas
+        // remain visible in real time. Non-text compatibility agent models
+        // retain the bounded JSON path for provider tool-call repair.
+        stream: webMode === 'text' || upstreamTools.length === 0,
         // A real tool list gives Qwen its familiar function vocabulary. The
         // compatibility compiler maps aliases such as code_interpreter back
         // to canonical DSH tools before Harness performs local execution.
@@ -1486,7 +1585,7 @@ class RogatorService {
         if (reasoning && context.onReasoningProgress) context.onReasoningProgress(reasoning);
         if (content && context.onProgress) context.onProgress(content);
         if (!content.trim()) throw gatewayError('Qianwen gateway returned an empty response', 'empty_response', 502);
-        return { content, reasoning, provider_state: { provider: 'rogator', upstream: 'qwen', url: '', last_run_id: runId, last_call_id: context.run && context.run.call_id || null } };
+        return { content, reasoning, images: qwenImageUrls(content), provider_state: { provider: 'rogator', upstream: 'qwen', url: '', last_run_id: runId, last_call_id: context.run && context.run.call_id || null } };
       }
       let { response } = await this._postGatewayStream(body, controller.signal, 'Qianwen gateway', context.onStatus);
       let content = '';
@@ -1561,7 +1660,7 @@ class RogatorService {
       const textualFences = promptPassthrough ? dshTextToolFences(content, providerToolDefinitions) : '';
       if (textualFences) content = textualFences;
       if (!content.trim()) throw gatewayError('Qianwen gateway returned an empty response', 'empty_response', 502);
-      return { content, reasoning, provider_state: { provider: 'rogator', upstream: 'qwen', url: '', last_run_id: runId, last_call_id: context.run && context.run.call_id || null } };
+      return { content, reasoning, images: qwenImageUrls(content), provider_state: { provider: 'rogator', upstream: 'qwen', url: '', last_run_id: runId, last_call_id: context.run && context.run.call_id || null } };
     } catch (error) {
       if (controller.signal.aborted) throw Object.assign(new Error('Run cancelled'), { name: 'AbortError', code: 'run_cancelled' });
       throw error;
@@ -1569,6 +1668,30 @@ class RogatorService {
       if (releaseLane) releaseLane();
       this.active.delete(runId);
       if (context.signal) context.signal.removeEventListener('abort', abort);
+    }
+  }
+
+  async transcribeAudio(input, signal) {
+    input = input || {};
+    const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes || '');
+    if (!bytes.length) throw gatewayError('Qianwen transcription requires a non-empty audio file', 'qwen_voice_empty', 400);
+    if (bytes.length > 25 * 1024 * 1024) throw gatewayError('Qianwen transcription audio exceeds 25 MB', 'qwen_voice_too_large', 413);
+    if (!this.process || this.process.exitCode != null) await this.start();
+    const release = await this._acquireRequestLane(signal);
+    try {
+      const form = new FormData();
+      form.append('file', new Blob([bytes], { type: String(input.contentType || 'application/octet-stream') }), String(input.filename || 'audio.wav'));
+      form.append('model', String(input.model || 'qwen-asr'));
+      form.append('language', String(input.language || 'zh-CN'));
+      form.append('response_format', 'json');
+      const response = await this.fetch('http://127.0.0.1:' + this.port + '/v1/audio/transcriptions', { method: 'POST', body: form, signal });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw gatewayError(payload?.error?.message || 'Qianwen transcription returned HTTP ' + response.status, 'qwen_voice_failed', response.status || 502);
+      const text = String(payload.text || '').trim();
+      if (!text) throw gatewayError('Qianwen transcription returned empty text', 'qwen_voice_empty_response', 502);
+      return { text, model: String(input.model || 'qwen-asr') };
+    } finally {
+      release();
     }
   }
 
@@ -1586,7 +1709,7 @@ module.exports = {
   RogatorService, ROGATOR_REPOSITORY, ROGATOR_REVISION, DEFAULT_UPSTREAM_MODEL,
   QWEN_GATEWAY_REASONING_EFFORTS, ROGATOR_MODELS, dshGatewayMessages,
   compactExecutedMutationArguments,
-  runtimeGatewayMessages, gatewayModels, upstreamModel, openAITools,
+  runtimeGatewayMessages, gatewayModels, upstreamModel, qwenWebMode, qwenModeMarker, qwenImageUrls, openAITools,
   providerToolCompatibility, compileProviderToolCall,
   appendToolCallDelta, toolCallFences, residualQwenToolFence, dshTextToolFences,
   normalizeStructuredArguments

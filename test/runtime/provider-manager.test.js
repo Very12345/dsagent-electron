@@ -33,7 +33,7 @@ test('malformed DSML intent is distinguished from a valid schema-shaped tool cal
   assert.match(detailedPrompt, /string="false"/);
 });
 
-test('all qwen.gateway models route only to the Rogator adapter', async () => {
+test('Qwen gateway and chat.qwen.ai capability models route only to Rogator', async () => {
   const calls = [];
   const manager = new ProviderManager({
     rogator: {
@@ -43,11 +43,20 @@ test('all qwen.gateway models route only to the Rogator adapter', async () => {
       close: async () => {}
     },
     webFactories: { deepseek: async () => ({}), qwen: async () => ({}), chatgpt: async () => ({}) },
-    webModels: [{ id: 'qwen.gateway.3.8-max', provider: 'rogator', displayName: 'Qwen3.8 Max' }]
+    webModels: [
+      { id: 'qwen.gateway.3.8-max', provider: 'rogator', displayName: 'Qwen3.8 Max' },
+      { id: 'qwen.text.web', provider: 'rogator', displayName: 'Qwen Web Text' },
+      { id: 'qwen.text.web.3.8-max', provider: 'rogator', displayName: 'Qwen3.8-Max - Web' },
+      { id: 'qwen.text.web.3.7-plus', provider: 'rogator', displayName: 'Qwen3.7-Plus - Web' },
+      { id: 'qwen.search.web', provider: 'rogator', displayName: 'Qwen Web Search' },
+      { id: 'qwen.image.web', provider: 'rogator', displayName: 'Qwen Web Image' }
+    ]
   });
-  const result = await manager.complete({ model: 'qwen.gateway.3.8-max' });
-  assert.equal(result.content, 'gateway ok');
-  assert.deepEqual(calls, ['qwen.gateway.3.8-max']);
+  for (const model of ['qwen.gateway.3.8-max', 'qwen.text.web', 'qwen.text.web.3.8-max', 'qwen.text.web.3.7-plus', 'qwen.search.web', 'qwen.image.web']) {
+    const result = await manager.complete({ model });
+    assert.equal(result.content, 'gateway ok');
+  }
+  assert.deepEqual(calls, ['qwen.gateway.3.8-max', 'qwen.text.web', 'qwen.text.web.3.8-max', 'qwen.text.web.3.7-plus', 'qwen.search.web', 'qwen.image.web']);
   assert.equal(manager.listModels()[0].owned_by, 'rogator');
   assert.equal(manager.status().qwen_gateway.deepseek_enabled, false);
   assert.equal(await manager.stop({ model: 'qwen.gateway.3.8-max', run_id: 'run-gateway' }), true);
@@ -414,6 +423,27 @@ test('DeepSeek busy failover wraps from the last account back to the first', asy
   assert.deepEqual(selected, ['second', 'first']);
   assert.equal(result.content, 'CYCLIC_BUSY_RECOVERED');
   assert.equal(result.provider_state.account_id, 'first');
+  await manager.close();
+});
+
+test('Qianwen image capability is handled by the chat.qwen.ai gateway', async () => {
+  const calls = [];
+  const manager = new ProviderManager({
+    rogator: {
+      complete: async (context) => {
+        calls.push(context);
+        return { content: 'QWEN_IMAGE_OK', images: ['https://example.test/generated.png'], provider_state: { provider: 'rogator' } };
+      },
+      close: async () => {}
+    }
+  });
+  const result = await manager.complete({
+    model: 'qwen.image.web', session: { id: 'qwen-image-gateway', provider_state: {} }, messages: [{ role: 'user', content: '生成一张图片' }],
+    run: { id: 'run-qwen-image-failover', deep_think: false, web_search: false }, signal: new AbortController().signal, timeout: 1000
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, 'qwen.image.web');
+  assert.deepEqual(result.images, ['https://example.test/generated.png']);
   await manager.close();
 });
 
@@ -867,11 +897,13 @@ test('DSH second webpage turn sends a versioned update envelope and keeps passth
   const conversationUrl = 'https://chat.deepseek.com/a/chat/s/dsh-second-turn';
   let sentArgs = null;
   const modeCalls = [];
+  const searchModes = [];
   const worker = {
     ensureAuthenticated: async () => true, navigate: async () => true, assertConversation: async () => true,
     server: { invoke: async (_model, method, args) => {
       if (method === 'setModelMode') { modeCalls.push({ model: _model, args }); return { success: true }; }
-      if (method === 'setDeepThink' || method === 'setWebSearch') return { success: true };
+      if (method === 'setWebSearch') { searchModes.push(args.enable); return { success: true }; }
+      if (method === 'setDeepThink') return { success: true };
       if (method === 'sendMessage') { sentArgs = args; return { success: true }; }
       if (method === 'waitForDone') return { success: true };
       if (method === 'extractResponse') return { success: true, data: { markdown: 'SECOND_OK' } };
@@ -890,10 +922,42 @@ test('DSH second webpage turn sends a versioned update envelope and keeps passth
   assert.match(sentArgs.text, /SECOND_VISIBLE_TURN/);
   assert.match(sentArgs.text, /dsh_prompt_update_json|dsh_messages_json/);
   assert.equal(sentArgs.promptPassthrough, true);
+  assert.deepEqual(searchModes, [false]);
   assert.deepEqual(modeCalls, []);
   assert.match(sentArgs.text, /PRIVATE_DSH_PROMPT/);
   assert.doesNotMatch(sentArgs.text, /system-reminder|行为规则/);
   assert.equal(result.provider_state.dsh_bridge.protocol, 'WEBAGENT_DSH_BRIDGE_V3');
+  await manager.close();
+});
+
+test('an unconfirmed search-off state warns but never blocks an ordinary turn', async () => {
+  const conversationUrl = 'https://chat.deepseek.com/a/chat/s/search-off-warning';
+  const statuses = [];
+  let sends = 0;
+  const worker = {
+    ensureAuthenticated: async () => true,
+    navigate: async () => true,
+    assertConversation: async () => true,
+    server: { invoke: async (_model, method) => {
+      if (method === 'setWebSearch') return { success: false, error: 'Web Search toggle did not reach requested state' };
+      if (method === 'setDeepThink') return { success: true };
+      if (method === 'sendMessage') { sends += 1; return { success: true }; }
+      if (method === 'waitForDone') return { success: true, data: { done: true } };
+      if (method === 'extractResponse') return { success: true, data: { markdown: 'ORDINARY_TURN_CONTINUED' } };
+      if (method === 'peekResponse') return { success: true, data: { text: '' } };
+      throw new Error('unexpected method: ' + method);
+    } }
+  };
+  const manager = new ProviderManager({ webFactories: { deepseek: async () => worker, qwen: async () => ({}) } });
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'search-off-warning', provider_state: { provider: 'deepseek', url: conversationUrl } },
+    messages: [{ role: 'user', content: 'ordinary request' }], instructions: '',
+    run: { id: 'run-search-off-warning', prompt_passthrough: false, deep_think: false, web_search: false },
+    signal: new AbortController().signal, timeout: 1000, onStatus: (value) => statuses.push(value)
+  });
+  assert.equal(result.content, 'ORDINARY_TURN_CONTINUED');
+  assert.equal(sends, 1);
+  assert.ok(statuses.some((value) => /关闭状态未能确认/.test(value)));
   await manager.close();
 });
 

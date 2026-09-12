@@ -110,7 +110,7 @@ The arguments wrapper MUST use string="false". Allowed tool names: ${names || '(
 }
 
 function providerFromModel(model) {
-  if (String(model).startsWith('qwen.gateway')) return 'rogator';
+  if (/^qwen\.(?:gateway|text\.web|search\.web|image\.web)(?:\.|$)/.test(String(model))) return 'rogator';
   if (String(model).startsWith('deepseek.')) return 'deepseek';
   if (String(model).startsWith('qwen.')) return 'qwen';
   if (String(model).startsWith('chatgpt.')) return 'chatgpt';
@@ -210,11 +210,11 @@ class ProviderManager {
     this.accountManager = options.accountManager || null;
     this.rogator = options.rogator || null;
     this.webStopTimeoutMs = Math.max(100, Math.min(10000, Number(options.webStopTimeoutMs ?? 2500) || 2500));
-    this.pools = {
-      deepseek: new WorkerPool({ provider: 'deepseek', max: 2, min: 0, idleTimeout: 180000, factory: this.webFactories.deepseek }),
-      qwen: new WorkerPool({ provider: 'qwen', max: Math.min(16, Math.max(1, Number(options.qwenMax) || 8)), min: 0, idleTimeout: 120000, factory: this.webFactories.qwen })
-      ,chatgpt: new WorkerPool({ provider: 'chatgpt', max: Math.min(4, Math.max(1, Number(options.chatgptMax) || 2)), min: 0, idleTimeout: 180000, factory: this.webFactories.chatgpt })
-    };
+    const enabledProviders = new Set(Array.isArray(options.webProviders) ? options.webProviders : ['deepseek', 'qwen', 'chatgpt']);
+    this.pools = {};
+    if (enabledProviders.has('deepseek')) this.pools.deepseek = new WorkerPool({ provider: 'deepseek', max: 2, min: 0, idleTimeout: 180000, factory: this.webFactories.deepseek });
+    if (enabledProviders.has('qwen')) this.pools.qwen = new WorkerPool({ provider: 'qwen', max: Math.min(16, Math.max(1, Number(options.qwenMax) || 8)), min: 0, idleTimeout: 120000, factory: this.webFactories.qwen });
+    if (enabledProviders.has('chatgpt')) this.pools.chatgpt = new WorkerPool({ provider: 'chatgpt', max: Math.min(4, Math.max(1, Number(options.chatgptMax) || 2)), min: 0, idleTimeout: 180000, factory: this.webFactories.chatgpt });
     this.webModels = options.webModels || [];
     // A cancellation target is keyed by Run identity, never by the focused
     // page or by URL. This prevents one DSH session from stopping another.
@@ -227,12 +227,10 @@ class ProviderManager {
   }
 
   status() {
-    return {
-      deepseek: this.pools.deepseek.status(),
-      qwen: this.pools.qwen.status(),
-      chatgpt: this.pools.chatgpt.status(),
-      ...(this.rogator ? { qwen_gateway: this.rogator.status() } : {})
-    };
+    return Object.assign(
+      Object.fromEntries(Object.entries(this.pools).map(([provider, pool]) => [provider, pool.status()])),
+      this.rogator ? { qwen_gateway: this.rogator.status() } : {}
+    );
   }
 
   supportedWebProviders() { return Object.keys(this.pools); }
@@ -318,10 +316,13 @@ class ProviderManager {
       return this.rogator.complete(Object.assign({}, context, { gateway_tools: gatewayTools }));
     }
     if (provider === 'api') return this._completeApi(context);
-    return provider === 'deepseek' ? this._completeWebWithFailover(provider, context) : this._completeWeb(provider, context);
+    return provider === 'deepseek' || provider === 'qwen'
+      ? this._completeWebWithFailover(provider, context)
+      : this._completeWeb(provider, context);
   }
 
   async _completeWebWithFailover(provider, context) {
+    const providerLabel = provider === 'qwen' ? 'Qianwen' : 'DeepSeek';
     const initialAccount = context.account_id || this.accountManager && this.accountManager.activeAccount
       ? (context.account_id || this.accountManager.activeAccount(provider))
       : 'default';
@@ -343,7 +344,7 @@ class ProviderManager {
         if (error && error.code === 'context_length_exceeded' && !currentContext.remote_context_rollover_attempted) {
           const currentState = currentContext.session.provider_state || {};
           const rolloverState = error.provider_state || this.invalidateConversation(currentState, currentState.url, error.message);
-          if (currentContext.onStatus) currentContext.onStatus('DeepSeek 网页会话已达上下文上限，正在换新会话承接当前 DSH 上下文…');
+          if (currentContext.onStatus) currentContext.onStatus(providerLabel + ' 网页会话已达上下文上限，正在换新会话承接当前 DSH 上下文…');
           currentContext = Object.assign({}, currentContext, {
             force_new_conversation: true,
             remote_context_rollover_attempted: true,
@@ -356,7 +357,7 @@ class ProviderManager {
           if (retryIndex < busyRetryDelays.length) {
             const delay = busyRetryDelays[retryIndex];
             busyRetries.set(currentContext.account_id, retryIndex + 1);
-            if (currentContext.onStatus) currentContext.onStatus('DeepSeek 服务器繁忙，' + String(delay / 1000) + ' 秒后重试（' + String(retryIndex + 1) + '/' + String(busyRetryDelays.length) + '）…');
+            if (currentContext.onStatus) currentContext.onStatus(providerLabel + ' 服务器繁忙，' + String(delay / 1000) + ' 秒后重试（' + String(retryIndex + 1) + '/' + String(busyRetryDelays.length) + '）…');
             await waitForRetry(delay, currentContext.signal);
             currentContext = Object.assign({}, currentContext, {
               session: Object.assign({}, currentContext.session, {
@@ -380,7 +381,7 @@ class ProviderManager {
           const retrySeconds = error.code === 'provider_busy'
             ? 5
             : Math.max(1, Number(error.retry_after_seconds) || 60);
-          if (currentContext.onStatus) currentContext.onStatus('DeepSeek 暂无其他可用账号，' + String(retrySeconds) + ' 秒后按账号顺序继续尝试…');
+          if (currentContext.onStatus) currentContext.onStatus(providerLabel + ' 暂无其他可用账号，' + String(retrySeconds) + ' 秒后按账号顺序继续尝试…');
           await waitForRetry(retrySeconds * 1000, currentContext.signal);
           if (error.code === 'provider_busy') busyRetries.set(currentContext.account_id, 0);
           currentContext = Object.assign({}, currentContext, {
@@ -391,8 +392,8 @@ class ProviderManager {
           continue;
         }
         if (currentContext.onStatus) currentContext.onStatus(error.code === 'provider_busy'
-          ? 'DeepSeek 账号 ' + currentContext.account_id + ' 连续繁忙重试已耗尽，正在切换到 ' + nextAccount + '…'
-          : 'DeepSeek 账号 ' + currentContext.account_id + ' 已限速，正在切换到 ' + nextAccount + '…');
+          ? providerLabel + ' 账号 ' + currentContext.account_id + ' 连续繁忙重试已耗尽，正在切换到 ' + nextAccount + '…'
+          : providerLabel + ' 账号 ' + currentContext.account_id + ' 已限速，正在切换到 ' + nextAccount + '…');
         if (typeof this.accountManager.selectAccount === 'function') await this.accountManager.selectAccount(provider, nextAccount);
         busyRetries.set(nextAccount, 0);
         currentContext = Object.assign({}, currentContext, {
@@ -537,7 +538,17 @@ class ProviderManager {
         await worker.navigate(url, context.signal);
         await worker.assertConversation(url);
         if (provider === 'deepseek') {
-          await worker.server.invoke(context.model, 'setWebSearch', { enable: webSearch, _conversationUrl: url });
+          const searchState = await worker.server.invoke(context.model, 'setWebSearch', { enable: webSearch, _conversationUrl: url });
+          if (!searchState || !searchState.success) {
+            if (webSearch) throw Object.assign(new Error(searchState && searchState.error || 'Unable to enable DeepSeek Web Search'), { code: 'provider_search_state_failed' });
+            // Search is an optional page capability for an ordinary model
+            // turn. A provider UI regression must not make every DSH session
+            // unusable merely because the off-state could not be confirmed.
+            // Continue the turn and surface a warning; explicit search still
+            // fails closed above because silently omitting requested research
+            // would be incorrect.
+            if (context.onStatus) context.onStatus('DeepSeek 联网搜索关闭状态未能确认，已继续发送普通对话。');
+          }
           await worker.server.invoke(context.model, 'setDeepThink', { enable: deepThink, _conversationUrl: url });
         } else if (provider === 'qwen') {
           // Qianwen persists the most recently chosen model per page. Reassert
@@ -700,7 +711,8 @@ class ProviderManager {
         // waitForDone observes the card at the moment it first appears. Qwen may
         // briefly replace that DOM subtree during hydration, so do not discard
         // the durable signal because a subsequent one-shot probe sees "text".
-        const hasImages = requestsImage(context.messages)
+        const hasImages = context.model === 'qwen.image.web'
+          || requestsImage(context.messages)
           || !!(waited.data && waited.data.hasImages)
           || !!(detected && detected.success && detected.data && detected.data.type === 'image');
         if (hasImages) {
@@ -1080,7 +1092,7 @@ class ProviderManager {
   _validWebUrl(provider, value) {
     try {
       const url = new URL(value);
-      if (provider === 'deepseek') return url.protocol === 'https:' && url.hostname === 'chat.deepseek.com' && /\/chat\//.test(url.pathname);
+      if (provider === 'deepseek') return url.protocol === 'https:' && url.hostname === 'chat.deepseek.com' && /\/(?:chat\/|a\/chat\/s\/)/.test(url.pathname);
       if (provider === 'qwen') return url.protocol === 'https:' && (url.hostname === 'www.qianwen.com' || url.hostname.endsWith('.qwen.ai')) && /\/chat\//.test(url.pathname);
       if (provider === 'chatgpt') return url.protocol === 'https:' && (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') && /\/c\//.test(url.pathname) && !/\/c\/WEB(?::|%3A)/i.test(url.pathname);
       return false;
