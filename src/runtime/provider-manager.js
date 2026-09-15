@@ -7,6 +7,7 @@ const { canonicalizeDsml, parseDsmlCalls, dsmlMarkerIndex } = require('./deepsee
 
 const PROVIDER_BUSY_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 3000, 4000, 5000]);
 const MAX_TOOL_PROTOCOL_REPAIRS = 2;
+const DEEPSEEK_PER_ACCOUNT_CONCURRENCY = 2;
 
 function waitForRetry(ms, signal) {
   if (signal && signal.aborted) return Promise.reject(Object.assign(new Error('Run cancelled'), { name: 'AbortError', code: 'run_cancelled' }));
@@ -212,7 +213,14 @@ class ProviderManager {
     this.webStopTimeoutMs = Math.max(100, Math.min(10000, Number(options.webStopTimeoutMs ?? 2500) || 2500));
     const enabledProviders = new Set(Array.isArray(options.webProviders) ? options.webProviders : ['deepseek', 'qwen', 'chatgpt']);
     this.pools = {};
-    if (enabledProviders.has('deepseek')) this.pools.deepseek = new WorkerPool({ provider: 'deepseek', max: 2, min: 0, idleTimeout: 180000, factory: this.webFactories.deepseek });
+	if (enabledProviders.has('deepseek')) this.pools.deepseek = new WorkerPool({
+	  provider: 'deepseek',
+	  max: Math.min(16, Math.max(DEEPSEEK_PER_ACCOUNT_CONCURRENCY, Number(options.deepseekMax) || 16)),
+	  maxPerAccount: DEEPSEEK_PER_ACCOUNT_CONCURRENCY,
+	  min: 0,
+	  idleTimeout: 180000,
+	  factory: this.webFactories.deepseek
+	});
     if (enabledProviders.has('qwen')) this.pools.qwen = new WorkerPool({ provider: 'qwen', max: Math.min(16, Math.max(1, Number(options.qwenMax) || 8)), min: 0, idleTimeout: 120000, factory: this.webFactories.qwen });
     if (enabledProviders.has('chatgpt')) this.pools.chatgpt = new WorkerPool({ provider: 'chatgpt', max: Math.min(4, Math.max(1, Number(options.chatgptMax) || 2)), min: 0, idleTimeout: 180000, factory: this.webFactories.chatgpt });
     this.webModels = options.webModels || [];
@@ -299,6 +307,32 @@ class ProviderManager {
     return { provider, account_id: accountId, login_opened: true };
   }
 
+  _capacityAccount(provider, preferredAccount) {
+	if (provider !== 'deepseek' || !this.accountManager || typeof this.accountManager.listAccounts !== 'function') return preferredAccount;
+	const pool = this.pools[provider];
+	if (!pool || typeof pool.accountLoad !== 'function') return preferredAccount;
+	const preferredLoad = pool.accountLoad(preferredAccount);
+	if (preferredLoad.active + preferredLoad.creating < DEEPSEEK_PER_ACCOUNT_CONCURRENCY) return preferredAccount;
+	const listing = this.accountManager.listAccounts(provider) || {};
+	const rows = Array.isArray(listing.data) ? listing.data : [];
+	const byId = new Map(rows.map((row) => [String(row.id), row]));
+	const configured = Array.isArray(listing.failover_order)
+	  ? listing.failover_order.map(String).filter((id) => byId.has(id))
+	  : [];
+	const order = configured.concat(rows.map((row) => String(row.id)).filter((id) => !configured.includes(id)));
+	const start = Math.max(0, order.indexOf(preferredAccount));
+	for (let offset = 1; offset < order.length; offset += 1) {
+	  const accountId = order[(start + offset) % order.length];
+	  const account = byId.get(accountId);
+	  if (!account || !account.last_login_at || account.profile_exists === false) continue;
+	  const limitedUntil = Date.parse(account.limited_until || '');
+	  if (Number.isFinite(limitedUntil) && limitedUntil > Date.now()) continue;
+	  const load = pool.accountLoad(accountId);
+	  if (load.active + load.creating < DEEPSEEK_PER_ACCOUNT_CONCURRENCY) return accountId;
+	}
+	return preferredAccount;
+  }
+
   async complete(context) {
     const provider = providerFromModel(context.model);
     if (provider === 'rogator') {
@@ -323,9 +357,16 @@ class ProviderManager {
 
   async _completeWebWithFailover(provider, context) {
     const providerLabel = provider === 'qwen' ? 'Qianwen' : 'DeepSeek';
-    const initialAccount = context.account_id || this.accountManager && this.accountManager.activeAccount
-      ? (context.account_id || this.accountManager.activeAccount(provider))
-      : 'default';
+	const existingAccount = context.session && context.session.provider_state && context.session.provider_state.account_id;
+	const preferredAccount = context.account_id || existingAccount || (this.accountManager && this.accountManager.activeAccount
+	  ? this.accountManager.activeAccount(provider)
+	  : 'default');
+	const initialAccount = context.account_id
+	  ? preferredAccount
+	  : this._capacityAccount(provider, preferredAccount);
+	if (initialAccount !== preferredAccount && context.onStatus) {
+	  context.onStatus(providerLabel + ' 账号 ' + preferredAccount + ' 的 2 个并行槽位已占用，临时使用 ' + initialAccount + '…');
+	}
     const attempted = new Set(Array.isArray(context.failover_attempted_accounts) ? context.failover_attempted_accounts : []);
     const busyRetryDelays = Array.isArray(context.provider_busy_retry_delays)
       ? context.provider_busy_retry_delays.slice(0, 5).map((value) => Math.max(0, Number(value) || 0))
@@ -1104,4 +1145,4 @@ function normalizeUrl(value) {
   try { const url = new URL(value); return url.origin + url.pathname.replace(/\/$/, ''); } catch (_) { return ''; }
 }
 
-module.exports = { ProviderManager, providerFromModel, normalizeWebProvider, collapseRepeatedDomText, dedupeConversationFiles, imageFileFingerprint, hasBridgeProtocolChanged, assessMalformedDshToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS, waitForRetry };
+module.exports = { ProviderManager, providerFromModel, normalizeWebProvider, collapseRepeatedDomText, dedupeConversationFiles, imageFileFingerprint, hasBridgeProtocolChanged, assessMalformedDshToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS, DEEPSEEK_PER_ACCOUNT_CONCURRENCY, waitForRetry };

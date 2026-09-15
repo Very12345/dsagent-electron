@@ -8,13 +8,30 @@ class WorkerPool extends EventEmitter {
     super();
     this.provider = options.provider;
     this.max = Math.max(1, Number(options.max) || 1);
+	this.maxPerAccount = Math.max(1, Number(options.maxPerAccount) || this.max);
     this.min = Math.max(0, Number(options.min) || 0);
     this.idleTimeout = Number(options.idleTimeout) || 120000;
     this.factory = options.factory;
     this.workers = [];
     this.queue = [];
     this.creating = 0;
+	this.creatingAccounts = new Map();
   }
+
+	_accountTotal(accountId) {
+		return this.workers.filter((worker) => worker.state !== 'destroyed' && worker.account_id === accountId).length
+			+ (this.creatingAccounts.get(accountId) || 0);
+	}
+
+	accountLoad(accountId) {
+		const workers = this.workers.filter((worker) => worker.state !== 'destroyed' && worker.account_id === accountId);
+		return {
+			total: workers.length + (this.creatingAccounts.get(accountId) || 0),
+			active: workers.filter((worker) => worker.state === 'active').length,
+			idle: workers.filter((worker) => worker.state === 'idle').length,
+			creating: this.creatingAccounts.get(accountId) || 0
+		};
+	}
 
   async acquire(binding, signal) {
     if (signal && signal.aborted) throw this._abortError();
@@ -25,14 +42,9 @@ class WorkerPool extends EventEmitter {
     if (idle) return this._lease(idle, binding);
     const mismatchedIdle = this.workers.find((worker) => worker.state === 'idle' && worker.account_id !== accountId);
     if (mismatchedIdle && this.workers.length + this.creating >= this.max) await this._destroy(mismatchedIdle, null);
-    if (this.workers.length + this.creating < this.max) {
-      this.creating += 1;
-      try {
-        const worker = await this._createWorker(binding);
-        return this._lease(worker, binding);
-      } finally {
-        this.creating -= 1;
-      }
+	if (this._accountTotal(accountId) < this.maxPerAccount && this.workers.length + this.creating < this.max) {
+		const worker = await this._createWorker(binding);
+		return this._lease(worker, binding);
     }
     return new Promise((resolve, reject) => {
       const request = { binding, signal, resolve, reject };
@@ -52,19 +64,29 @@ class WorkerPool extends EventEmitter {
 
   async _createWorker(binding) {
     const accountId = binding && binding.account_id || 'default';
-    const raw = await this.factory({ provider: this.provider, index: this.workers.length, account_id: accountId });
-    const worker = {
-      id: id('worker'),
-      state: 'idle',
-      raw,
-      account_id: raw && raw.accountId || accountId,
-      lease: null,
-      timer: null,
-      created_at: Date.now()
-    };
-    this.workers.push(worker);
-    this.emit('status', this.status());
-    return worker;
+	this.creating += 1;
+	this.creatingAccounts.set(accountId, (this.creatingAccounts.get(accountId) || 0) + 1);
+	this.emit('status', this.status());
+	try {
+		const raw = await this.factory({ provider: this.provider, index: this.workers.length, account_id: accountId });
+		const worker = {
+		  id: id('worker'),
+		  state: 'idle',
+		  raw,
+		  account_id: raw && raw.accountId || accountId,
+		  lease: null,
+		  timer: null,
+		  created_at: Date.now()
+		};
+		this.workers.push(worker);
+		return worker;
+	} finally {
+		this.creating -= 1;
+		const remaining = (this.creatingAccounts.get(accountId) || 1) - 1;
+		if (remaining > 0) this.creatingAccounts.set(accountId, remaining);
+		else this.creatingAccounts.delete(accountId);
+		this.emit('status', this.status());
+	}
   }
 
   _lease(worker, binding) {
@@ -113,9 +135,11 @@ class WorkerPool extends EventEmitter {
     worker.lease = null;
     const next = this.queue.shift();
     if (next) {
-      if (next.signal && next.abort) next.signal.removeEventListener('abort', next.abort);
       const requestedAccount = next.binding && next.binding.account_id || 'default';
-      if (worker.account_id === requestedAccount) next.resolve(this._lease(worker, next.binding));
+	  if (worker.account_id === requestedAccount) {
+		if (next.signal && next.abort) next.signal.removeEventListener('abort', next.abort);
+		next.resolve(this._lease(worker, next.binding));
+	  }
       else {
         this.queue.unshift(next);
         await this._destroy(worker, null);
@@ -137,27 +161,38 @@ class WorkerPool extends EventEmitter {
     if (worker.raw && typeof worker.raw.destroy === 'function') await worker.raw.destroy();
     const next = this.queue.shift();
     if (next) {
-      if (next.signal && next.abort) next.signal.removeEventListener('abort', next.abort);
-      try {
-        const replacement = await this._createWorker(next.binding);
-        next.resolve(this._lease(replacement, next.binding));
-      } catch (error) {
-        next.reject(error);
-      }
+	  const requestedAccount = next.binding && next.binding.account_id || 'default';
+	  if (this._accountTotal(requestedAccount) >= this.maxPerAccount) {
+		this.queue.unshift(next);
+	  } else {
+		if (next.signal && next.abort) next.signal.removeEventListener('abort', next.abort);
+		try {
+		  const replacement = await this._createWorker(next.binding);
+		  next.resolve(this._lease(replacement, next.binding));
+		} catch (error) {
+		  next.reject(error);
+		}
+	  }
     }
     this.emit('status', this.status());
   }
 
   status() {
+	const accountIds = new Set([
+	  ...this.workers.map((worker) => worker.account_id),
+	  ...this.creatingAccounts.keys()
+	]);
     return {
       provider: this.provider,
       max: this.max,
+	  max_per_account: this.maxPerAccount,
       total: this.workers.length,
       creating: this.creating,
       active: this.workers.filter((worker) => worker.state === 'active').length,
       idle: this.workers.filter((worker) => worker.state === 'idle').length,
-      queued: this.queue.length
-      ,accounts: Array.from(new Set(this.workers.map((worker) => worker.account_id)))
+	  queued: this.queue.length,
+	  accounts: Array.from(accountIds),
+	  account_loads: Object.fromEntries(Array.from(accountIds).map((accountId) => [accountId, this.accountLoad(accountId)]))
     };
   }
 

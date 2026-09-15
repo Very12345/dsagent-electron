@@ -1,6 +1,6 @@
 {
   "name": "webagent-dsh-core",
-  "version": "7.2.5",
+  "version": "7.2.6",
   "description": "DeepSeek Harness core with local DeepSeek and Qwen webpage transports",
   "author": "WebAgent Contributors",
   "main": "src/node/dsh-core.js",
@@ -13,7 +13,7 @@
   "scripts": {
     "start": "node src/node/dsh-core.js",
     "launch": "node src/node/dsh-core.js",
-    "test": "node --test test/runtime/dsh-core.test.js test/runtime/deepseek-harness-service.test.js test/runtime/dsh-web-codec.test.js test/runtime/playwright-provider-host.test.js test/runtime/provider-manager.test.js test/runtime/qwen-dom-extraction.test.js test/runtime/rogator-service.test.js",
+    "test": "node --test test/runtime/dsh-core.test.js test/runtime/deepseek-harness-service.test.js test/runtime/dsh-web-codec.test.js test/runtime/playwright-provider-host.test.js test/runtime/provider-manager.test.js test/runtime/qwen-dom-extraction.test.js test/runtime/rogator-service.test.js test/runtime/worker-pool.test.js",
     "smoke": "node src/node/dsh-core.js --help",
     "verify": "npm test && npm run smoke",
     "dist": "npm pack"

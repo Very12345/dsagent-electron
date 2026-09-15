@@ -85,3 +85,28 @@ test('an account switch replaces only an idle worker and never reuses its profil
   await alternate.release();
   await pool.close();
 });
+
+test('per-account cap queues a third run while another account can use global headroom', async () => {
+	const pool = new WorkerPool({
+		provider: 'deepseek', max: 6, maxPerAccount: 2,
+		factory: async (binding) => ({ accountId: binding.account_id, destroy: async () => {} })
+	});
+	const one = await pool.acquire({ provider: 'deepseek', account_id: 'primary', session_id: 'one', run_id: 'one' });
+	const two = await pool.acquire({ provider: 'deepseek', account_id: 'primary', session_id: 'two', run_id: 'two' });
+	let thirdSettled = false;
+	const thirdPromise = pool.acquire({ provider: 'deepseek', account_id: 'primary', session_id: 'three', run_id: 'three' }).then((lease) => {
+		thirdSettled = true;
+		return lease;
+	});
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(thirdSettled, false);
+	const alternate = await pool.acquire({ provider: 'deepseek', account_id: 'backup', session_id: 'alt', run_id: 'alt' });
+	assert.equal(alternate.binding.account_id, 'backup');
+	assert.equal(pool.status().account_loads.primary.active, 2);
+	assert.equal(pool.status().account_loads.backup.active, 1);
+	await one.release();
+	const third = await thirdPromise;
+	assert.equal(third.binding.account_id, 'primary');
+	await Promise.all([two.release(), third.release(), alternate.release()]);
+	await pool.close();
+});

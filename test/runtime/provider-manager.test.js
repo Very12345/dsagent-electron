@@ -96,7 +96,8 @@ test('provider pool defaults and URL ownership validation are strict', async () 
     webFactories: { deepseek: async () => ({}), qwen: async () => ({}) },
     webModels: []
   });
-  assert.equal(manager.status().deepseek.max, 2);
+	assert.equal(manager.status().deepseek.max, 16);
+	assert.equal(manager.status().deepseek.max_per_account, 2);
   assert.equal(manager.status().qwen.max, 8);
   assert.equal(manager.status().chatgpt.max, 2);
   assert.equal(manager._validWebUrl('deepseek', 'https://chat.deepseek.com/a/chat/s/abc'), true);
@@ -109,6 +110,42 @@ test('provider pool defaults and URL ownership validation are strict', async () 
   const deleted = await manager.cleanupSession({ id: 'child', model: 'qwen.default', provider_state: { provider: 'qwen', url: 'https://evil.test/chat/abc', last_run_id: 'run-a' } }, 'run-a', 'call-a');
   assert.equal(deleted, false, 'an unowned URL must never be navigated to or deleted');
   await manager.close();
+});
+
+test('DeepSeek borrows the next ordered healthy account after two parallel slots are occupied', async () => {
+	const created = [];
+	const selected = [];
+	const accountManager = {
+		activeAccount: () => 'primary',
+		listAccounts: () => ({
+			active_account_id: 'primary',
+			failover_order: ['primary', 'backup', 'limited'],
+			data: [
+				{ id: 'primary', last_login_at: 'now', profile_exists: true, limited_until: '' },
+				{ id: 'backup', last_login_at: 'now', profile_exists: true, limited_until: '' },
+				{ id: 'limited', last_login_at: 'now', profile_exists: true, limited_until: new Date(Date.now() + 60000).toISOString() }
+			]
+		}),
+		selectAccount: async (_provider, account) => { selected.push(account); }
+	};
+	const manager = new ProviderManager({
+		webFactories: {
+			deepseek: async (binding) => {
+				created.push(binding.account_id);
+				return { accountId: binding.account_id, destroy: async () => {} };
+			},
+			qwen: async () => ({})
+		},
+		accountManager
+	});
+	const first = await manager.pools.deepseek.acquire({ provider: 'deepseek', account_id: 'primary', session_id: 'one', run_id: 'one' });
+	const second = await manager.pools.deepseek.acquire({ provider: 'deepseek', account_id: 'primary', session_id: 'two', run_id: 'two' });
+	assert.equal(manager._capacityAccount('deepseek', 'primary'), 'backup');
+	const borrowed = await manager.pools.deepseek.acquire({ provider: 'deepseek', account_id: 'backup', session_id: 'three', run_id: 'three' });
+	assert.deepEqual(created, ['primary', 'primary', 'backup']);
+	assert.deepEqual(selected, [], 'capacity borrowing must not change the UI-selected default account');
+	await Promise.all([first.release(), second.release(), borrowed.release()]);
+	await manager.close();
 });
 
 test('debug browser visibility waits for active provider Runs before rebuilding contexts', async () => {
