@@ -986,6 +986,7 @@ class RuntimeApiServer {
       instructions: harnessPassthrough ? '' : body.messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n'),
       prompt_passthrough: harnessPassthrough,
       skip_runtime_instructions: auxiliaryTitle,
+	  auxiliary_title: auxiliaryTitle,
       provider_tools: harnessPassthrough ? toolDefinitions(body.tools) : [],
       timeout_ms: body.timeout_ms || body.timeout,
       deep_think: reasoningRequested(body),

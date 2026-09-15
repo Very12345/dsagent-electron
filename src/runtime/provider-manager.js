@@ -26,6 +26,30 @@ function waitForRetry(ms, signal) {
   });
 }
 
+function localHarnessTitle(messages) {
+	const rows = Array.isArray(messages) ? messages : [];
+	for (const message of rows.slice().reverse()) {
+	  const content = typeof message?.content === 'string' ? message.content : '';
+	  const marker = content.indexOf('JSON array of human messages:');
+	  if (marker < 0) continue;
+	  const source = content.slice(marker + 'JSON array of human messages:'.length).trim();
+	  try {
+		const parsed = JSON.parse(source);
+		const text = (Array.isArray(parsed) ? parsed : []).map((item) => String(item && item.text || '').trim()).find(Boolean);
+		if (text) return conciseLocalTitle(text);
+	  } catch (_) {}
+	}
+	const fallback = rows.slice().reverse().map((message) => typeof message?.content === 'string' ? message.content.trim() : '').find(Boolean);
+	return conciseLocalTitle(fallback || '新对话');
+}
+
+function conciseLocalTitle(value) {
+	const text = String(value || '').replace(/[`*_#<>\[\]]/g, '').replace(/\s+/g, ' ').trim();
+	if (!text) return '新对话';
+	if (/[^\x00-\x7F]/.test(text)) return Array.from(text).slice(0, 18).join('');
+	return text.split(/\s+/).slice(0, 7).join(' ').slice(0, 72);
+}
+
 function hasBridgeProtocolChanged(existingBridge, requestedBridge) {
   if (!existingBridge || !requestedBridge) return false;
   const storedProtocol = String(existingBridge.protocol || '');
@@ -433,6 +457,13 @@ class ProviderManager {
   }
 
   async complete(context) {
+	if (context.run && context.run.auxiliary_title) {
+	  return {
+		content: localHarnessTitle(context.messages),
+		reasoning: '',
+		provider_state: context.session && context.session.provider_state || { conversations: [] }
+	  };
+	}
     const provider = providerFromModel(context.model);
     if (provider === 'rogator') {
       if (!this.rogator) throw Object.assign(new Error('Qianwen gateway is unavailable'), { code: 'qwen_gateway_unavailable', status: 503 });
@@ -690,13 +721,18 @@ class ProviderManager {
             if (context.onStatus) context.onStatus('DeepSeek 联网搜索关闭状态未能确认，已继续发送普通对话。');
           }
           await worker.server.invoke(context.model, 'setDeepThink', { enable: deepThink, _conversationUrl: url });
-        } else if (provider === 'qwen') {
+		} else if (provider === 'qwen') {
           // Qianwen persists the most recently chosen model per page. Reassert
           // the Run's concrete model before every continuation so an idle
           // Worker reused by another session cannot leak its previous choice.
-          const selected = await worker.server.invoke(context.model, 'setModelMode', { _conversationUrl: url });
-          if (!selected || !selected.success) throw Object.assign(new Error(selected && selected.error || 'Unable to select Qwen model'), { code: 'provider_model_selection_failed' });
-        }
+		  const selected = await worker.server.invoke(context.model, 'setModelMode', { _conversationUrl: url });
+		  if (!selected || !selected.success) throw Object.assign(new Error(selected && selected.error || 'Unable to select Qwen model'), { code: 'provider_model_selection_failed' });
+		  const reasoning = await worker.server.invoke(context.model, 'setReasoningMode', {
+			reasoningEffort: context.run.reasoning_effort || 'none',
+			_conversationUrl: url
+		  });
+		  if (!reasoning || !reasoning.success) throw Object.assign(new Error(reasoning && reasoning.error || 'Unable to select Qwen reasoning mode'), { code: 'provider_reasoning_selection_failed' });
+		}
         const sent = await worker.server.invoke(context.model, 'sendMessage', { text, files, promptPassthrough: !!context.run.prompt_passthrough, _conversationUrl: url });
         if (!sent || !sent.success) {
           const code = sent && sent.code || 'provider_send_failed';
@@ -709,7 +745,7 @@ class ProviderManager {
           throw failure;
         }
       } else {
-        const created = await worker.server.invoke(context.model, 'newChat', { userText: text, files, deepThink, webSearch, timeout: context.timeout });
+		const created = await worker.server.invoke(context.model, 'newChat', { userText: text, files, deepThink, webSearch, reasoningEffort: context.run.reasoning_effort || 'none', timeout: context.timeout });
         if (!created || !created.success) {
           const code = created && created.code || 'provider_send_failed';
           throw Object.assign(new Error(created && created.error || 'Web conversation creation failed'), {
@@ -1246,7 +1282,9 @@ class ProviderManager {
     try {
       const url = new URL(value);
       if (provider === 'deepseek') return url.protocol === 'https:' && url.hostname === 'chat.deepseek.com' && /\/(?:chat\/|a\/chat\/s\/)/.test(url.pathname);
-	  if (provider === 'qwen') return url.protocol === 'https:' && (url.hostname === 'www.qianwen.com' || url.hostname.endsWith('.qwen.ai')) && /\/(?:chat|c)\//.test(url.pathname);
+	  if (provider === 'qwen') return url.protocol === 'https:'
+		&& (url.hostname === 'www.qianwen.com' || url.hostname.endsWith('.qwen.ai'))
+		&& (/\/chat\//.test(url.pathname) || /\/c\/[0-9a-f]{8,}(?:-[0-9a-f-]+)?(?:\/|$)/i.test(url.pathname));
       if (provider === 'chatgpt') return url.protocol === 'https:' && (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') && /\/c\//.test(url.pathname) && !/\/c\/WEB(?::|%3A)/i.test(url.pathname);
       return false;
     } catch (_) { return false; }
@@ -1257,4 +1295,4 @@ function normalizeUrl(value) {
   try { const url = new URL(value); return url.origin + url.pathname.replace(/\/$/, ''); } catch (_) { return ''; }
 }
 
-module.exports = { ProviderManager, providerFromModel, normalizeWebProvider, collapseRepeatedDomText, dedupeConversationFiles, imageFileFingerprint, hasBridgeProtocolChanged, assessMalformedDshToolCall, normalizeLegacyToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS, DEEPSEEK_PER_ACCOUNT_CONCURRENCY, waitForRetry };
+module.exports = { ProviderManager, providerFromModel, normalizeWebProvider, collapseRepeatedDomText, dedupeConversationFiles, imageFileFingerprint, hasBridgeProtocolChanged, assessMalformedDshToolCall, normalizeLegacyToolCall, localHarnessTitle, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS, DEEPSEEK_PER_ACCOUNT_CONCURRENCY, waitForRetry };

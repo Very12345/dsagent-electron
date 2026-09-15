@@ -19,7 +19,8 @@ function validConversationUrl(provider, value) {
   try {
     const url = new URL(value);
     if (provider === 'deepseek') return url.hostname === 'chat.deepseek.com' && /\/(?:chat\/|a\/chat\/s\/)/.test(url.pathname);
-	if (provider === 'qwen') return url.hostname === 'chat.qwen.ai' && /\/(?:chat|c)\//.test(url.pathname);
+	if (provider === 'qwen') return url.hostname === 'chat.qwen.ai'
+		&& (/\/chat\//.test(url.pathname) || /\/c\/[0-9a-f]{8,}(?:-[0-9a-f-]+)?(?:\/|$)/i.test(url.pathname));
     return (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') && /\/c\//.test(url.pathname);
   } catch (_) { return false; }
 }

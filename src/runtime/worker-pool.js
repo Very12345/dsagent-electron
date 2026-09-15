@@ -38,7 +38,11 @@ class WorkerPool extends EventEmitter {
     const stale = this.workers.filter((worker) => worker.state === 'idle' && worker.raw && typeof worker.raw.isDestroyed === 'function' && worker.raw.isDestroyed());
     for (const worker of stale) await this._destroy(worker, null);
     const accountId = binding && binding.account_id || 'default';
-    const idle = this.workers.find((worker) => worker.state === 'idle' && worker.account_id === accountId);
+	const sticky = this.workers.find((worker) => worker.state === 'idle'
+	  && worker.account_id === accountId
+	  && worker.last_binding
+	  && worker.last_binding.session_id === (binding && binding.session_id));
+	const idle = sticky || this.workers.find((worker) => worker.state === 'idle' && worker.account_id === accountId);
     if (idle) return this._lease(idle, binding);
     const mismatchedIdle = this.workers.find((worker) => worker.state === 'idle' && worker.account_id !== accountId);
     if (mismatchedIdle && this.workers.length + this.creating >= this.max) await this._destroy(mismatchedIdle, null);
@@ -75,6 +79,7 @@ class WorkerPool extends EventEmitter {
 		  raw,
 		  account_id: raw && raw.accountId || accountId,
 		  lease: null,
+		  last_binding: null,
 		  timer: null,
 		  created_at: Date.now()
 		};
@@ -131,6 +136,7 @@ class WorkerPool extends EventEmitter {
 
   async _release(worker, leaseId) {
     if (!worker.lease || worker.lease.id !== leaseId) return;
+	worker.last_binding = worker.lease;
     worker.state = 'idle';
     worker.lease = null;
     const next = this.queue.shift();

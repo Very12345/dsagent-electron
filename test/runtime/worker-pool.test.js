@@ -110,3 +110,19 @@ test('per-account cap queues a third run while another account can use global he
 	await Promise.all([two.release(), third.release(), alternate.release()]);
 	await pool.close();
 });
+
+test('an idle worker is sticky to its previous session before another same-account page', async () => {
+	const pool = new WorkerPool({
+		provider: 'qwen', max: 2,
+		factory: async () => ({ destroy: async () => {} })
+	});
+	const first = await pool.acquire({ provider: 'qwen', account_id: 'default', session_id: 'session-a', run_id: 'a1' });
+	const firstWorker = first.workerId;
+	const second = await pool.acquire({ provider: 'qwen', account_id: 'default', session_id: 'session-b', run_id: 'b1' });
+	await first.release();
+	await second.release();
+	const again = await pool.acquire({ provider: 'qwen', account_id: 'default', session_id: 'session-a', run_id: 'a2' });
+	assert.equal(again.workerId, firstWorker);
+	await again.release();
+	await pool.close();
+});

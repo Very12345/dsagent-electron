@@ -78,6 +78,7 @@ class TransportRunService extends EventEmitter {
       status: 'queued',
       mode: 'transport',
       agent_mode: false,
+	  auxiliary_title: !!input.auxiliary_title,
       prompt_passthrough: !!input.prompt_passthrough,
       passthrough_messages: input.prompt_passthrough && messages.length ? JSON.parse(JSON.stringify(messages)) : null,
       provider_tools: Array.isArray(input.provider_tools) ? JSON.parse(JSON.stringify(input.provider_tools)) : [],

@@ -150,6 +150,78 @@
         return { success: false, error: 'Qwen model selection was not confirmed: ' + label };
     };
 
+	var QWEN_REASONING_LABELS = {
+		'none': ['Fast', '快速', '关闭思考', 'Off'],
+		'low': ['Auto', '自动', '轻度思考', 'Low'],
+		'medium': ['Thinking', '思考', '标准思考', 'Medium'],
+		'high': ['Deep Thinking', '深度思考', 'Thinking', '思考', '深度', 'High', 'Max']
+	};
+
+	function reasoningPicker() {
+		var nodes = document.querySelectorAll('button,[role="button"],[aria-haspopup],div,span');
+		var best = null, bestArea = Infinity;
+		for (var i = 0; i < nodes.length; i++) {
+			var text = normalizedLabel(nodes[i].innerText || nodes[i].textContent);
+			if (!/^(?:Auto|自动|Fast|快速|Thinking|思考|Deep Thinking|深度思考|Low|Medium|High|Max)$/i.test(text) || !visibleElement(nodes[i])) continue;
+			var node = nodes[i];
+			for (var depth = 0; node && depth < 5; depth++, node = node.parentElement) {
+				var role = node.getAttribute && node.getAttribute('role');
+				var popup = node.getAttribute && node.getAttribute('aria-haspopup');
+				var cls = typeof node.className === 'string' ? node.className : '';
+				if (node.tagName !== 'BUTTON' && role !== 'button' && !popup && !/cursor-pointer|select|trigger/i.test(cls)) continue;
+				var rect = node.getBoundingClientRect();
+				var area = rect.width * rect.height;
+				if (area > 0 && area < bestArea) { best = node; bestArea = area; }
+				break;
+			}
+		}
+		return best;
+	}
+
+	Q.selectReasoningMode = async function(effort) {
+		var id = String(effort || 'none').toLowerCase();
+		var wanted = QWEN_REASONING_LABELS[id] || QWEN_REASONING_LABELS.none;
+		var picker = reasoningPicker();
+		if (!picker) return { success: false, error: 'Qwen reasoning picker not found', available: [] };
+		var current = normalizedLabel(picker.innerText || picker.textContent);
+		if (wanted.some(function(label){ return current.toLowerCase() === label.toLowerCase(); })) return { success: true, effort: id, label: current, unchanged: true };
+		picker.click();
+		await sleep(250);
+		var available = [];
+		var option = null;
+		var deadline = Date.now() + 4000;
+		while (!option && Date.now() < deadline) {
+			var nodes = document.querySelectorAll('button,[role="button"],[role="option"],[role="menuitem"],div,span');
+			for (var i = 0; i < nodes.length; i++) {
+				if (!visibleElement(nodes[i])) continue;
+				var text = normalizedLabel(nodes[i].innerText || nodes[i].textContent);
+				if (!text || text.length > 48 || !/Auto|自动|Fast|快速|Think|思考|Low|Medium|High|深度|Max/i.test(text)) continue;
+				if (available.indexOf(text) < 0) available.push(text);
+				if (wanted.some(function(label){ return text.toLowerCase() === label.toLowerCase(); })) {
+					var candidate = nodes[i];
+					for (var depth = 0; candidate && depth < 5; depth++, candidate = candidate.parentElement) {
+						var role = candidate.getAttribute && candidate.getAttribute('role');
+						var cls = typeof candidate.className === 'string' ? candidate.className : '';
+						if (candidate.tagName === 'BUTTON' || role === 'option' || role === 'menuitem' || role === 'button' || /cursor-pointer/.test(cls)) { option = candidate; break; }
+					}
+				}
+				if (option) break;
+			}
+			if (!option) await sleep(100);
+		}
+		if (!option) {
+			try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); } catch (_) {}
+			return { success: false, error: 'Qwen reasoning option not found for ' + id, available: available };
+		}
+		option.click();
+		await sleep(250);
+		picker = reasoningPicker();
+		current = picker && normalizedLabel(picker.innerText || picker.textContent);
+		return current && wanted.some(function(label){ return current.toLowerCase() === label.toLowerCase(); })
+			? { success: true, effort: id, label: current, available: available }
+			: { success: false, error: 'Qwen reasoning selection was not confirmed for ' + id, available: available, current: current || '' };
+	};
+
     // 自动点击 float-to-bottom 按钮（Qwen 回到底部的滚动按钮）
     // 严格限定：只匹配 chat 区域内的回到底部按钮，排除侧边栏折叠按钮
     // 加导航状态保护 + 节流防抖：SPA 导航/操作期间 DOM 大量变更，不加节流会导致

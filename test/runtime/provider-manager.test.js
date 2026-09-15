@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ProviderManager, providerFromModel, collapseRepeatedDomText, hasBridgeProtocolChanged, assessMalformedDshToolCall, normalizeLegacyToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS } = require('../../src/runtime/provider-manager');
+const { ProviderManager, providerFromModel, collapseRepeatedDomText, hasBridgeProtocolChanged, assessMalformedDshToolCall, normalizeLegacyToolCall, localHarnessTitle, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS } = require('../../src/runtime/provider-manager');
 const { createDeepseekServer } = require('../../server-deepseek');
 
 test('a V3 bridge state with the temporarily omitted protocol field remains cache-compatible', () => {
@@ -10,6 +10,21 @@ test('a V3 bridge state with the temporarily omitted protocol field remains cach
   assert.equal(hasBridgeProtocolChanged({ version: 3, prompt_hash: 'same-v3-prompt' }, requested), false);
   assert.equal(hasBridgeProtocolChanged({ version: 3, prompt_hash: 'older-prompt' }, requested), true);
   assert.equal(hasBridgeProtocolChanged({ version: 3, protocol: 'WEBAGENT_DSH_BRIDGE_V2', prompt_hash: 'same-v3-prompt' }, requested), true);
+});
+
+test('Harness title requests are derived locally and never lease a provider page', async () => {
+	assert.equal(localHarnessTitle([{ role: 'user', content: 'Generate the session title from this JSON array of human messages:\n[{"seq":1,"text":"修复缓存命中问题"}]' }]), '修复缓存命中问题');
+	let created = 0;
+	const manager = new ProviderManager({ webFactories: { deepseek: async () => { created += 1; return {}; }, qwen: async () => { created += 1; return {}; } } });
+	const result = await manager.complete({
+		model: 'qwen.text.web.3.7-plus',
+		messages: [{ role: 'user', content: 'Generate the session title from this JSON array of human messages:\n[{"seq":1,"text":"窗口过多"}]' }],
+		session: { provider_state: { conversations: [] } },
+		run: { auxiliary_title: true }
+	});
+	assert.equal(result.content, '窗口过多');
+	assert.equal(created, 0);
+	await manager.close();
 });
 
 test('malformed DSML intent is distinguished from a valid schema-shaped tool call', () => {
@@ -118,7 +133,8 @@ test('provider pool defaults and URL ownership validation are strict', async () 
   assert.equal(manager._validWebUrl('deepseek', 'https://chat.deepseek.com/a/chat/s/abc'), true);
   assert.equal(manager._validWebUrl('deepseek', 'https://chat.deepseek.com.evil.test/a/chat/s/abc'), false);
 	assert.equal(manager._validWebUrl('qwen', 'https://www.qianwen.com/chat/abc'), true);
-	assert.equal(manager._validWebUrl('qwen', 'https://chat.qwen.ai/c/abc'), true);
+	assert.equal(manager._validWebUrl('qwen', 'https://chat.qwen.ai/c/37feb57e-914f-4f40-b3b0-a7e12aca46c4'), true);
+	assert.equal(manager._validWebUrl('qwen', 'https://chat.qwen.ai/c/new-chat'), false);
   assert.equal(manager._validWebUrl('qwen', 'https://www.qianwen.com.evil.test/chat/abc'), false);
   assert.equal(manager._validWebUrl('chatgpt', 'https://chatgpt.com/c/abc'), true);
   assert.equal(manager._validWebUrl('chatgpt', 'https://chatgpt.com/c/WEB:temporary-id'), false);

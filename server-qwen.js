@@ -63,7 +63,7 @@ function parseQwenSse(text, transportDone) {
 			const title = extra.summary_title && extra.summary_title.content;
 			const thought = extra.summary_thought && extra.summary_thought.content;
 			const summary = [...(Array.isArray(title) ? title : []), ...(Array.isArray(thought) ? thought : [])].filter(Boolean).join('\n');
-			candidate.reasoning = appendQwenDelta(candidate.reasoning, summary);
+			if (summary) candidate.reasoning = summary;
 		}
         const candidates = extra.image_list || extra.tool_result || [];
         for (const item of Array.isArray(candidates) ? candidates : []) {
@@ -224,6 +224,16 @@ function createQwenServer(qwenViewRef) {
                     : { success: false, error: selected && selected.error || 'Unable to select Qwen model' };
             }
 
+			case 'setReasoningMode': {
+				const selected = await execJs(`(async function(){
+					if (!window.__qwen || !window.__qwen.selectReasoningMode) return {success:false,error:'Qwen reasoning selector is unavailable'};
+					return await window.__qwen.selectReasoningMode(${JSON.stringify(args.reasoningEffort || 'none')});
+				})();`);
+				return selected && selected.success
+					? { success: true, data: selected }
+					: { success: false, error: (selected && selected.error || 'Unable to select Qwen reasoning mode') + (selected && selected.available && selected.available.length ? '; available=' + selected.available.join(' | ') : '') };
+			}
+
             case 'newChat': {
                 setQwenGenerating(false); // 新对话开始，旧生成结束
 				await resetRawCapture();
@@ -257,6 +267,9 @@ function createQwenServer(qwenViewRef) {
                     if (!window.__qwen.selectModel) return {success:false,error:'Qwen model selector is unavailable'};
                     var selectedModel = await window.__qwen.selectModel(${JSON.stringify(model.id)});
                     if (!selectedModel || !selectedModel.success) return selectedModel || {success:false,error:'Qwen model selection failed'};
+					if (!window.__qwen.selectReasoningMode) return {success:false,error:'Qwen reasoning selector is unavailable'};
+					var selectedReasoning = await window.__qwen.selectReasoningMode(${JSON.stringify(args.reasoningEffort || 'none')});
+					if (!selectedReasoning || !selectedReasoning.success) return selectedReasoning || {success:false,error:'Qwen reasoning selection failed'};
                     // 4. 合并发送 userText
                     var _ut = ${JSON.stringify(userText)};
                     if (ready && _ut && _ut.trim()) {
