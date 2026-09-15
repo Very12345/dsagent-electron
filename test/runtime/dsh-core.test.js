@@ -173,11 +173,14 @@ test('DSH-core exchanges a one-time browser ticket for the internal Harness cook
 test('DSH-core advertises DeepSeek and the chat.qwen.ai capability models', () => {
   const resolvedBin = require.resolve('@deepseek-ai/dsh/lib/bin.js');
   const service = new DeepSeekHarnessService({ root: process.cwd(), runtimePort: 5858, runtimeToken: 'token', coreOnly: true, dshBin: resolvedBin });
-  assert.deepEqual(service._webAgentProvider().models.map((model) => model.id), [
+  const models = service._webAgentProvider().models;
+  assert.deepEqual(models.map((model) => model.id), [
     'deepseek.web',
     'qwen.text.web.3.8-max',
     'qwen.text.web.3.7-plus'
   ]);
+  assert.deepEqual(models[1].reasoningEfforts, { off: 'none', low: 'low', high: 'high' });
+  assert.deepEqual(models[2].reasoningEfforts, { off: 'none', low: 'low', high: 'high' });
   assert.equal(service._bin(), resolvedBin);
   assert.ok(createQwenServer(() => null).models['qwen.image.web']);
 });

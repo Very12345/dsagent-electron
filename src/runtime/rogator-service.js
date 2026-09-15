@@ -10,6 +10,7 @@ const { compactValue, orderedMessages } = require('./dsh-web-codec');
 const ROGATOR_REPOSITORY = 'https://github.com/nichengfuben/rogator.git';
 const ROGATOR_REVISION = 'ef0aa1165829b741f35699e89abfcc743df0445b';
 const DEFAULT_UPSTREAM_MODEL = 'qwen3-7-max';
+const QWEN_PAGE_REASONING_EFFORTS = Object.freeze(['none', 'low', 'high']);
 const QWEN_GATEWAY_REASONING_EFFORTS = Object.freeze(['none', 'low', 'medium', 'high', 'xhigh', 'max', 'auto']);
 const ROGATOR_MODELS = [
   { id: 'qwen.text.web', upstream: 'qwen3-7-plus', displayName: 'Qwen Web Text（兼容）', mode: 'text', hidden: true },
@@ -37,7 +38,9 @@ function gatewayModels() {
     capabilities: {
       inputMaxLen: 256000,
       deepThink: true,
-      reasoningEfforts: QWEN_GATEWAY_REASONING_EFFORTS.slice(),
+      reasoningEfforts: entry.mode === 'text'
+        ? QWEN_PAGE_REASONING_EFFORTS.slice()
+        : QWEN_GATEWAY_REASONING_EFFORTS.slice(),
       multimodal: { input: ['text', 'image', 'audio'], output: entry.mode === 'image' ? ['text', 'image'] : ['text'] },
       webSearch: entry.mode === 'search'
     }

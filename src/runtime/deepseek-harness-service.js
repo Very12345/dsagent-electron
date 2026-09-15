@@ -506,8 +506,8 @@ class DeepSeekHarnessService {
     };
     if (this.coreOnly) provider.models = [
       provider.models.find((model) => model.id === 'deepseek.web'),
-      { id: 'qwen.text.web.3.8-max', name: 'Qwen3.8-Max - Web', input: ['text', 'image'], contextWindow: 256000, maxTokens: 32768, reasoningEfforts: { off: 'none', low: 'low', medium: 'medium', high: 'high' } },
-      { id: 'qwen.text.web.3.7-plus', name: 'Qwen3.7-Plus - Web', input: ['text', 'image'], contextWindow: 256000, maxTokens: 32768, reasoningEfforts: { off: 'none', low: 'low', medium: 'medium', high: 'high' } }
+      { id: 'qwen.text.web.3.8-max', name: 'Qwen3.8-Max - Web', input: ['text', 'image'], contextWindow: 256000, maxTokens: 32768, reasoningEfforts: { off: 'none', low: 'low', high: 'high' } },
+      { id: 'qwen.text.web.3.7-plus', name: 'Qwen3.7-Plus - Web', input: ['text', 'image'], contextWindow: 256000, maxTokens: 32768, reasoningEfforts: { off: 'none', low: 'low', high: 'high' } }
     ].filter(Boolean);
     return provider;
   }

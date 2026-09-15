@@ -801,6 +801,8 @@ test('Qianwen gateway exposes concrete models and maps each request to its Rogat
     'qwen.text.web.3.8-max', 'qwen.text.web.3.7-plus', 'qwen.search.web', 'qwen.image.web',
     'qwen.gateway.3.8-max', 'qwen.gateway.3.7-max', 'qwen.gateway.3.7-plus', 'qwen.gateway.3.6-plus'
   ]);
+  assert.deepEqual(gatewayModels().find((model) => model.id === 'qwen.text.web.3.8-max').capabilities.reasoningEfforts, ['none', 'low', 'high']);
+  assert.deepEqual(gatewayModels().find((model) => model.id === 'qwen.text.web.3.7-plus').capabilities.reasoningEfforts, ['none', 'low', 'high']);
   assert.deepEqual(gatewayModels().find((model) => model.id === 'qwen.gateway.3.8-max').capabilities.reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'auto']);
   await service.complete({ model: 'qwen.gateway.3.8-max', messages: [{ role: 'user', content: 'test' }], run: { id: 'run-model' } });
   assert.equal(requestBody.model, 'qwen3-8-max');

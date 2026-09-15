@@ -107,8 +107,8 @@ DSH 模型选择器提供 `qwen.text.web.3.8-max` 和
 别名保留。两个文本模型通过真实页面选择模型、输入并发送，正文与思考从该页面产生的
 `/api/v2/chat/completions` 原始 SSE 捕获，不读取 DOM 回复，也不调用系统剪贴板；
 页面文本池默认最多并行 2 路。思考增量作为 `reasoning_content` 传给 DSH；
-当前页面实际只有 Fast、Auto、Thinking 三档，因此 DSH 的关闭、低、中、高分别映射为
-Fast、Auto、Thinking、Thinking（中英文标签均兼容，medium/high 同落页面最高档）。
+当前页面实际只有 Fast、Auto、Thinking 三档，因此 DSH 只展示关闭、低、高，分别映射为
+Fast、Auto、Thinking（中英文标签均兼容；旧会话中的 medium 仍兼容为 Thinking，但不再对外展示）。
 同一 DSH Session 优先复用上一轮 Page；自动标题在本地生成，
 不再额外建立 Qwen 对话。`qwen.search.web` 与
 `qwen.image.web` 仅是插件调用 Runtime 时使用的内部能力端点，不进入
