@@ -3,11 +3,91 @@
 // 对外提供统一 invoke(modelId, op, args) 协议
 'use strict';
 
+function appendQwenDelta(current, value) {
+    const next = String(value || '');
+    if (!next) return current;
+    if (!current) return next;
+    if (next.startsWith(current)) return next;
+    if (current.endsWith(next)) return current;
+    const max = Math.min(current.length, next.length);
+    for (let overlap = max; overlap >= 8; overlap -= 1) {
+        if (current.slice(-overlap) === next.slice(0, overlap)) return current + next.slice(overlap);
+    }
+    return current + next;
+}
+
+function parseQwenSse(text, transportDone) {
+    const source = String(text || '');
+    const payloads = [];
+    for (const block of source.split(/\r?\n\r?\n/)) {
+        const data = block.split(/\r?\n/)
+            .filter((line) => /^data:\s*/i.test(line))
+            .map((line) => line.replace(/^data:\s*/i, ''))
+            .join('\n').trim();
+        if (data) payloads.push(data);
+        else if (/^\s*\{[\s\S]*\}\s*$/.test(block)) payloads.push(block.trim());
+    }
+    let stopped = false;
+    let error = '';
+	const responseIndexes = new Map();
+	const candidatesById = new Map();
+	const candidateFor = (id) => {
+		const key = String(id || 'default');
+		if (!candidatesById.has(key)) candidatesById.set(key, { id: key, content: '', reasoning: '', images: [] });
+		return candidatesById.get(key);
+	};
+    for (const raw of payloads) {
+        if (raw === '[DONE]') { stopped = true; continue; }
+        let event;
+        try { event = JSON.parse(raw); } catch (_) { continue; }
+        if (event && event.success === false) {
+            error = JSON.stringify(event).slice(0, 1000);
+            continue;
+        }
+        if (event && event.error) {
+            error = String(event.error.details || event.error.message || event.error).slice(0, 1000);
+            continue;
+        }
+        if (event && event['response.stopped']) stopped = true;
+		if (event && event['response.created']) {
+			const created = event['response.created'];
+			if (created.response_id != null) responseIndexes.set(String(created.response_id), Number(created.response_index));
+		}
+        const delta = event && event.choices && event.choices[0] && event.choices[0].delta || {};
+		const candidate = candidateFor(event && event.response_id);
+        const value = typeof delta.content === 'string' ? delta.content : '';
+		if (delta.phase === 'answer' || (!delta.phase && delta.role === 'assistant')) candidate.content = appendQwenDelta(candidate.content, value);
+		else if (['think', 'web_search'].includes(String(delta.phase || ''))) candidate.reasoning = appendQwenDelta(candidate.reasoning, value);
+        const extra = delta.extra || {};
+		if (delta.phase === 'thinking_summary') {
+			const title = extra.summary_title && extra.summary_title.content;
+			const thought = extra.summary_thought && extra.summary_thought.content;
+			const summary = [...(Array.isArray(title) ? title : []), ...(Array.isArray(thought) ? thought : [])].filter(Boolean).join('\n');
+			candidate.reasoning = appendQwenDelta(candidate.reasoning, summary);
+		}
+        const candidates = extra.image_list || extra.tool_result || [];
+        for (const item of Array.isArray(candidates) ? candidates : []) {
+            const url = item && (item.image || item.url);
+			if (url && !candidate.images.includes(String(url))) candidate.images.push(String(url));
+        }
+    }
+	const choices = Array.from(candidatesById.values()).filter((item) => item.content || item.reasoning || item.images.length);
+	choices.sort((a, b) => {
+		const ai = responseIndexes.has(a.id) ? responseIndexes.get(a.id) : Number.MAX_SAFE_INTEGER;
+		const bi = responseIndexes.has(b.id) ? responseIndexes.get(b.id) : Number.MAX_SAFE_INTEGER;
+		return ai - bi;
+	});
+	const selected = choices[0] || { content: '', reasoning: '', images: [] };
+	return { content: selected.content, reasoning: selected.reasoning, images: selected.images, error, done: stopped || !!transportDone };
+}
+
 function createQwenServer(qwenViewRef) {
     const getView = typeof qwenViewRef === 'function' ? qwenViewRef : () => qwenViewRef;
 
     // Qwen 生成状态缓存（由 sendMessage/waitForDone 更新，timer 轮询读此缓存避免戳帧）
     let _qwenGenerating = false;
+	let _qwenRawCursor = { cdp: 0, page: 0 };
+	let _qwenLastParsed = null;
     function getQwenGenerating() { return _qwenGenerating; }
     function setQwenGenerating(v) { _qwenGenerating = v; }
 
@@ -27,6 +107,9 @@ function createQwenServer(qwenViewRef) {
     }
     const MODELS = {
         'qwen.image.web': webModel('qwen.image.web', 'Qianwen Image - Web', 'Qwen3.8-Max', '网页生图专用模型；返回生成图片 URL'),
+		'qwen.text.web': webModel('qwen.text.web', 'Qwen Text - Page（兼容）', 'Qwen3.7-Plus', '页面文本模型兼容别名', true),
+		'qwen.text.web.3.8-max': webModel('qwen.text.web.3.8-max', 'Qwen3.8-Max - Page', 'Qwen3.8-Max', '通过真实 chat.qwen.ai 页面发送并从原始 SSE 读取'),
+		'qwen.text.web.3.7-plus': webModel('qwen.text.web.3.7-plus', 'Qwen3.7-Plus - Page', 'Qwen3.7-Plus', '通过真实 chat.qwen.ai 页面发送并从原始 SSE 读取'),
         'qwen.default': webModel('qwen.default', 'Qwen3.7 千问（兼容）', 'Qwen3.7-千问', '原 qwen.default 兼容别名', true),
         'qwen.3.7': webModel('qwen.3.7', 'Qwen3.7 千问', 'Qwen3.7-千问', '综合 AI 助手，适合工作、学习与生活问答'),
         'qwen.3.8-max': webModel('qwen.3.8-max', 'Qwen3.8 Max', 'Qwen3.8-Max', '最新 Max 旗舰模型，支持视觉理解'),
@@ -63,6 +146,25 @@ function createQwenServer(qwenViewRef) {
         if (!v || !v.webContents || v.webContents.isDestroyed()) throw new Error('Qwen view not available');
         return await v.webContents.executeJavaScript(code, true);
     }
+
+	async function resetRawCapture() {
+		const view = getView();
+		_qwenLastParsed = null;
+		_qwenRawCursor = view && typeof view.resetRawCompletionStreams === 'function'
+			? await view.resetRawCompletionStreams()
+			: { cdp: 0, page: 0 };
+	}
+
+	async function readRawCapture() {
+		const view = getView();
+		if (!view || typeof view.completionStreamAfter !== 'function') return null;
+		const record = await view.completionStreamAfter(_qwenRawCursor);
+		if (!record) return null;
+		const parsed = parseQwenSse(record.text, record.done || record.logicalDone);
+		if (record.error && !parsed.error) parsed.error = String(record.error);
+		_qwenLastParsed = parsed;
+		return parsed;
+	}
 
     async function invoke(modelId, op, args) {
         args = args || {};
@@ -124,6 +226,7 @@ function createQwenServer(qwenViewRef) {
 
             case 'newChat': {
                 setQwenGenerating(false); // 新对话开始，旧生成结束
+				await resetRawCapture();
                 const userText = args.userText || '';
                 const js = `(async function(){
                     // 0. 检查 inject 是否就绪
@@ -141,7 +244,7 @@ function createQwenServer(qwenViewRef) {
                     var ready = await new Promise(function(resolve){
                         var retry = 0;
                         function check(){
-                            var ed = document.querySelector('[contenteditable="true"][data-slate-editor="true"]');
+							var ed = document.querySelector('[contenteditable="true"][data-slate-editor="true"], textarea[placeholder], [contenteditable="true"][role="textbox"]');
                             if (ed) { resolve(true); return; }
                             if (++retry > 40) { resolve(false); return; }
                             setTimeout(check, 100);
@@ -225,6 +328,7 @@ function createQwenServer(qwenViewRef) {
 
             case 'sendMessage': {
                 setQwenGenerating(true); // 发送消息后预期进入生成态
+				await resetRawCapture();
                 const js = `(async function(){
                     if (!window.__qwen || !window.__qwen.sendMessage) return {success:false, error:'inject not ready'};
                     window.__dsagent_qwenBaseline = window.__qwen.getLastResponseText ? window.__qwen.getLastResponseText() : '';
@@ -235,6 +339,14 @@ function createQwenServer(qwenViewRef) {
             }
 
             case 'peekResponse': {
+				if (model.id.startsWith('qwen.text.web.')) {
+					try {
+						const parsed = await readRawCapture();
+						return { success: true, data: parsed ? { text: parsed.content, reasoning: parsed.reasoning } : { text: '', reasoning: '' } };
+					} catch (e) {
+						return { success: false, error: e.message };
+					}
+				}
                 const js = `(function(){
                     if (!window.__qwen || !window.__qwen.getLastResponseText) return {text:''};
                     var text = (window.__qwen.getLastResponseText() || '').trim();
@@ -250,6 +362,31 @@ function createQwenServer(qwenViewRef) {
             }
 
             case 'waitForDone': {
+				if (model.id.startsWith('qwen.text.web.')) {
+					const timeout = Math.max(1000, Number(args.timeout) || 180000);
+					const initialActivityTimeout = Math.max(1000, Number(args.initialActivityTimeout) || 20000);
+					const startedAt = Date.now();
+					let sawStream = false;
+					while (Date.now() - startedAt < timeout) {
+						if (args.signal && args.signal.aborted) return { success: false, code: 'run_cancelled', error: 'Run cancelled' };
+						const parsed = await readRawCapture();
+						if (parsed) {
+							sawStream = true;
+							if (parsed.error) {
+								const limited = /Baxia|FAIL_SYS_USER_VALIDATE|RGV587|ParallelLimited|RateLimited/i.test(parsed.error);
+								return { success: false, code: limited ? 'provider_busy' : 'provider_request_failed', error: parsed.error, retryAfter: limited ? 30 : undefined };
+							}
+							if (parsed.done) {
+								setQwenGenerating(false);
+								if (!parsed.content.trim() && !parsed.reasoning.trim()) return { success: false, code: 'provider_sse_empty', error: 'Qianwen page SSE completed without content' };
+								return { success: true, data: { done: true, reason: 'qwen-page-sse' } };
+							}
+						}
+						if (!sawStream && Date.now() - startedAt > initialActivityTimeout) return { success: false, code: 'provider_send_unconfirmed', error: 'Qianwen page produced no completion SSE' };
+						await new Promise((resolve) => setTimeout(resolve, 120));
+					}
+					return { success: false, code: 'provider_timeout', error: 'Qianwen page SSE timed out' };
+				}
                 // 在 inject 上下文轮询 isGeneratingNow（唯一信号：停止按钮在不在）
                 // 见到停止按钮(wasGen=true) → 消失即答完。前 12s 允许等生成开始，超时即失败。
                 const timeout = args.timeout || 90000;
@@ -292,6 +429,11 @@ function createQwenServer(qwenViewRef) {
             }
 
             case 'extractResponse': {
+				if (model.id.startsWith('qwen.text.web.')) {
+					const parsed = await readRawCapture() || _qwenLastParsed;
+					if (!parsed || !parsed.content.trim()) return { success: false, code: 'provider_sse_empty', error: 'Qianwen page SSE contained no final answer' };
+					return { success: true, data: { markdown: parsed.content, think: parsed.reasoning, images: parsed.images, source: 'qwen-page-sse' } };
+				}
                 // 新方式：两步菜单复制 → 点击右侧箭头 → "复制为Markdown"（不漏代码框）
                 // clipboad 操作在 inject 层通过 electronAPI.clipboardReadText 完成
                 const view = getView();
@@ -482,4 +624,4 @@ function createQwenServer(qwenViewRef) {
     };
 }
 
-module.exports = { createQwenServer };
+module.exports = { createQwenServer, parseQwenSse, appendQwenDelta };

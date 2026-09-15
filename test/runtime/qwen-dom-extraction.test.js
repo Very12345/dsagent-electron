@@ -5,6 +5,39 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { parseQwenSse } = require('../../server-qwen');
+
+test('Qianwen native page SSE separates reasoning and final answer without DOM or clipboard', () => {
+	const raw = [
+		'data: {"choices":[{"delta":{"role":"assistant","phase":"think","content":"先分析"}}]}',
+		'',
+		'data: {"choices":[{"delta":{"role":"assistant","phase":"answer","content":"答案"}}]}',
+		'',
+		'data: {"choices":[{"delta":{"role":"assistant","phase":"answer","content":"完成"}}]}',
+		'',
+		'data: [DONE]',
+		''
+	].join('\n');
+	assert.deepEqual(parseQwenSse(raw, false), {
+		content: '答案完成',
+		reasoning: '先分析',
+		images: [],
+		error: '',
+		done: true
+	});
+});
+
+test('Qianwen A/B page SSE selects response_index zero instead of concatenating candidates', () => {
+	const raw = [
+		'data: {"response.created":{"response_id":"b","response_index":"1"}}', '',
+		'data: {"response.created":{"response_id":"a","response_index":"0"}}', '',
+		'data: {"choices":[{"delta":{"role":"assistant","phase":"answer","content":"SECOND"}}],"response_id":"b"}', '',
+		'data: {"choices":[{"delta":{"role":"assistant","phase":"answer","content":"FIRST"}}],"response_id":"a"}', ''
+	].join('\n');
+	const parsed = parseQwenSse(raw, true);
+	assert.equal(parsed.content, 'FIRST');
+	assert.equal(parsed.done, true);
+});
 
 function textClone(text) {
   return {

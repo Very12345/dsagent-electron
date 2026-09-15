@@ -59,8 +59,23 @@ function obviousSchemaError(argumentsValue, definition) {
 
 function assessMalformedDshToolCall(output, tools) {
   const text = String(output || '');
-  const marker = dsmlMarkerIndex(text);
-  if (marker < 0) return null;
+	let marker = dsmlMarkerIndex(text);
+	if (marker < 0) {
+	  // Qwen's page model may ignore the supplied DSML contract and emit its
+	  // legacy <tool_call> wrapper (or a raw {name,arguments} object). Treat
+	  // that as malformed tool intent so the same schema-guided repair used by
+	  // DeepSeek gets one chance to normalize it before DSH sees prose.
+	  const legacyMarker = text.search(/<\/?tool_call\b|<\/tool_call>|<think>[\s\S]*?"name"\s*:/i);
+	  if (legacyMarker < 0) return null;
+	  const fragment = text.slice(legacyMarker);
+	  const nameMatch = /"name"\s*:\s*"([^"]+)"/i.exec(fragment);
+	  const functionMatch = /<function\s*=\s*([^>\s]+)>/i.exec(fragment);
+	  const name = nameMatch && nameMatch[1] || functionMatch && functionMatch[1] || '';
+	  const definitions = new Set((Array.isArray(tools) ? tools : []).map((item) => String(item.name || '')));
+	  if (!name || !definitions.has(name)) return null;
+	  marker = legacyMarker;
+	  return { marker, toolName: name, reason: 'legacy provider <tool_call> syntax is not valid DSH DSML' };
+	}
   const canonical = canonicalizeDsml(text);
   const invokeCount = (canonical.match(/<dsml_invoke\b/gi) || []).length;
   const calls = parseDsmlCalls(text);
@@ -92,6 +107,89 @@ function assessMalformedDshToolCall(output, tools) {
   return null;
 }
 
+function jsonObjectsInText(value, limit) {
+	const text = String(value || '').slice(0, 128 * 1024);
+	const objects = [];
+	for (let start = 0; start < text.length && objects.length < (limit || 20); start += 1) {
+	  if (text[start] !== '{') continue;
+	  let depth = 0, quoted = false, escaped = false;
+	  for (let end = start; end < text.length; end += 1) {
+		const ch = text[end];
+		if (quoted) {
+		  if (escaped) escaped = false;
+		  else if (ch === '\\') escaped = true;
+		  else if (ch === '"') quoted = false;
+		  continue;
+		}
+		if (ch === '"') { quoted = true; continue; }
+		if (ch === '{') depth += 1;
+		if (ch === '}') depth -= 1;
+		if (depth !== 0) continue;
+		try { objects.push({ start, end: end + 1, value: JSON.parse(text.slice(start, end + 1)) }); } catch (_) {}
+		start = end;
+		break;
+	  }
+	}
+	return objects;
+}
+
+function normalizeLegacyToolCall(output, tools) {
+	const definitions = new Map((Array.isArray(tools) ? tools : []).map((item) => [String(item.name || ''), item]));
+	const text = String(output || '');
+	const functionMatch = /<function\s*=\s*([^>\s]+)>([\s\S]*?)<\/function>/i.exec(text);
+	if (functionMatch) {
+	  const name = functionMatch[1];
+	  const definition = definitions.get(name);
+	  if (definition) {
+		const args = {};
+		const properties = definition.parameters && definition.parameters.properties || {};
+		const parameterPattern = /<parameter\s*=\s*([^>\s]+)>([\s\S]*?)<\/parameter>/gi;
+		let parameter;
+		while ((parameter = parameterPattern.exec(functionMatch[2])) !== null) {
+		  const key = parameter[1];
+		  const raw = String(parameter[2] || '').replace(/^\s*\n|\n\s*$/g, '');
+		  const expected = properties[key] && properties[key].type;
+		  let value = raw;
+		  if (expected && expected !== 'string') {
+			try { value = JSON.parse(raw); } catch (_) {}
+		  }
+		  args[key] = value;
+		}
+		if (!obviousSchemaError(args, definition)) {
+		  return {
+			name,
+			arguments: args,
+			marker: functionMatch.index,
+			dsml: '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="' + name + '">\n'
+			  + '<｜DSML｜parameter name="arguments" string="false">' + JSON.stringify(args) + '</｜DSML｜parameter>\n'
+			  + '</｜DSML｜invoke>\n</｜DSML｜tool_calls>'
+		  };
+		}
+	  }
+	}
+	for (const candidate of jsonObjectsInText(output, 20)) {
+	  const object = candidate.value;
+	  if (!object || typeof object !== 'object' || Array.isArray(object)) continue;
+	  const name = String(object.name || object.tool || '').trim();
+	  const definition = definitions.get(name);
+	  if (!definition) continue;
+	  let args = object.arguments !== undefined ? object.arguments : object.parameters;
+	  if (typeof args === 'string') {
+		try { args = JSON.parse(args); } catch (_) { continue; }
+	  }
+	  if (obviousSchemaError(args, definition)) continue;
+	  return {
+		name,
+		arguments: args,
+		marker: candidate.start,
+		dsml: '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="' + name + '">\n'
+		  + '<｜DSML｜parameter name="arguments" string="false">' + JSON.stringify(args) + '</｜DSML｜parameter>\n'
+		  + '</｜DSML｜invoke>\n</｜DSML｜tool_calls>'
+	  };
+	}
+	return null;
+}
+
 function dshToolRepairPrompt(assessment, tools, options) {
   options = options || {};
   const names = (Array.isArray(tools) ? tools : []).map((tool) => String(tool.name || '')).filter(Boolean).join(', ');
@@ -111,7 +209,8 @@ The arguments wrapper MUST use string="false". Allowed tool names: ${names || '(
 }
 
 function providerFromModel(model) {
-  if (/^qwen\.(?:gateway|text\.web|search\.web|image\.web)(?:\.|$)/.test(String(model))) return 'rogator';
+	if (/^qwen\.text\.web(?:\.|$)/.test(String(model))) return 'qwen';
+	if (/^qwen\.(?:gateway|search\.web|image\.web)(?:\.|$)/.test(String(model))) return 'rogator';
   if (String(model).startsWith('deepseek.')) return 'deepseek';
   if (String(model).startsWith('qwen.')) return 'qwen';
   if (String(model).startsWith('chatgpt.')) return 'chatgpt';
@@ -221,7 +320,7 @@ class ProviderManager {
 	  idleTimeout: 180000,
 	  factory: this.webFactories.deepseek
 	});
-    if (enabledProviders.has('qwen')) this.pools.qwen = new WorkerPool({ provider: 'qwen', max: Math.min(16, Math.max(1, Number(options.qwenMax) || 8)), min: 0, idleTimeout: 120000, factory: this.webFactories.qwen });
+	if (enabledProviders.has('qwen')) this.pools.qwen = new WorkerPool({ provider: 'qwen', max: Math.min(16, Math.max(1, Number(options.qwenMax) || 2)), min: 0, idleTimeout: 120000, factory: this.webFactories.qwen });
     if (enabledProviders.has('chatgpt')) this.pools.chatgpt = new WorkerPool({ provider: 'chatgpt', max: Math.min(4, Math.max(1, Number(options.chatgptMax) || 2)), min: 0, idleTimeout: 180000, factory: this.webFactories.chatgpt });
     this.webModels = options.webModels || [];
     // A cancellation target is keyed by Run identity, never by the focused
@@ -662,7 +761,7 @@ class ProviderManager {
       if (waited && waited.success && waited.data && Number(waited.data.reasoningLoopRecoveries) > 0 && context.onStatus) {
         context.onStatus('DeepSeek 已自动终止重复循环并纠偏 ' + String(waited.data.reasoningLoopRecoveries) + ' 次');
       }
-      if (provider === 'deepseek' && context.run.prompt_passthrough) {
+	  if ((provider === 'deepseek' || provider === 'qwen') && context.run.prompt_passthrough) {
         const recoveryDelays = Array.isArray(context.empty_response_recovery_delays)
           ? context.empty_response_recovery_delays.slice(0, 3).map((value) => Math.max(0, Number(value) || 0))
           : [2000, 4000, 8000];
@@ -671,7 +770,7 @@ class ProviderManager {
             && (!waited || !waited.success)
             && waited && waited.code === 'provider_sse_empty';
           recoveryAttempt += 1) {
-          if (context.onStatus) context.onStatus('DeepSeek 返回空响应，正在重发当前增量（' + String(recoveryAttempt + 1) + '/' + String(recoveryDelays.length) + '）…');
+		  if (context.onStatus) context.onStatus((provider === 'qwen' ? 'Qianwen' : 'DeepSeek') + ' 返回空响应，正在重发当前增量（' + String(recoveryAttempt + 1) + '/' + String(recoveryDelays.length) + '）…');
           // An empty completion also means DeepSeek did not persist the user
           // bubble. Let the SPA roll back that failed turn before resending
           // the exact ordered DSH delta, including its tool results.
@@ -766,15 +865,28 @@ class ProviderManager {
       }
       if (!extracted) extracted = await worker.server.invoke(context.model, 'extractResponse', { timeout: 20000, allowReasoningToolCall: !!context.run.prompt_passthrough, _conversationUrl: url });
       if (!extracted || !extracted.success) throw new Error(extracted && extracted.error || 'Web response extraction failed');
-      if (provider === 'deepseek' && context.run.prompt_passthrough) {
-        const originalMarkdown = String(extracted.data && extracted.data.markdown || '');
-        let assessment = assessMalformedDshToolCall(originalMarkdown, context.run.provider_tools);
+	  if ((provider === 'deepseek' || provider === 'qwen') && context.run.prompt_passthrough) {
+		let originalMarkdown = String(extracted.data && extracted.data.markdown || '');
+		const normalizedLegacy = provider === 'qwen'
+		  ? normalizeLegacyToolCall(originalMarkdown, context.run.provider_tools)
+		  : null;
+		if (normalizedLegacy) {
+		  originalMarkdown = normalizedLegacy.dsml;
+		  extracted = Object.assign({}, extracted, {
+			data: Object.assign({}, extracted.data, {
+			  markdown: originalMarkdown,
+			  answerConfirmed: true,
+			  toolProtocolNormalized: true
+			})
+		  });
+		}
+		let assessment = assessMalformedDshToolCall(originalMarkdown, context.run.provider_tools);
         if (assessment) {
           const originalAssessment = assessment;
           // A repair turn should spend its budget reproducing the call syntax,
           // not reasoning about the task again. The next normal Run reasserts
           // the user's requested thinking mode before sending.
-          await worker.server.invoke(context.model, 'setDeepThink', { enable: false, _conversationUrl: url });
+		  if (provider === 'deepseek') await worker.server.invoke(context.model, 'setDeepThink', { enable: false, _conversationUrl: url });
           let repaired = null;
           let repairedMarkdown = '';
           for (let repairAttempt = 1; repairAttempt <= MAX_TOOL_PROTOCOL_REPAIRS && assessment; repairAttempt += 1) {
@@ -1134,7 +1246,7 @@ class ProviderManager {
     try {
       const url = new URL(value);
       if (provider === 'deepseek') return url.protocol === 'https:' && url.hostname === 'chat.deepseek.com' && /\/(?:chat\/|a\/chat\/s\/)/.test(url.pathname);
-      if (provider === 'qwen') return url.protocol === 'https:' && (url.hostname === 'www.qianwen.com' || url.hostname.endsWith('.qwen.ai')) && /\/chat\//.test(url.pathname);
+	  if (provider === 'qwen') return url.protocol === 'https:' && (url.hostname === 'www.qianwen.com' || url.hostname.endsWith('.qwen.ai')) && /\/(?:chat|c)\//.test(url.pathname);
       if (provider === 'chatgpt') return url.protocol === 'https:' && (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') && /\/c\//.test(url.pathname) && !/\/c\/WEB(?::|%3A)/i.test(url.pathname);
       return false;
     } catch (_) { return false; }
@@ -1145,4 +1257,4 @@ function normalizeUrl(value) {
   try { const url = new URL(value); return url.origin + url.pathname.replace(/\/$/, ''); } catch (_) { return ''; }
 }
 
-module.exports = { ProviderManager, providerFromModel, normalizeWebProvider, collapseRepeatedDomText, dedupeConversationFiles, imageFileFingerprint, hasBridgeProtocolChanged, assessMalformedDshToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS, DEEPSEEK_PER_ACCOUNT_CONCURRENCY, waitForRetry };
+module.exports = { ProviderManager, providerFromModel, normalizeWebProvider, collapseRepeatedDomText, dedupeConversationFiles, imageFileFingerprint, hasBridgeProtocolChanged, assessMalformedDshToolCall, normalizeLegacyToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS, DEEPSEEK_PER_ACCOUNT_CONCURRENCY, waitForRetry };

@@ -19,7 +19,7 @@ function validConversationUrl(provider, value) {
   try {
     const url = new URL(value);
     if (provider === 'deepseek') return url.hostname === 'chat.deepseek.com' && /\/(?:chat\/|a\/chat\/s\/)/.test(url.pathname);
-    if (provider === 'qwen') return url.hostname === 'chat.qwen.ai' && /\/chat\//.test(url.pathname);
+	if (provider === 'qwen') return url.hostname === 'chat.qwen.ai' && /\/(?:chat|c)\//.test(url.pathname);
     return (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') && /\/c\//.test(url.pathname);
   } catch (_) { return false; }
 }
@@ -137,9 +137,11 @@ function createProviderWorkerFactory(host, options) {
         const deadline = Date.now() + 15000;
         while (Date.now() < deadline) {
           if (signal && signal.aborted) throw abortError();
-          const editorSelector = provider === 'deepseek'
-            ? 'textarea[placeholder], [contenteditable="true"][role="textbox"]'
-            : provider === 'qwen' ? '[contenteditable="true"][data-slate-editor="true"]' : '#prompt-textarea';
+		  const editorSelector = provider === 'deepseek'
+			? 'textarea[placeholder], [contenteditable="true"][role="textbox"]'
+			: provider === 'qwen'
+			  ? '[contenteditable="true"][data-slate-editor="true"], textarea[placeholder], [contenteditable="true"][role="textbox"]'
+			  : '#prompt-textarea';
           const auth = await view.webContents.executeJavaScript(authenticationProbeScript(editorSelector), true);
           let playwrightLogin = false;
           if (provider === 'qwen' && view.page && typeof view.page.frames === 'function') {

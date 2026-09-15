@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ProviderManager, collapseRepeatedDomText, hasBridgeProtocolChanged, assessMalformedDshToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS } = require('../../src/runtime/provider-manager');
+const { ProviderManager, providerFromModel, collapseRepeatedDomText, hasBridgeProtocolChanged, assessMalformedDshToolCall, normalizeLegacyToolCall, dshToolRepairPrompt, PROVIDER_BUSY_RETRY_DELAYS_MS } = require('../../src/runtime/provider-manager');
 const { createDeepseekServer } = require('../../server-deepseek');
 
 test('a V3 bridge state with the temporarily omitted protocol field remains cache-compatible', () => {
@@ -31,9 +31,20 @@ test('malformed DSML intent is distinguished from a valid schema-shaped tool cal
   assert.match(detailedPrompt, /Required JSON Schema/);
   assert.match(detailedPrompt, /previous correction repeated/i);
   assert.match(detailedPrompt, /string="false"/);
+	const legacyQwen = '<think>\n{"name":"pwsh","arguments":{"command":"pwd","description":"inspect"}}\n</tool_call>';
+	const legacyAssessment = assessMalformedDshToolCall(legacyQwen, tools);
+	assert.equal(legacyAssessment.toolName, 'pwsh');
+	assert.match(legacyAssessment.reason, /legacy provider/);
+	const normalized = normalizeLegacyToolCall('prose\n```json\n{"tool":"pwsh","parameters":{"command":"pwd","description":"inspect"}}\n```', tools);
+	assert.match(normalized.dsml, /<｜DSML｜invoke name="pwsh">/);
+	assert.match(normalized.dsml, /"command":"pwd"/);
+	const nativeQwen = normalizeLegacyToolCall('<tool_call>\n<function=pwsh>\n<parameter=command>\npwd</parameter>\n<parameter=description>inspect</parameter>\n</function>\n</tool_call>', tools);
+	assert.match(nativeQwen.dsml, /<｜DSML｜invoke name="pwsh">/);
+	assert.match(nativeQwen.dsml, /"description":"inspect"/);
+	assert.equal(normalizeLegacyToolCall('{"name":"pwsh","arguments":{"command":"pwd"}}', tools), null, 'missing required fields are never guessed');
 });
 
-test('Qwen gateway and chat.qwen.ai capability models route only to Rogator', async () => {
+test('Qwen text models use the page worker while search/image/gateway stay on Rogator', async () => {
   const calls = [];
   const manager = new ProviderManager({
     rogator: {
@@ -52,11 +63,15 @@ test('Qwen gateway and chat.qwen.ai capability models route only to Rogator', as
       { id: 'qwen.image.web', provider: 'rogator', displayName: 'Qwen Web Image' }
     ]
   });
-  for (const model of ['qwen.gateway.3.8-max', 'qwen.text.web', 'qwen.text.web.3.8-max', 'qwen.text.web.3.7-plus', 'qwen.search.web', 'qwen.image.web']) {
+	assert.equal(providerFromModel('qwen.text.web.3.8-max'), 'qwen');
+	assert.equal(providerFromModel('qwen.text.web.3.7-plus'), 'qwen');
+	assert.equal(providerFromModel('qwen.search.web'), 'rogator');
+	assert.equal(providerFromModel('qwen.image.web'), 'rogator');
+	for (const model of ['qwen.gateway.3.8-max', 'qwen.search.web', 'qwen.image.web']) {
     const result = await manager.complete({ model });
     assert.equal(result.content, 'gateway ok');
   }
-  assert.deepEqual(calls, ['qwen.gateway.3.8-max', 'qwen.text.web', 'qwen.text.web.3.8-max', 'qwen.text.web.3.7-plus', 'qwen.search.web', 'qwen.image.web']);
+	assert.deepEqual(calls, ['qwen.gateway.3.8-max', 'qwen.search.web', 'qwen.image.web']);
   assert.equal(manager.listModels()[0].owned_by, 'rogator');
   assert.equal(manager.status().qwen_gateway.deepseek_enabled, false);
   assert.equal(await manager.stop({ model: 'qwen.gateway.3.8-max', run_id: 'run-gateway' }), true);
@@ -102,7 +117,8 @@ test('provider pool defaults and URL ownership validation are strict', async () 
   assert.equal(manager.status().chatgpt.max, 2);
   assert.equal(manager._validWebUrl('deepseek', 'https://chat.deepseek.com/a/chat/s/abc'), true);
   assert.equal(manager._validWebUrl('deepseek', 'https://chat.deepseek.com.evil.test/a/chat/s/abc'), false);
-  assert.equal(manager._validWebUrl('qwen', 'https://www.qianwen.com/chat/abc'), true);
+	assert.equal(manager._validWebUrl('qwen', 'https://www.qianwen.com/chat/abc'), true);
+	assert.equal(manager._validWebUrl('qwen', 'https://chat.qwen.ai/c/abc'), true);
   assert.equal(manager._validWebUrl('qwen', 'https://www.qianwen.com.evil.test/chat/abc'), false);
   assert.equal(manager._validWebUrl('chatgpt', 'https://chatgpt.com/c/abc'), true);
   assert.equal(manager._validWebUrl('chatgpt', 'https://chatgpt.com/c/WEB:temporary-id'), false);
@@ -523,10 +539,10 @@ test('ChatGPT login accepts UI and model aliases', async () => {
   await manager.close();
 });
 
-test('Qwen maximum is clamped to the configured 1-16 range', async () => {
+test('Qwen page pool defaults to two and clamps explicit values to 1-16', async () => {
   const low = new ProviderManager({ qwenMax: 0, webFactories: { deepseek: async () => ({}), qwen: async () => ({}) } });
   const high = new ProviderManager({ qwenMax: 100, webFactories: { deepseek: async () => ({}), qwen: async () => ({}) } });
-  assert.equal(low.status().qwen.max, 8);
+	assert.equal(low.status().qwen.max, 2);
   assert.equal(high.status().qwen.max, 16);
   await low.close();
   await high.close();

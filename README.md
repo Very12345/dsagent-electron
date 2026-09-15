@@ -104,10 +104,12 @@ noVNC 中完成登录。DSH 会得到四个显式工具，普通模式可用，�
 
 DSH 模型选择器提供 `qwen.text.web.3.8-max` 和
 `qwen.text.web.3.7-plus`。旧 `qwen.text.web` 仅作为已有会话的隐藏兼容
-别名保留。两个文本模型都使用 SSE，并将思考增量作为 `reasoning_content`
-传给 DSH；可选档位为关闭、低、中、高。`qwen.search.web` 与
+别名保留。两个文本模型通过真实页面选择模型、输入并发送，正文与思考从该页面产生的
+`/api/v2/chat/completions` 原始 SSE 捕获，不读取 DOM 回复，也不调用系统剪贴板；
+页面文本池默认最多并行 2 路。思考增量作为 `reasoning_content` 传给 DSH；
+可选档位为关闭、低、中、高。`qwen.search.web` 与
 `qwen.image.web` 仅是插件调用 Runtime 时使用的内部能力端点，不进入
-DSH 的 LLM 模型选择器。生图的非流式响应会同时在顶层
+DSH 的 LLM 模型选择器，搜索、生图和语音暂时继续使用专用 Rogator 通道。生图的非流式响应会同时在顶层
 `images` 和 `choices[0].message.images` 返回图片 URL；流式响应在最终
 `delta.images` 中返回。语音输入使用认证后的
 `POST /api/qwen/voice/transcriptions`，JSON 字段为 `audio_base64`、

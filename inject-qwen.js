@@ -46,6 +46,9 @@
 
     var QWEN_WEB_MODEL_LABELS = {
         'qwen.image.web': 'Qwen3.8-Max',
+		'qwen.text.web': 'Qwen3.7-Plus',
+		'qwen.text.web.3.8-max': 'Qwen3.8-Max',
+		'qwen.text.web.3.7-plus': 'Qwen3.7-Plus',
         'qwen.default': 'Qwen3.7-千问',
         'qwen.3.7': 'Qwen3.7-千问',
         'qwen.3.8-max': 'Qwen3.8-Max',
@@ -70,6 +73,27 @@
             var text = normalizedLabel(candidates[i].innerText || candidates[i].textContent);
             if (visibleElement(candidates[i]) && /^(?:Qwen|千问)/i.test(text)) return candidates[i];
         }
+		// Current chat.qwen.ai no longer exposes aria-haspopup="dialog" on the
+		// model trigger. Find the smallest visible Qwen-labelled clickable node
+		// (or its clickable ancestor) instead of relying on generated classes.
+		var labelled = document.querySelectorAll('button,[role="button"],[aria-haspopup],div,span');
+		var best = null, bestArea = Infinity;
+		for (var j = 0; j < labelled.length; j++) {
+			var label = normalizedLabel(labelled[j].innerText || labelled[j].textContent);
+			if (!/^(?:Qwen|千问)[\w.\- ]{0,40}$/i.test(label) || !visibleElement(labelled[j])) continue;
+			var node = labelled[j];
+			for (var depth = 0; node && depth < 5; depth++, node = node.parentElement) {
+				var role = node.getAttribute && node.getAttribute('role');
+				var popup = node.getAttribute && node.getAttribute('aria-haspopup');
+				var cls = typeof node.className === 'string' ? node.className : '';
+				if (node.tagName !== 'BUTTON' && role !== 'button' && !popup && !/cursor-pointer|select|trigger/i.test(cls)) continue;
+				var rect = node.getBoundingClientRect();
+				var area = rect.width * rect.height;
+				if (area > 0 && area < bestArea) { best = node; bestArea = area; }
+				break;
+			}
+		}
+		if (best) return best;
         return null;
     }
 

@@ -111,7 +111,7 @@ test('one persistent Edge context is reused per provider while workers get separ
     assert.equal(qwen.webContents.getURL(), 'https://chat.qwen.ai/');
     assert.ok(f.launches[0].scripts.some((script) => String(script).includes('__webagentRawCompletionAfter')));
     assert.ok(f.launches[0].scripts.some((script) => String(script).includes('__webagentResetRawCompletions')));
-    assert.ok(!f.launches[1].scripts.some((script) => String(script).includes('__webagentRawCompletionAfter')));
+	assert.ok(f.launches[1].scripts.some((script) => String(script).includes('__webagentRawCompletionAfter')));
   } finally { await cleanup(f); }
 });
 
@@ -366,6 +366,24 @@ test('DeepSeek raw SSE cursor excludes a response whose request began before res
   assert.equal(current.seq, 2);
   assert.equal(current.url, continueUrl);
   assert.match(current.text, /event: close/);
+});
+
+test('Qianwen page worker captures its native completion SSE after reset', async () => {
+	const page = new MockPage({});
+	page.context = () => null;
+	page.evaluate = async (source) => String(source).includes('__webagentResetRawCompletions') ? 0 : null;
+	const worker = new PlaywrightProviderWorker({ navigationTimeout: 1000, _forgetWorker: () => {} }, 'qwen', 'profile', page);
+	await worker.ready();
+	worker.cdpSession = { send: async () => ({}) };
+	const url = 'https://chat.qwen.ai/api/v2/chat/completions?chat_id=abc';
+	const cursor = await worker.resetRawCompletionStreams();
+	worker._trackCdpRequest({ requestId: 'qwen-new', request: { url } });
+	await worker._beginCdpResponse({ requestId: 'qwen-new', response: { url, status: 200, mimeType: 'text/event-stream' } });
+	worker._appendCdpResponse({ requestId: 'qwen-new', data: Buffer.from('data: {"choices":[{"delta":{"phase":"answer","content":"OK"}}]}\n\ndata: [DONE]\n\n').toString('base64') });
+	const current = await worker.completionStreamAfter(cursor);
+	assert.equal(current.url, url);
+	assert.equal(current.logicalDone, true);
+	assert.match(current.text, /"content":"OK"/);
 });
 
 test('getBrowserCredentials combines isolated cookies and storage without reading a system profile', async () => {

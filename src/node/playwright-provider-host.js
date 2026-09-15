@@ -25,6 +25,20 @@ const PROVIDERS = Object.freeze({
   }
 });
 
+function isCompletionUrl(provider, value) {
+	const url = String(value || '');
+	if (provider === 'deepseek') return /\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(url);
+	if (provider === 'qwen') return /\/api\/v2\/chat\/completions(?:\?|$)/i.test(url);
+	return false;
+}
+
+function completionLooksDone(provider, value) {
+	const text = String(value || '');
+	return provider === 'qwen'
+		? /data:\s*\[DONE\]|response\.stopped/i.test(text)
+		: /\nevent:\s*close(?:\n|$)/i.test(text);
+}
+
 async function pageHasVisibleLoginControl(page) {
   if (!page || typeof page.frames !== 'function') return false;
   for (const frame of page.frames()) {
@@ -382,7 +396,7 @@ class PlaywrightProviderWorker {
   }
 
   async _startCdpCapture() {
-    if (this.provider !== 'deepseek') return false;
+	if (this.provider !== 'deepseek' && this.provider !== 'qwen') return false;
     try {
       const context = this.page && typeof this.page.context === 'function' ? this.page.context() : null;
       if (!context || typeof context.newCDPSession !== 'function') return false;
@@ -401,7 +415,7 @@ class PlaywrightProviderWorker {
   _trackCdpRequest(event) {
     const request = event && event.request || {};
     const url = String(request.url || '');
-    if (!/\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(url)) return;
+	if (!isCompletionUrl(this.provider, url)) return;
     this.cdpRequestMeta.set(event.requestId, {
       seq: ++this.cdpRequestSequence,
       url,
@@ -412,7 +426,7 @@ class PlaywrightProviderWorker {
   async _beginCdpResponse(event) {
     const response = event && event.response || {};
     const url = String(response.url || '');
-    if (!/\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(url)) return;
+	if (!isCompletionUrl(this.provider, url)) return;
     const requestMeta = this.cdpRequestMeta.get(event.requestId);
     const requestSeq = requestMeta && requestMeta.seq || ++this.cdpRequestSequence;
     this.cdpSequence = Math.max(this.cdpSequence, requestSeq);
@@ -443,7 +457,7 @@ class PlaywrightProviderWorker {
     try {
       record.text += record.decoder.decode(Buffer.from(String(base64 || ''), 'base64'), { stream: true });
       if (record.text.length > 16 * 1024 * 1024) record.text = record.text.slice(-16 * 1024 * 1024);
-      if (/\nevent:\s*close(?:\n|$)/i.test(record.text)) record.logicalDone = true;
+	  if (completionLooksDone(this.provider, record.text)) record.logicalDone = true;
     } catch (error) { record.error = error && error.message || String(error); }
   }
 
@@ -468,10 +482,10 @@ class PlaywrightProviderWorker {
   async _captureResponse(response) {
     try {
       const url = String(response.url ? response.url() : '');
-      if (!url || !/deepseek\.com/i.test(url)) return;
+	  if (!url || !isCompletionUrl(this.provider, url)) return;
       const headers = typeof response.allHeaders === 'function' ? await response.allHeaders() : (response.headers ? response.headers() : {});
       const contentType = String(headers && headers['content-type'] || '');
-      const candidate = /\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(url) && /event-stream/i.test(contentType);
+	  const candidate = isCompletionUrl(this.provider, url) && /event-stream/i.test(contentType);
       if (!candidate) return;
       const record = {
         url,
@@ -498,7 +512,7 @@ class PlaywrightProviderWorker {
   getRawResponses() { return this.rawResponses.slice(); }
   rawResponseCursor() { return this.rawResponses.length; }
   completionResponseAfter(cursor) {
-    return this.rawResponses.slice(Math.max(0, Number(cursor) || 0)).filter((record) => /\/api\/v0\/chat\/(?:completion|continue)(?:\?|$)/i.test(record.url)).slice(-1)[0] || null;
+	return this.rawResponses.slice(Math.max(0, Number(cursor) || 0)).filter((record) => isCompletionUrl(this.provider, record.url)).slice(-1)[0] || null;
   }
   async rawStreamCursor() {
     let page = 0;
@@ -775,14 +789,22 @@ class PlaywrightProviderHost {
         Object.defineProperty(window, 'electronAPI', { configurable: true, value: api });
       })();`);
     }
-    if (provider === 'deepseek') {
+    if (provider === 'deepseek' || provider === 'qwen') {
+	  const completionPattern = provider === 'deepseek'
+		? '\\/api\\/v0\\/chat\\/(?:completion|continue)(?:\\?|$)'
+		: '\\/api\\/v2\\/chat\\/completions(?:\\?|$)';
+	  const completionDonePattern = provider === 'deepseek'
+		? '\\nevent:\\s*close(?:\\n|$)'
+		: 'data:\\s*\\[DONE\\]|response\\.stopped';
       // Installed before the application scripts run. Reading a cloned fetch
       // body exposes the provider's original SSE incrementally without
       // delaying or consuming the response used by DeepSeek's own UI.
       await context.addInitScript(`(function(){
         if(window.__webagentRawCompletionInstalled||typeof window.fetch!=='function')return;
         window.__webagentRawCompletionInstalled=true;
-        var originalFetch=window.fetch;
+		var originalFetch=window.fetch;
+		var completionPattern=new RegExp(${JSON.stringify(completionPattern)},'i');
+		var completionDonePattern=new RegExp(${JSON.stringify(completionDonePattern)},'i');
         var sequence=0;
         var records=[];
         window.__webagentRawCompletionCursor=function(){return sequence;};
@@ -794,7 +816,7 @@ class PlaywrightProviderHost {
         window.fetch=async function(){
           var args=Array.prototype.slice.call(arguments);
           var requestUrl=String(args[0]&&(args[0].url||args[0])||'');
-          var isCompletion=/\\/api\\/v0\\/chat\\/(?:completion|continue)(?:\\?|$)/i.test(requestUrl);
+		  var isCompletion=completionPattern.test(requestUrl);
           var record=isCompletion?{seq:++sequence,url:requestUrl,text:'',done:false,logicalDone:false,startedAt:Date.now()}:null;
           if(record){records.push(record);if(records.length>4)records.splice(0,records.length-4);}
           var response;
@@ -802,24 +824,24 @@ class PlaywrightProviderHost {
           catch(error){if(record){record.error=error&&error.message||String(error);record.done=true;record.finishedAt=Date.now();}throw error;}
           try{
             var url=String(response.url||args[0]&&(args[0].url||args[0])||'');
-            if(!/\\/api\\/v0\\/chat\\/(?:completion|continue)(?:\\?|$)/i.test(url))return response;
+			if(!completionPattern.test(url))return response;
             if(!record){record={seq:++sequence,url:url,text:'',done:false,logicalDone:false,startedAt:Date.now()};records.push(record);if(records.length>4)records.splice(0,records.length-4);}
             record.url=url;
             var clone=response.clone();
             Promise.resolve().then(async function(){
               try{
                 var reader=clone.body&&clone.body.getReader?clone.body.getReader():null;
-                if(!reader){record.text=await clone.text();record.logicalDone=/\\nevent:\\s*close(?:\\n|$)/i.test(record.text);return;}
+				if(!reader){record.text=await clone.text();record.logicalDone=completionDonePattern.test(record.text);return;}
                 var decoder=new TextDecoder();
                 while(true){
                   var item=await reader.read();
                   if(item.done)break;
                   record.text+=decoder.decode(item.value,{stream:true});
                   if(record.text.length>16777216)record.text=record.text.slice(-16777216);
-                  if(/\\nevent:\\s*close(?:\\n|$)/i.test(record.text))record.logicalDone=true;
+				  if(completionDonePattern.test(record.text))record.logicalDone=true;
                 }
                 record.text+=decoder.decode();
-                if(/\\nevent:\\s*close(?:\\n|$)/i.test(record.text))record.logicalDone=true;
+				if(completionDonePattern.test(record.text))record.logicalDone=true;
               }catch(error){record.error=error&&error.message||String(error);}
               finally{record.done=true;record.finishedAt=Date.now();}
             });
