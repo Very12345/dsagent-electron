@@ -161,6 +161,37 @@ function createQwenServer(qwenViewRef) {
         const view = getView();
         const page = view && view.page;
         if (page && typeof page.locator === 'function') {
+            // Current chat.qwen.ai keeps a generic hidden input under the
+            // composer mode menu. Calling setInputFiles on that dormant input
+            // is accepted by Chromium but ignored by the app. Open the real
+            // attachment action and satisfy its FileChooser whenever possible.
+            if (typeof page.waitForEvent === 'function' && typeof page.getByText === 'function') {
+                try {
+                    if (page.keyboard && typeof page.keyboard.press === 'function') await page.keyboard.press('Escape').catch(() => {});
+                    const trigger = page.locator('[aria-label="Select Mode"]').first();
+                    if (await trigger.count()) {
+                        await trigger.click();
+                        if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(250);
+                        const labels = ['Upload attachment', 'Upload file', 'Upload files', '上传附件', '上传文件'];
+                        let action = null;
+                        for (const label of labels) {
+                            const candidate = page.getByText(label, { exact: false }).first();
+                            if (await candidate.count() && await candidate.isVisible().catch(() => false)) { action = candidate; break; }
+                        }
+                        if (action) {
+                            const chooserPromise = page.waitForEvent('filechooser', { timeout: 5000 });
+                            await action.click();
+                            const chooser = await chooserPromise;
+                            await chooser.setFiles(payloads);
+                            if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(3000);
+                            return { success: true, count: payloads.length, method: 'filechooser' };
+                        }
+                    }
+                } catch (_) {
+                    // Qwen occasionally changes menu wording. Fall back to the
+                    // input belonging to the same composer component below.
+                }
+            }
             let input = page.locator('input[type="file"][accept*="image" i]').first();
             let count = await input.count();
             if (!count) {
@@ -181,8 +212,8 @@ function createQwenServer(qwenViewRef) {
             }
             if (!count) return { success: false, error: 'Qwen file input not found' };
             await input.setInputFiles(payloads);
-            if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(500);
-            return { success: true, count: payloads.length };
+            if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(3000);
+            return { success: true, count: payloads.length, method: 'input' };
         }
         // Compatibility path for an Electron-style view without direct
         // Playwright access. Production page workers use setInputFiles above.

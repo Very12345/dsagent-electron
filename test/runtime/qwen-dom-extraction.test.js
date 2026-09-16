@@ -335,3 +335,37 @@ test('Qianwen server uploads message files before invoking page sendMessage', as
   assert.equal(uploaded[0].buffer.toString(), 'hello');
   assert.match(executed, /return await window\.__qwen\.sendMessage/);
 });
+
+test('Qianwen server prefers the live composer file chooser over its dormant hidden input', async () => {
+  let chooserFiles = null;
+  let triggerClicks = 0;
+  let actionClicks = 0;
+  const trigger = { first() { return this; }, count: async () => 1, click: async () => { triggerClicks += 1; } };
+  const action = {
+    first() { return this; }, count: async () => 1,
+    isVisible: async () => true,
+    click: async () => { actionClicks += 1; }
+  };
+  const view = {
+    page: {
+      locator: (selector) => selector.includes('Select Mode') ? trigger : { first() { return this; }, count: async () => 1, setInputFiles: async () => { throw new Error('dormant input used'); } },
+      getByText: () => action,
+      waitForEvent: async (name) => {
+        assert.equal(name, 'filechooser');
+        return { setFiles: async (files) => { chooserFiles = files; } };
+      },
+      waitForTimeout: async () => {},
+      keyboard: { press: async () => {} }
+    },
+    webContents: { isDestroyed: () => false, executeJavaScript: async () => ({ success: true }) }
+  };
+  const server = require('../../server-qwen').createQwenServer(view);
+  const result = await server.invoke('qwen.text.web.3.8-max', 'uploadFiles', {
+    files: [{ name: 'vision.png', mime: 'image/png', data: 'aGVsbG8=' }]
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.method, 'filechooser');
+  assert.equal(triggerClicks, 1);
+  assert.equal(actionClicks, 1);
+  assert.equal(chooserFiles[0].name, 'vision.png');
+});
