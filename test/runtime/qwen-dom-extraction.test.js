@@ -306,7 +306,17 @@ test('Qianwen upload bridge reconstructs base64 bytes and dispatches a real file
 
 test('Qianwen server uploads message files before invoking page sendMessage', async () => {
   let executed = '';
+  let uploaded = null;
+  const fileLocator = {
+    first() { return this; },
+    count: async () => 1,
+    setInputFiles: async (files) => { uploaded = files; }
+  };
   const view = {
+    page: {
+      locator: () => fileLocator,
+      waitForTimeout: async () => {}
+    },
     webContents: {
       isDestroyed: () => false,
       executeJavaScript: async (code) => { executed = code; return { success: true }; }
@@ -319,7 +329,9 @@ test('Qianwen server uploads message files before invoking page sendMessage', as
     files: [{ name: 'puzzle.jpg', mime: 'image/jpeg', data: 'aGVsbG8=' }]
   });
   assert.equal(result.success, true);
-  assert.match(executed, /uploadFiles/);
-  assert.match(executed, /puzzle\.jpg/);
-  assert.ok(executed.indexOf('uploadResult = await window.__qwen.uploadFiles') < executed.indexOf('return await window.__qwen.sendMessage'));
+  assert.equal(uploaded.length, 1);
+  assert.equal(uploaded[0].name, 'puzzle.jpg');
+  assert.equal(uploaded[0].mimeType, 'image/jpeg');
+  assert.equal(uploaded[0].buffer.toString(), 'hello');
+  assert.match(executed, /return await window\.__qwen\.sendMessage/);
 });

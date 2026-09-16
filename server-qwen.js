@@ -147,6 +147,51 @@ function createQwenServer(qwenViewRef) {
         return await v.webContents.executeJavaScript(code, true);
     }
 
+    async function uploadFilesToPage(files) {
+        const rows = Array.isArray(files) ? files : [];
+        if (!rows.length) return { success: true, count: 0 };
+        const payloads = rows.map((file, index) => {
+            if (!file || !file.data) throw new Error('Missing base64 data for ' + (file && file.name || 'file ' + (index + 1)));
+            return {
+                name: file.name || 'upload-' + (index + 1),
+                mimeType: file.mime || 'application/octet-stream',
+                buffer: Buffer.from(String(file.data).replace(/\s/g, ''), 'base64')
+            };
+        });
+        const view = getView();
+        const page = view && view.page;
+        if (page && typeof page.locator === 'function') {
+            let input = page.locator('input[type="file"][accept*="image" i]').first();
+            let count = await input.count();
+            if (!count) {
+                input = page.locator('input[type="file"]').first();
+                count = await input.count();
+            }
+            if (!count) {
+                await execJs(`(async function(){
+                    if (!window.__qwen || !window.__qwen.revealFileInput) return false;
+                    return !!(await window.__qwen.revealFileInput());
+                })();`);
+                input = page.locator('input[type="file"][accept*="image" i]').first();
+                count = await input.count();
+                if (!count) {
+                    input = page.locator('input[type="file"]').first();
+                    count = await input.count();
+                }
+            }
+            if (!count) return { success: false, error: 'Qwen file input not found' };
+            await input.setInputFiles(payloads);
+            if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(500);
+            return { success: true, count: payloads.length };
+        }
+        // Compatibility path for an Electron-style view without direct
+        // Playwright access. Production page workers use setInputFiles above.
+        return await execJs(`(async function(){
+            if (!window.__qwen || !window.__qwen.uploadFiles) return {success:false,error:'Qwen file upload bridge is unavailable'};
+            return await window.__qwen.uploadFiles(${JSON.stringify(rows)});
+        })();`);
+    }
+
 	async function resetRawCapture() {
 		const view = getView();
 		_qwenLastParsed = null;
@@ -271,41 +316,33 @@ function createQwenServer(qwenViewRef) {
 					if (!window.__qwen.selectReasoningMode) return {success:false,error:'Qwen reasoning selector is unavailable'};
                     var selectedReasoning = await window.__qwen.selectReasoningMode(${JSON.stringify(args.reasoningEffort || 'none')});
 					if (!selectedReasoning || !selectedReasoning.success) return selectedReasoning || {success:false,error:'Qwen reasoning selection failed'};
-                    var _files = ${JSON.stringify(args.files || [])};
-                    if (_files.length) {
-                        if (!window.__qwen.uploadFiles) return {success:false,error:'Qwen file upload bridge is unavailable'};
-                        var uploadResult = await window.__qwen.uploadFiles(_files);
-                        if (!uploadResult || !uploadResult.success) return uploadResult || {success:false,error:'Qwen file upload failed'};
-                    }
-                    // 4. 合并发送 userText
-                    var _ut = ${JSON.stringify(userText)};
-                    if (ready && _ut && _ut.trim()) {
-                        window.__dsagent_qwenLastUserText = _ut;
-                        if (!window.__qwen.sendMessage) {
-                            return {success:false, error:'sendMessage missing'};
-                        }
-                        // sendMessage 触发发送后 Qwen SPA 导航，JS 上下文销毁，await 永不返回
-                        // 用 Promise.race 加 3s 超时：超时视为发送已发起（点击已执行），导航是正常现象
-                        try {
-                            var sendPromise = window.__qwen.sendMessage(_ut);
-                            var result = await Promise.race([
-                                sendPromise,
-                                new Promise(function(resolve){ setTimeout(function(){ resolve({__timeout:true}); }, 3000); })
-                            ]);
-                            if (result && result.__timeout) {
-                                // 超时 = 大概率已导航，属正常，不报错
-                            } else if (!result || !result.success) {
-                                return {success:false, error:'sendMessage failed: ' + (result && result.error || '')};
-                            }
-                        } catch(e) {
-                            // 导航导致的异常也视为正常（发送已触发）
-                        }
-                    }
-                    return {success:true, url: window.location.href};
+                    return {success:true, ready:ready, url: window.location.href};
                 })();`;
                 const r = await execJs(js);
                 console.log('[server-qwen newChat] execJs returned:', JSON.stringify(r));
                 if (!r || !r.success) return { success: false, error: (r && r.error) || 'newChat failed' };
+                if (args.files && args.files.length) {
+                    const uploaded = await uploadFilesToPage(args.files);
+                    if (!uploaded || !uploaded.success) return uploaded || { success: false, error: 'Qwen file upload failed' };
+                }
+                if (r.ready && userText.trim()) {
+                    const sent = await execJs(`(async function(){
+                        if (!window.__qwen || !window.__qwen.sendMessage) return {success:false,error:'sendMessage missing'};
+                        var text = ${JSON.stringify(userText)};
+                        window.__dsagent_qwenLastUserText = text;
+                        try {
+                            var result = await Promise.race([
+                                window.__qwen.sendMessage(text),
+                                new Promise(function(resolve){ setTimeout(function(){ resolve({__timeout:true}); }, 3000); })
+                            ]);
+                            if (result && result.__timeout) return {success:true};
+                            return result || {success:false,error:'sendMessage returned no result'};
+                        } catch(e) {
+                            return {success:true,navigation:true};
+                        }
+                    })();`);
+                    if (!sent || !sent.success) return { success: false, error: 'sendMessage failed: ' + (sent && sent.error || '') };
+                }
                 return { success: true, data: { conversationUrl: r.url || '' } };
             }
 
@@ -321,11 +358,7 @@ function createQwenServer(qwenViewRef) {
             }
 
             case 'uploadFiles': {
-                const js = `(async function(){
-                    if (!window.__qwen || !window.__qwen.uploadFiles) return {success:false,error:'Qwen file upload bridge is unavailable'};
-                    return await window.__qwen.uploadFiles(${JSON.stringify(args.files || [])});
-                })();`;
-                return await execJs(js);
+                return await uploadFilesToPage(args.files || []);
             }
 
             case 'injectHistory': {
@@ -347,16 +380,14 @@ function createQwenServer(qwenViewRef) {
             case 'sendMessage': {
                 setQwenGenerating(true); // 发送消息后预期进入生成态
 				await resetRawCapture();
+                if (args.files && args.files.length) {
+                    const uploaded = await uploadFilesToPage(args.files);
+                    if (!uploaded || !uploaded.success) return uploaded || { success: false, error: 'Qwen file upload failed' };
+                }
                 const js = `(async function(){
                     if (!window.__qwen || !window.__qwen.sendMessage) return {success:false, error:'inject not ready'};
                     window.__dsagent_qwenBaseline = window.__qwen.getLastResponseText ? window.__qwen.getLastResponseText() : '';
                     window.__dsagent_qwenLastUserText = ${JSON.stringify(args.text || '')};
-                    var _files = ${JSON.stringify(args.files || [])};
-                    if (_files.length) {
-                        if (!window.__qwen.uploadFiles) return {success:false,error:'Qwen file upload bridge is unavailable'};
-                        var uploadResult = await window.__qwen.uploadFiles(_files);
-                        if (!uploadResult || !uploadResult.success) return uploadResult || {success:false,error:'Qwen file upload failed'};
-                    }
                     return await window.__qwen.sendMessage(window.__dsagent_qwenLastUserText);
                 })();`;
                 return await execJs(js);

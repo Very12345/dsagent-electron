@@ -321,6 +321,7 @@
         }
         return null;
     }
+    Q.revealFileInput = revealQwenFileInput;
 
     // Upload real bytes into Qwen's file input. The transport supplies
     // [{name, mime, data(base64)}]; merely opening the upload menu is not an
