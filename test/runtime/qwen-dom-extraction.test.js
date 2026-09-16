@@ -246,3 +246,80 @@ test('Qianwen accepts one stable generated image from the current single-image c
   assert.equal(sandbox.window.__qwen.detectResponseType().type, 'image');
   assert.equal((await sandbox.window.__qwen.waitForDrawResponse(10000)).success, true);
 });
+
+test('Qianwen upload bridge reconstructs base64 bytes and dispatches a real file selection', async () => {
+  const events = [];
+  const fileInput = {
+    files: [],
+    getAttribute(name) { return name === 'accept' ? 'image/*' : null; },
+    dispatchEvent(event) { events.push(event.type); return true; }
+  };
+  class FakeBlob {
+    constructor(parts, options) { this.parts = parts; this.type = options && options.type || ''; }
+  }
+  class FakeFile {
+    constructor(parts, name, options) { this.parts = parts; this.name = name; this.type = options && options.type || ''; }
+  }
+  class FakeDataTransfer {
+    constructor() {
+      this.files = [];
+      this.items = { add: (file) => this.files.push(file) };
+    }
+  }
+  const document = {
+    body: { innerText: '' }, documentElement: {},
+    querySelector: () => null,
+    querySelectorAll(selector) {
+      if (selector === 'input[type="file"]') return [fileInput];
+      return [];
+    }
+  };
+  const sandbox = {
+    document,
+    location: { href: 'https://chat.qwen.ai/' },
+    console: { log() {}, warn() {}, error() {} },
+    MutationObserver: class { observe() {} },
+    DataTransfer: FakeDataTransfer, Blob: FakeBlob, File: FakeFile,
+    Event: class { constructor(type) { this.type = type; } },
+    Uint8Array,
+    atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+    setTimeout, clearTimeout, setInterval: () => 1, clearInterval() {},
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    Array, Object, String, Number, Boolean, Date, Math, Promise, RegExp,
+    window: null
+  };
+  sandbox.window = sandbox;
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'inject-qwen.js'), 'utf8');
+  vm.runInNewContext(source, sandbox, { filename: 'inject-qwen.js' });
+
+  const result = await sandbox.window.__qwen.uploadFiles([{
+    name: 'puzzle.jpg', mime: 'image/jpeg', data: Buffer.from('real-image-bytes').toString('base64')
+  }]);
+  assert.equal(result.success, true);
+  assert.equal(result.count, 1);
+  assert.equal(fileInput.files.length, 1);
+  assert.equal(fileInput.files[0].name, 'puzzle.jpg');
+  assert.equal(fileInput.files[0].type, 'image/jpeg');
+  assert.deepEqual(events, ['input', 'change']);
+  assert.equal(Buffer.from(fileInput.files[0].parts[0].parts[0]).toString(), 'real-image-bytes');
+});
+
+test('Qianwen server uploads message files before invoking page sendMessage', async () => {
+  let executed = '';
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (code) => { executed = code; return { success: true }; }
+    },
+    resetRawCompletionStreams: async () => ({ cdp: 0, page: 0 })
+  };
+  const server = require('../../server-qwen').createQwenServer(view);
+  const result = await server.invoke('qwen.text.web.3.8-max', 'sendMessage', {
+    text: 'Describe the image',
+    files: [{ name: 'puzzle.jpg', mime: 'image/jpeg', data: 'aGVsbG8=' }]
+  });
+  assert.equal(result.success, true);
+  assert.match(executed, /uploadFiles/);
+  assert.match(executed, /puzzle\.jpg/);
+  assert.ok(executed.indexOf('uploadResult = await window.__qwen.uploadFiles') < executed.indexOf('return await window.__qwen.sendMessage'));
+});

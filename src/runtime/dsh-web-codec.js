@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 
 const BRIDGE_SENTINEL = 'WEBAGENT_DSH_BRIDGE_V3';
-const QWEN_NATIVE_BRIDGE_SENTINEL = 'WEBAGENT_QWEN_NATIVE_TOOLS_V1';
+const QWEN_NATIVE_BRIDGE_SENTINEL = 'WEBAGENT_QWEN_NATIVE_TOOLS_V2';
 const RUNTIME_CONTEXT_PREFIX = 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.';
 const FALLBACK_PROMPT = `${BRIDGE_SENTINEL}
 You are the model inside DeepSeek Harness. The Harness owns planning, tools, skills, approvals, subagents, memory and workspace policy; follow the messages in their supplied order.
@@ -121,7 +121,7 @@ function stateFor(messages, tools, options) {
   const ordered = orderedMessages(messages);
   const qwenNative = options && options.protocol === 'qwen-native';
   return {
-    version: qwenNative ? 4 : 3,
+    version: qwenNative ? 5 : 3,
     protocol: qwenNative ? QWEN_NATIVE_BRIDGE_SENTINEL : BRIDGE_SENTINEL,
     prompt,
     tools: toolSchemas,
@@ -171,7 +171,7 @@ function initialEnvelope(messages, tools, options) {
 
 function continuationEnvelope(messages, tools, previous, options) {
   const state = stateFor(messages, tools, options);
-  const prior = previous && (previous.version === 2 || previous.version === 3 || previous.version === 4) ? previous : {};
+  const prior = previous && (previous.version === 2 || previous.version === 3 || previous.version === 4 || previous.version === 5) ? previous : {};
   const ordered = orderedMessages(messages);
   const sources = sourceMessages(messages);
   const start = prior.version >= 3

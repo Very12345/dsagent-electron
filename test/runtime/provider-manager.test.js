@@ -12,6 +12,13 @@ test('a V3 bridge state with the temporarily omitted protocol field remains cach
   assert.equal(hasBridgeProtocolChanged({ version: 3, protocol: 'WEBAGENT_DSH_BRIDGE_V2', prompt_hash: 'same-v3-prompt' }, requested), true);
 });
 
+test('a Qwen bridge protocol upgrade rotates the remote conversation so attachments are resent', () => {
+  assert.equal(hasBridgeProtocolChanged(
+    { version: 4, protocol: 'WEBAGENT_QWEN_NATIVE_TOOLS_V1' },
+    { version: 5, protocol: 'WEBAGENT_QWEN_NATIVE_TOOLS_V2' }
+  ), true);
+});
+
 test('Harness title requests are derived locally and never lease a provider page', async () => {
 	assert.equal(localHarnessTitle([{ role: 'user', content: 'Generate the session title from this JSON array of human messages:\n[{"seq":1,"text":"修复缓存命中问题"}]' }]), '修复缓存命中问题');
 	let created = 0;

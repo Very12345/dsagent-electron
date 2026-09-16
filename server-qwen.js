@@ -172,12 +172,13 @@ function createQwenServer(qwenViewRef) {
         if (!model) return { success: false, error: 'Unknown model: ' + modelId };
 
         // 能力校验
-        if ((op === 'sendMessage' || op === 'injectHistory') && args.files && args.files.length > 0) {
+        if ((op === 'newChat' || op === 'sendMessage' || op === 'injectHistory' || op === 'uploadFiles') && args.files && args.files.length > 0) {
             const docCap = model.capabilities.file.doc;
             const imgCap = model.capabilities.file.image;
             let docCount = 0, imgCount = 0;
             for (const f of args.files) {
-                const isImg = imgCap.types.indexOf((f.ext || '').toLowerCase()) >= 0;
+                const isImg = String(f.mime || '').toLowerCase().startsWith('image/')
+                    || imgCap.types.indexOf((f.ext || '').toLowerCase()) >= 0;
                 if (isImg) {
                     imgCount++;
                     if (f.sizeMB > imgCap.maxMB) return { success: false, error: '图片 ' + f.name + ' 超过 ' + imgCap.maxMB + 'MB' };
@@ -268,8 +269,14 @@ function createQwenServer(qwenViewRef) {
                     var selectedModel = await window.__qwen.selectModel(${JSON.stringify(model.id)});
                     if (!selectedModel || !selectedModel.success) return selectedModel || {success:false,error:'Qwen model selection failed'};
 					if (!window.__qwen.selectReasoningMode) return {success:false,error:'Qwen reasoning selector is unavailable'};
-					var selectedReasoning = await window.__qwen.selectReasoningMode(${JSON.stringify(args.reasoningEffort || 'none')});
+                    var selectedReasoning = await window.__qwen.selectReasoningMode(${JSON.stringify(args.reasoningEffort || 'none')});
 					if (!selectedReasoning || !selectedReasoning.success) return selectedReasoning || {success:false,error:'Qwen reasoning selection failed'};
+                    var _files = ${JSON.stringify(args.files || [])};
+                    if (_files.length) {
+                        if (!window.__qwen.uploadFiles) return {success:false,error:'Qwen file upload bridge is unavailable'};
+                        var uploadResult = await window.__qwen.uploadFiles(_files);
+                        if (!uploadResult || !uploadResult.success) return uploadResult || {success:false,error:'Qwen file upload failed'};
+                    }
                     // 4. 合并发送 userText
                     var _ut = ${JSON.stringify(userText)};
                     if (ready && _ut && _ut.trim()) {
@@ -314,11 +321,9 @@ function createQwenServer(qwenViewRef) {
             }
 
             case 'uploadFiles': {
-                // 通过主进程 paste 机制上传（Qwen 页面 Slate 编辑器不支持直接 set files）
-                // 这里仅触发上传按钮，实际文件注入由 main.js 的 qwen-paste-image/text 处理
                 const js = `(async function(){
-                    if (!window.__qwen || !window.__qwen.uploadImage) return {success:false};
-                    return await window.__qwen.uploadImage();
+                    if (!window.__qwen || !window.__qwen.uploadFiles) return {success:false,error:'Qwen file upload bridge is unavailable'};
+                    return await window.__qwen.uploadFiles(${JSON.stringify(args.files || [])});
                 })();`;
                 return await execJs(js);
             }
@@ -346,6 +351,12 @@ function createQwenServer(qwenViewRef) {
                     if (!window.__qwen || !window.__qwen.sendMessage) return {success:false, error:'inject not ready'};
                     window.__dsagent_qwenBaseline = window.__qwen.getLastResponseText ? window.__qwen.getLastResponseText() : '';
                     window.__dsagent_qwenLastUserText = ${JSON.stringify(args.text || '')};
+                    var _files = ${JSON.stringify(args.files || [])};
+                    if (_files.length) {
+                        if (!window.__qwen.uploadFiles) return {success:false,error:'Qwen file upload bridge is unavailable'};
+                        var uploadResult = await window.__qwen.uploadFiles(_files);
+                        if (!uploadResult || !uploadResult.success) return uploadResult || {success:false,error:'Qwen file upload failed'};
+                    }
                     return await window.__qwen.sendMessage(window.__dsagent_qwenLastUserText);
                 })();`;
                 return await execJs(js);

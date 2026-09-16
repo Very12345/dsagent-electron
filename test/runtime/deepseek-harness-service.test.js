@@ -756,7 +756,7 @@ test('WebAgent DSH plugin contributes a provider-scoped webpage transport prompt
   assert.match(webText, /Preserve arguments exactly/);
   assert.ok(webText.length < 2400);
   const qwenText = section.text({ agent: { options: { provider: 'webagent', model: 'qwen.text.web.3.8-max' } } });
-  assert.match(qwenText, /WEBAGENT_QWEN_NATIVE_TOOLS_V1/);
+  assert.match(qwenText, /WEBAGENT_QWEN_NATIVE_TOOLS_V2/);
   assert.match(qwenText, /<tool_call>/);
   assert.match(qwenText, /native JSON tool-call form/);
   assert.doesNotMatch(qwenText, /<｜DSML｜tool_calls>/);

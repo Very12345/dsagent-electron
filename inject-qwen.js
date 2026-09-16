@@ -289,32 +289,84 @@
         });
     };
 
-    // 触发上传（点击上传按钮）
-    Q.uploadImage = function() {
-        return new Promise(function(resolve) {
-            var uploadBtn = document.querySelector('[class*="upload"], [class*="image-upload"], [class*="file-upload"], [class*="attach"]')
-                || findButton('上传')
-                || findButton('图片')
-                || findButton('附件');
-            var fileInput = document.querySelector('input[type="file"]');
-            if (fileInput) {
-                resolve({ success: true, fileInput: true });
-                return;
+    function qwenFileInput() {
+        var inputs = document.querySelectorAll('input[type="file"]');
+        var generic = null;
+        for (var i = 0; i < inputs.length; i++) {
+            var accept = String(inputs[i].getAttribute('accept') || '').toLowerCase();
+            if (/image|png|jpe?g|webp|gif/.test(accept)) return inputs[i];
+            if (!generic || !accept || accept === '*/*') generic = inputs[i];
+        }
+        return generic || inputs[0] || null;
+    }
+
+    function qwenAttachmentCount() {
+        return document.querySelectorAll('[class*="attachment"], [class*="upload-preview"], [class*="file-preview"], [data-testid*="attachment"], [data-testid*="upload"]').length;
+    }
+
+    async function revealQwenFileInput() {
+        var input = qwenFileInput();
+        if (input) return input;
+        var uploadBtn = document.querySelector('[class*="upload"], [class*="image-upload"], [class*="file-upload"], [class*="attach"]')
+            || findButton('上传附件')
+            || findButton('上传')
+            || findButton('图片')
+            || findButton('附件')
+            || findButton('Upload');
+        if (uploadBtn) uploadBtn.click();
+        for (var retry = 0; retry < 20; retry++) {
+            await sleep(150);
+            input = qwenFileInput();
+            if (input) return input;
+        }
+        return null;
+    }
+
+    // Upload real bytes into Qwen's file input. The transport supplies
+    // [{name, mime, data(base64)}]; merely opening the upload menu is not an
+    // upload and previously caused the model to receive metadata-only text.
+    Q.uploadFiles = async function(files) {
+        files = Array.isArray(files) ? files : [];
+        if (!files.length) return { success: true, count: 0 };
+        try {
+            var fileInput = await revealQwenFileInput();
+            if (!fileInput) return { success: false, error: 'Qwen file input not found' };
+            var beforeAttachments = qwenAttachmentCount();
+            var dt = new DataTransfer();
+            for (var fi = 0; fi < files.length; fi++) {
+                var source = files[fi] || {};
+                if (!source.data) return { success: false, error: 'Missing base64 data for ' + (source.name || ('file ' + (fi + 1))) };
+                var binary = window.atob(String(source.data).replace(/\s/g, ''));
+                var bytes = new Uint8Array(binary.length);
+                for (var bi = 0; bi < binary.length; bi++) bytes[bi] = binary.charCodeAt(bi);
+                var mime = source.mime || 'application/octet-stream';
+                var blob = new Blob([bytes], { type: mime });
+                dt.items.add(new File([blob], source.name || ('upload-' + (fi + 1)), { type: mime }));
             }
-            if (uploadBtn) {
-                uploadBtn.click();
-                setTimeout(function() {
-                    var fi = document.querySelector('input[type="file"]');
-                    if (fi) {
-                        resolve({ success: true, fileInput: true });
-                    } else {
-                        resolve({ success: false, error: 'File input not found after click' });
-                    }
-                }, 1000);
-            } else {
-                resolve({ success: false, error: 'Upload button not found' });
+            fileInput.files = dt.files;
+            fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+            // Wait for React/Qwen to consume the selection. Some revisions
+            // clear input.files after creating a preview, while others retain
+            // it, so accept either observable acknowledgement.
+            for (var wait = 0; wait < 40; wait++) {
+                await sleep(150);
+                var retained = fileInput.files && fileInput.files.length >= files.length;
+                var previewed = qwenAttachmentCount() > beforeAttachments;
+                var bodyText = String(document.body && document.body.innerText || '');
+                var named = files.some(function(item) { return item && item.name && bodyText.indexOf(item.name) >= 0; });
+                if (retained || previewed || named) return { success: true, count: files.length };
             }
-        });
+            return { success: false, error: 'Qwen did not acknowledge the selected file(s)' };
+        } catch (e) {
+            return { success: false, error: e && e.message || String(e) };
+        }
+    };
+
+    // Compatibility alias for older callers. It now requires actual bytes.
+    Q.uploadImage = function(files) {
+        return Q.uploadFiles(files || []);
     };
 
     // 查找发送按钮（精确版，只返回可用的发送按钮）
@@ -2102,7 +2154,9 @@
                 case 'stopGeneration':
                     return Q.stopGeneration();
                 case 'uploadImage':
-                    return await Q.uploadImage();
+                    return await Q.uploadImage(args.files || []);
+                case 'uploadFiles':
+                    return await Q.uploadFiles(args.files || []);
                 case 'copyLastResponse':
                     return await Q.copyLastResponse();
                 case 'checkReady':

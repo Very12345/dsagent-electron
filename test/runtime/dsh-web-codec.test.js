@@ -59,7 +59,7 @@ test('Qwen envelopes replace DSML serialization with the native JSON tool protoc
     { role: 'system', content: prompt },
     { role: 'user', content: 'Inspect the project' }
   ], tools, { protocol: 'qwen-native' });
-  assert.equal(envelope.state.version, 4);
+  assert.equal(envelope.state.version, 5);
   assert.equal(envelope.state.protocol, QWEN_NATIVE_BRIDGE_SENTINEL);
   assert.match(envelope.text, /<tool_call>/);
   assert.match(envelope.text, /native JSON tool-call form/);
