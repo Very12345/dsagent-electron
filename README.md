@@ -106,6 +106,9 @@ DSH 模型选择器提供 `qwen.text.web.3.8-max` 和
 `qwen.text.web.3.7-plus`。旧 `qwen.text.web` 仅作为已有会话的隐藏兼容
 别名保留。两个文本模型通过真实页面选择模型、输入并发送，正文与思考从该页面产生的
 `/api/v2/chat/completions` 原始 SSE 捕获，不读取 DOM 回复，也不调用系统剪贴板；
+工具调用使用 Qwen 自然的 `<tool_call>{"name","arguments"}</tool_call>` 或连续 JSON
+对象协议，再由 Runtime 按 DSH 工具 Schema 严格验证并确定性转换为 DSML；不再要求
+Qwen 模型直接生成 DSML。DeepSeek 网页模型仍使用其稳定的原生 DSML 协议。
 页面文本池默认最多并行 2 路。思考增量作为 `reasoning_content` 传给 DSH；
 当前页面实际只有 Fast、Auto、Thinking 三档，因此 DSH 只展示关闭、低、高，分别映射为
 Fast、Auto、Thinking（中英文标签均兼容；旧会话中的 medium 仍兼容为 Thinking，但不再对外展示）。

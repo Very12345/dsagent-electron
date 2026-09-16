@@ -1,6 +1,6 @@
 {
   "name": "webagent-dsh-core",
-  "version": "7.2.9",
+  "version": "7.3.0",
   "description": "DeepSeek Harness core with local DeepSeek and Qwen webpage transports",
   "author": "WebAgent Contributors",
   "main": "src/node/dsh-core.js",

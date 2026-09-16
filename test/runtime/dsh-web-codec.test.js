@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   BRIDGE_SENTINEL,
+  QWEN_NATIVE_BRIDGE_SENTINEL,
   initialEnvelope,
   continuationEnvelope,
   orderedMessages,
@@ -51,6 +52,18 @@ test('a complete external preset keeps its system prompt ahead of the webpage wi
   assert.match(envelope.text, /<｜DSML｜tool_calls>/);
   assert.doesNotMatch(envelope.text, /dsh-tool-call/);
   assert.match(envelope.text, /no alternative tool protocol/);
+});
+
+test('Qwen envelopes replace DSML serialization with the native JSON tool protocol', () => {
+  const envelope = initialEnvelope([
+    { role: 'system', content: prompt },
+    { role: 'user', content: 'Inspect the project' }
+  ], tools, { protocol: 'qwen-native' });
+  assert.equal(envelope.state.version, 4);
+  assert.equal(envelope.state.protocol, QWEN_NATIVE_BRIDGE_SENTINEL);
+  assert.match(envelope.text, /<tool_call>/);
+  assert.match(envelope.text, /native JSON tool-call form/);
+  assert.match(envelope.text, /REPLACES any earlier DSML serialization instruction/);
 });
 
 test('continuation preserves assistant calls and parallel tool results as an ordered delta', () => {

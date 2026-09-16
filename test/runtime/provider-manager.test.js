@@ -56,6 +56,19 @@ test('malformed DSML intent is distinguished from a valid schema-shaped tool cal
 	const nativeQwen = normalizeLegacyToolCall('<tool_call>\n<function=pwsh>\n<parameter=command>\npwd</parameter>\n<parameter=description>inspect</parameter>\n</function>\n</tool_call>', tools);
 	assert.match(nativeQwen.dsml, /<｜DSML｜invoke name="pwsh">/);
 	assert.match(nativeQwen.dsml, /"description":"inspect"/);
+	const parallelQwen = normalizeLegacyToolCall([
+		'<tool_call>',
+		'{"name":"pwsh","arguments":{"command":"pwd","description":"first"}}',
+		'</tool_call>',
+		'{"name":"pwsh","parameters":{"command":"ls","description":"second"}}'
+	].join('\n'), tools);
+	assert.equal(parallelQwen.calls.length, 2);
+	assert.equal((parallelQwen.dsml.match(/<｜DSML｜invoke name="pwsh">/g) || []).length, 2);
+	assert.match(parallelQwen.dsml, /"description":"second"/);
+	const qwenRepair = dshToolRepairPrompt({ reason: 'missing required argument(s): file_path', toolName: 'read' }, readTools, { attempt: 2, maxAttempts: 2, protocol: 'qwen-native' });
+	assert.match(qwenRepair, /<tool_call>/);
+	assert.match(qwenRepair, /No DSML/);
+	assert.doesNotMatch(qwenRepair, /<｜DSML｜tool_calls>/);
 	assert.equal(normalizeLegacyToolCall('{"name":"pwsh","arguments":{"command":"pwd"}}', tools), null, 'missing required fields are never guessed');
 });
 

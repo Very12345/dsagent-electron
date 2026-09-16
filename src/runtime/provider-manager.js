@@ -160,37 +160,41 @@ function jsonObjectsInText(value, limit) {
 function normalizeLegacyToolCall(output, tools) {
 	const definitions = new Map((Array.isArray(tools) ? tools : []).map((item) => [String(item.name || ''), item]));
 	const text = String(output || '');
-	const functionMatch = /<function\s*=\s*([^>\s]+)>([\s\S]*?)<\/function>/i.exec(text);
-	if (functionMatch) {
+	const calls = [];
+	let marker = -1;
+	const add = (name, args, index) => {
+	  const definition = definitions.get(String(name || ''));
+	  if (!definition || obviousSchemaError(args, definition)) return false;
+	  calls.push({ name: String(name), arguments: args });
+	  marker = marker < 0 ? index : Math.min(marker, index);
+	  return true;
+	};
+	const functionPattern = /<function\s*=\s*([^>\s]+)>([\s\S]*?)<\/function>/gi;
+	let functionMatch;
+	while ((functionMatch = functionPattern.exec(text)) !== null) {
 	  const name = functionMatch[1];
 	  const definition = definitions.get(name);
-	  if (definition) {
-		const args = {};
-		const properties = definition.parameters && definition.parameters.properties || {};
-		const parameterPattern = /<parameter\s*=\s*([^>\s]+)>([\s\S]*?)<\/parameter>/gi;
-		let parameter;
-		while ((parameter = parameterPattern.exec(functionMatch[2])) !== null) {
-		  const key = parameter[1];
-		  const raw = String(parameter[2] || '').replace(/^\s*\n|\n\s*$/g, '');
-		  const expected = properties[key] && properties[key].type;
-		  let value = raw;
-		  if (expected && expected !== 'string') {
-			try { value = JSON.parse(raw); } catch (_) {}
-		  }
-		  args[key] = value;
+	  if (!definition) continue;
+	  const args = {};
+	  const properties = definition.parameters && definition.parameters.properties || {};
+	  const parameterPattern = /<parameter\s*=\s*([^>\s]+)>([\s\S]*?)<\/parameter>/gi;
+	  let parameter;
+	  while ((parameter = parameterPattern.exec(functionMatch[2])) !== null) {
+		const key = parameter[1];
+		const raw = String(parameter[2] || '').replace(/^\s*\n|\n\s*$/g, '');
+		const expected = properties[key] && properties[key].type;
+		let value = raw;
+		if (expected && expected !== 'string') {
+		  try { value = JSON.parse(raw); } catch (_) {}
 		}
-		if (!obviousSchemaError(args, definition)) {
-		  return {
-			name,
-			arguments: args,
-			marker: functionMatch.index,
-			dsml: '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="' + name + '">\n'
-			  + '<｜DSML｜parameter name="arguments" string="false">' + JSON.stringify(args) + '</｜DSML｜parameter>\n'
-			  + '</｜DSML｜invoke>\n</｜DSML｜tool_calls>'
-		  };
-		}
+		args[key] = value;
 	  }
+	  add(name, args, functionMatch.index);
 	}
+	// Qwen3.8 naturally emits one JSON object per <tool_call> block, while
+	// Qwen3.7 often omits the wrapper and emits consecutive bare objects. Scan
+	// every object, accept only advertised tool names, and validate every call
+	// against its exact schema before compiling the batch to canonical DSML.
 	for (const candidate of jsonObjectsInText(output, 20)) {
 	  const object = candidate.value;
 	  if (!object || typeof object !== 'object' || Array.isArray(object)) continue;
@@ -201,17 +205,26 @@ function normalizeLegacyToolCall(output, tools) {
 	  if (typeof args === 'string') {
 		try { args = JSON.parse(args); } catch (_) { continue; }
 	  }
-	  if (obviousSchemaError(args, definition)) continue;
-	  return {
-		name,
-		arguments: args,
-		marker: candidate.start,
-		dsml: '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="' + name + '">\n'
-		  + '<｜DSML｜parameter name="arguments" string="false">' + JSON.stringify(args) + '</｜DSML｜parameter>\n'
-		  + '</｜DSML｜invoke>\n</｜DSML｜tool_calls>'
-	  };
+	  add(name, args, candidate.start);
 	}
-	return null;
+	if (!calls.length) return null;
+	const unique = [];
+	const seen = new Set();
+	for (const call of calls) {
+	  const signature = call.name + '\n' + JSON.stringify(call.arguments);
+	  if (seen.has(signature)) continue;
+	  seen.add(signature);
+	  unique.push(call);
+	}
+	return {
+	  name: unique[0].name,
+	  arguments: unique[0].arguments,
+	  calls: unique,
+	  marker,
+	  dsml: '<｜DSML｜tool_calls>\n' + unique.map((call) => '<｜DSML｜invoke name="' + call.name + '">\n'
+		+ '<｜DSML｜parameter name="arguments" string="false">' + JSON.stringify(call.arguments) + '</｜DSML｜parameter>\n'
+		+ '</｜DSML｜invoke>').join('\n') + '\n</｜DSML｜tool_calls>'
+	};
 }
 
 function dshToolRepairPrompt(assessment, tools, options) {
@@ -221,6 +234,13 @@ function dshToolRepairPrompt(assessment, tools, options) {
   const schema = target && target.parameters ? JSON.stringify(target.parameters).slice(0, 4000) : '';
   const attempt = Math.max(1, Number(options.attempt) || 1);
   const maxAttempts = Math.max(attempt, Number(options.maxAttempts) || MAX_TOOL_PROTOCOL_REPAIRS);
+  if (options.protocol === 'qwen-native') return `QWEN_TOOL_REPAIR ${attempt}/${maxAttempts}: The previous native tool call is invalid.
+Exact diagnosis: ${assessment.reason}.
+${target ? 'Target tool: ' + target.name + '. Required JSON Schema: ' + schema + '\n' : ''}${attempt > 1 ? 'The previous correction repeated an invalid structure. Rebuild the JSON object from the schema instead of copying it.\n' : ''}Resend ONLY one or more native Qwen tool-call blocks; do not repeat the task or add prose. Use exactly:
+<tool_call>
+{"name":"tool_name","arguments":{"required_argument":"value"}}
+</tool_call>
+Use one block per call. The arguments (or parameters) value MUST be a JSON object. Allowed tool names: ${names || '(none)'}. Use exact required field names from the schema. No DSML, Python-like calls, or Markdown fence.`;
   return `FORMAT_REPAIR ${attempt}/${maxAttempts}: The previous tool call is invalid.
 Exact diagnosis: ${assessment.reason}.
 ${target ? 'Target tool: ' + target.name + '. Required JSON Schema: ' + schema + '\n' : ''}${attempt > 1 ? 'The previous correction repeated an invalid structure. Rebuild the call from the schema instead of copying it.\n' : ''}Resend ONLY the corrected tool call; do not repeat the task or add prose. Use exactly:
@@ -635,7 +655,8 @@ class ProviderManager {
       }
     }
     const accountChanged = existing.provider === provider && String(existing.account_id || 'default') !== String(selectedAccount);
-    const requestedBridgeState = context.run.prompt_passthrough ? stateFor(context.messages, context.run.provider_tools) : null;
+    const bridgeCodecOptions = provider === 'qwen' ? { protocol: 'qwen-native' } : { protocol: 'dsml' };
+    const requestedBridgeState = context.run.prompt_passthrough ? stateFor(context.messages, context.run.provider_tools, bridgeCodecOptions) : null;
     const bridgeProtocolChanged = hasBridgeProtocolChanged(existing.dsh_bridge, requestedBridgeState);
     // A DSH user may switch the model on an existing Harness session. Remote
     // URLs are provider-owned; never navigate Qianwen/ChatGPT workers to the
@@ -683,8 +704,8 @@ class ProviderManager {
       let dshEnvelope = null;
       if (context.run.prompt_passthrough) {
         dshEnvelope = url
-          ? continuationEnvelope(context.messages, context.run.provider_tools, existing.dsh_bridge)
-          : initialEnvelope(context.messages, context.run.provider_tools);
+          ? continuationEnvelope(context.messages, context.run.provider_tools, existing.dsh_bridge, bridgeCodecOptions)
+          : initialEnvelope(context.messages, context.run.provider_tools, bridgeCodecOptions);
         text = dshEnvelope.text;
         const envelopeMessages = dshEnvelope.envelopeMessages || [dshEnvelope.message];
         files = envelopeMessages.flatMap((message) => messagePayload(message && message.content).files);
@@ -928,7 +949,7 @@ class ProviderManager {
           for (let repairAttempt = 1; repairAttempt <= MAX_TOOL_PROTOCOL_REPAIRS && assessment; repairAttempt += 1) {
             if (context.onStatus) context.onStatus('工具调用格式错误，正在快速修复（' + String(repairAttempt) + '/' + String(MAX_TOOL_PROTOCOL_REPAIRS) + '）：' + assessment.reason);
             const repairSent = await worker.server.invoke(context.model, 'sendMessage', {
-              text: dshToolRepairPrompt(assessment, context.run.provider_tools, { attempt: repairAttempt, maxAttempts: MAX_TOOL_PROTOCOL_REPAIRS }),
+              text: dshToolRepairPrompt(assessment, context.run.provider_tools, { attempt: repairAttempt, maxAttempts: MAX_TOOL_PROTOCOL_REPAIRS, protocol: provider === 'qwen' ? 'qwen-native' : 'dsml' }),
               files: [],
               promptPassthrough: true,
               _conversationUrl: url
