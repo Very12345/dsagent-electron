@@ -7,6 +7,7 @@ const { canonicalizeDsml, parseDsmlCalls, dsmlMarkerIndex } = require('./deepsee
 
 const PROVIDER_BUSY_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 3000, 4000, 5000]);
 const MAX_TOOL_PROTOCOL_REPAIRS = 2;
+const MAX_FINAL_ENVELOPE_REPAIRS = 2;
 const DEEPSEEK_PER_ACCOUNT_CONCURRENCY = 2;
 
 function waitForRetry(ms, signal) {
@@ -250,6 +251,25 @@ ${target ? 'Target tool: ' + target.name + '. Required JSON Schema: ' + schema +
 </｜DSML｜invoke>
 </｜DSML｜tool_calls>
 The arguments wrapper MUST use string="false". Allowed tool names: ${names || '(none)'}. Use the required field names from the schema. No Markdown fence and no alternative protocol.`;
+}
+
+function deepseekFinalEnvelope(output) {
+  const text = String(output || '').trim();
+  const match = /^<dsh_final>\s*([\s\S]*?)\s*<\/dsh_final>$/i.exec(text);
+  if (match && match[1].trim()) return { valid: true, content: match[1].trim() };
+  if (/<\/?dsh_final\b/i.test(text)) return { valid: false, reason: 'the <dsh_final> envelope is incomplete, empty, or has text outside it' };
+  return { valid: false, reason: 'missing the mandatory <dsh_final>...</dsh_final> completion envelope' };
+}
+
+function deepseekFinalRepairPrompt(reason, attempt) {
+  return `FINALIZATION_REPAIR ${attempt}/${MAX_FINAL_ENVELOPE_REPAIRS}: Your previous response is incomplete: ${reason}.
+Do not repeat analysis or announce another action. Decide now:
+- If work remains, emit ONLY the pending valid DSML tool call.
+- If the task is complete, resend ONLY the complete user-facing answer inside:
+<dsh_final>
+final answer
+</dsh_final>
+Do not put a promise of future tool use inside the final envelope.`;
 }
 
 function providerFromModel(model) {
@@ -937,6 +957,58 @@ class ProviderManager {
 			})
 		  });
 		}
+		// DeepSeek's webpage transport has no native structured finish reason.
+		// Require the model to actively choose either an executable DSML call or
+		// a closed final envelope. A prose-only "I'll call the tool next" can no
+		// longer be mistaken for a completed Agent turn.
+		if (provider === 'deepseek' && Array.isArray(context.run.provider_tools) && context.run.provider_tools.length
+		  && dsmlMarkerIndex(originalMarkdown) < 0) {
+		  let finalEnvelope = deepseekFinalEnvelope(originalMarkdown);
+		  for (let attempt = 1; attempt <= MAX_FINAL_ENVELOPE_REPAIRS && !finalEnvelope.valid; attempt += 1) {
+			if (context.onStatus) context.onStatus('DeepSeek 未明确结束或调用工具，正在纠偏（' + String(attempt) + '/' + String(MAX_FINAL_ENVELOPE_REPAIRS) + '）…');
+			await worker.server.invoke(context.model, 'setDeepThink', { enable: false, _conversationUrl: url });
+			const repairSent = await worker.server.invoke(context.model, 'sendMessage', {
+			  text: deepseekFinalRepairPrompt(finalEnvelope.reason, attempt),
+			  files: [],
+			  promptPassthrough: true,
+			  _conversationUrl: url
+			});
+			if (!repairSent || !repairSent.success) throw Object.assign(new Error(repairSent && repairSent.error || 'DeepSeek finalization repair send failed'), {
+			  code: repairSent && repairSent.code || 'provider_incomplete'
+			});
+			const finalProgress = this._startProgressPoll(worker, context, url);
+			let finalWaited;
+			try {
+			  finalWaited = await worker.server.invoke(context.model, 'waitForDone', {
+				timeout: Math.min(Number(context.timeout) || 180000, 180000),
+				initialActivityTimeout: 20000,
+				allowReasoningToolCall: true,
+				signal: context.signal,
+				_conversationUrl: url
+			  });
+			} finally {
+			  await finalProgress.stop(true);
+			}
+			if (!finalWaited || !finalWaited.success) throw Object.assign(new Error(finalWaited && finalWaited.error || 'DeepSeek finalization repair failed'), {
+			  code: finalWaited && finalWaited.code || 'provider_incomplete',
+			  retry_after_seconds: finalWaited && finalWaited.retryAfter
+			});
+			const repairedFinal = await worker.server.invoke(context.model, 'extractResponse', { timeout: 20000, allowReasoningToolCall: true, _conversationUrl: url });
+			if (!repairedFinal || !repairedFinal.success) throw Object.assign(new Error(repairedFinal && repairedFinal.error || 'DeepSeek finalization repair extraction failed'), { code: 'provider_incomplete' });
+			extracted = repairedFinal;
+			originalMarkdown = String(repairedFinal.data && repairedFinal.data.markdown || '');
+			if (dsmlMarkerIndex(originalMarkdown) >= 0) break;
+			finalEnvelope = deepseekFinalEnvelope(originalMarkdown);
+		  }
+		  if (dsmlMarkerIndex(originalMarkdown) < 0) {
+			finalEnvelope = deepseekFinalEnvelope(originalMarkdown);
+			if (!finalEnvelope.valid) throw Object.assign(new Error('DeepSeek did not emit a tool call or explicit final envelope after ' + String(MAX_FINAL_ENVELOPE_REPAIRS) + ' repairs: ' + finalEnvelope.reason), { code: 'provider_incomplete' });
+			originalMarkdown = finalEnvelope.content;
+			extracted = Object.assign({}, extracted, {
+			  data: Object.assign({}, extracted.data, { markdown: originalMarkdown, answerConfirmed: true, finalEnvelopeConfirmed: true })
+			});
+		  }
+		}
 		let assessment = assessMalformedDshToolCall(originalMarkdown, context.run.provider_tools);
         if (assessment) {
           const originalAssessment = assessment;
@@ -990,7 +1062,8 @@ class ProviderManager {
           });
         }
       }
-      if (provider === 'deepseek' && extracted.data && extracted.data.answerConfirmed === false) {
+      if (provider === 'deepseek' && extracted.data && extracted.data.answerConfirmed === false
+		&& parseDsmlCalls(String(extracted.data.markdown || '')).length === 0) {
         throw Object.assign(new Error('DeepSeek finished without a distinct final answer; reasoning was not promoted to output'), { code: 'provider_incomplete' });
       }
       let metadata = null;

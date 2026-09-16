@@ -399,6 +399,32 @@ test('DSH stream does not commit a provisional unclosed DOM fence that is closed
   } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test('Qwen DSH stream defers mutable webpage answer text until the authoritative completed Run', async () => {
+  const provisional = 'A'.repeat(900) + ' provisional';
+  const final = 'B'.repeat(900) + ' authoritative';
+  const f = await fixture({ complete: async (context) => {
+    context.onProgress(provisional);
+    context.onProgress(final);
+    return { content: final, reasoning: 'reasoning remains streamable' };
+  } });
+  try {
+    const result = await request(f.port, '/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'X-WebAgent-Tool-Bridge': 'dsh' },
+      body: {
+        model: 'qwen.text.web.3.8-max', stream: true,
+        messages: [{ role: 'user', content: 'mutable qwen output' }],
+        tools: [{ type: 'function', function: { name: 'read', parameters: { type: 'object', properties: {} } } }]
+      }
+    });
+    const chunks = result.raw.split(/\r?\n/).filter((line) => line.startsWith('data: {')).map((line) => JSON.parse(line.slice(6)));
+    const content = chunks.map((chunk) => chunk.choices?.[0]?.delta?.content || '').join('');
+    assert.equal(content, final);
+    assert.doesNotMatch(result.raw, /stream_desync|provisional/);
+    assert.match(result.raw, /data: \[DONE\]/);
+  } finally { await f.api.close(); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test('OpenAI stream freezes a mutable reasoning channel without losing the final answer', async () => {
   const first = 'R'.repeat(1000);
   const second = first + 'S'.repeat(300);

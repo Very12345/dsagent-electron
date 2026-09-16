@@ -2,6 +2,8 @@
 Description=WebAgent DSH Core
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,8 +12,10 @@ Environment=PLAYWRIGHT_BROWSERS_PATH=%h/.cache/ms-playwright
 Environment=WEBAGENT_HOME=%h/.webagent-dsh
 WorkingDirectory=%h/dsh-workspace
 ExecStart=/usr/bin/bash %h/webagent-dsh-core/node_modules/webagent-dsh-core/deploy/run-linux.sh
-Restart=on-failure
-RestartSec=3
+# The browser/runtime can receive SIGTERM from earlyoom and shut down cleanly.
+# That is still an unexpected service loss, so success must be restarted too.
+Restart=always
+RestartSec=15
 TimeoutStopSec=20
 KillMode=control-group
 

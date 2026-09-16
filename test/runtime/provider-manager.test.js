@@ -851,7 +851,7 @@ test('DSH webpage transport preserves the DSH-owned system prompt and ordered co
           return { success: true, data: { conversationUrl } };
         }
         if (method === 'waitForDone') { waitArgs = args; return { success: true }; }
-        if (method === 'extractResponse') { extractArgs = args; return { success: true, data: { markdown: 'PASSTHROUGH_OK' } }; }
+        if (method === 'extractResponse') { extractArgs = args; return { success: true, data: { markdown: '<dsh_final>PASSTHROUGH_OK</dsh_final>' } }; }
         if (method === 'peekResponse') return { success: true, data: { text: '' } };
         throw new Error('unexpected method: ' + method);
       }
@@ -896,6 +896,40 @@ test('DSH webpage transport preserves the DSH-owned system prompt and ordered co
   assert.doesNotMatch(sentText, /system_instructions|conversation_context|WebAgent Runtime tools|chat mode/i);
   assert.equal(waitArgs.allowReasoningToolCall, true);
   assert.equal(extractArgs.allowReasoningToolCall, true);
+  await manager.close();
+});
+
+test('DeepSeek must actively finalize or emit a tool call instead of ending on an announced action', async () => {
+  const conversationUrl = 'https://chat.deepseek.com/a/chat/s/final-envelope';
+  const sent = [];
+  let extracts = 0;
+  const worker = {
+    ensureAuthenticated: async () => true,
+    waitForConversationUrl: async () => conversationUrl,
+    server: { invoke: async (_model, method, args) => {
+      if (method === 'newChat') { sent.push(args.userText); return { success: true, data: { conversationUrl } }; }
+      if (method === 'setDeepThink') return { success: true };
+      if (method === 'sendMessage') { sent.push(args.text); return { success: true }; }
+      if (method === 'waitForDone') return { success: true, data: { done: true } };
+      if (method === 'extractResponse') {
+        extracts += 1;
+        return { success: true, data: { markdown: extracts === 1 ? 'I will inspect the file now.' : '<dsh_final>Verified final answer.</dsh_final>' } };
+      }
+      if (method === 'peekResponse') return { success: true, data: { text: '' } };
+      throw new Error('unexpected method: ' + method);
+    } }
+  };
+  const manager = new ProviderManager({ webFactories: { deepseek: async () => worker, qwen: async () => ({}) } });
+  const result = await manager.complete({
+    model: 'deepseek.web', session: { id: 'final-envelope', provider_state: {} },
+    messages: [{ role: 'system', content: 'DSH prompt' }, { role: 'user', content: 'Inspect it' }], instructions: '',
+    run: { id: 'run-final-envelope', prompt_passthrough: true, provider_tools: [{ name: 'read', parameters: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } }], deep_think: true, web_search: false },
+    signal: new AbortController().signal, timeout: 1000
+  });
+  assert.equal(result.content, 'Verified final answer.');
+  assert.equal(extracts, 2);
+  assert.match(sent[1], /^FINALIZATION_REPAIR 1\/2:/);
+  assert.match(sent[1], /emit ONLY the pending valid DSML tool call/);
   await manager.close();
 });
 
@@ -988,7 +1022,7 @@ test('DSH second webpage turn sends a versioned update envelope and keeps passth
       if (method === 'setDeepThink') return { success: true };
       if (method === 'sendMessage') { sentArgs = args; return { success: true }; }
       if (method === 'waitForDone') return { success: true };
-      if (method === 'extractResponse') return { success: true, data: { markdown: 'SECOND_OK' } };
+      if (method === 'extractResponse') return { success: true, data: { markdown: '<dsh_final>SECOND_OK</dsh_final>' } };
       if (method === 'peekResponse') return { success: true, data: { text: '' } };
       throw new Error('unexpected method: ' + method);
     } }
@@ -1140,7 +1174,7 @@ test('DeepSeek retries one empty DSH SSE response in the same remote conversatio
       if (method === 'setDeepThink' || method === 'setWebSearch') return { success: true };
       if (method === 'sendMessage') { sent.push(args.text); return { success: true }; }
       if (method === 'waitForDone') { waits += 1; return waits <= 3 ? { success: false, code: 'provider_sse_empty', error: 'empty' } : { success: true, data: { done: true } }; }
-      if (method === 'extractResponse') return { success: true, data: { markdown: 'RECOVERED_FINAL', think: '' } };
+      if (method === 'extractResponse') return { success: true, data: { markdown: '<dsh_final>RECOVERED_FINAL</dsh_final>', think: '' } };
       if (method === 'peekResponse') return { success: true, data: { text: '' } };
       if (method === 'getConversationMetadata') return { success: true, data: { url: conversationUrl, title: 'Recovered' } };
       throw new Error('unexpected method: ' + method);

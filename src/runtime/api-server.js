@@ -1006,9 +1006,11 @@ class RuntimeApiServer {
       tools: body.tools,
       ephemeral: !!session.ephemeral,
       // DeepSeek reasoning moves provisional text between answer and reasoning DOM
-      // nodes. Stream reasoning immediately, but wait for the authoritative
-      // final answer/tool envelope before committing body text to DSH.
-      deferContent: toolBridge && reasoningRequested(body),
+      // nodes. Qwen also hydrates/re-writes its answer subtree after emitting
+      // apparently final SSE text. OpenAI SSE cannot retract bytes, so stream
+      // reasoning/status immediately but commit webpage-owned answer text only
+      // from the authoritative completed Run for these mutable channels.
+      deferContent: toolBridge && (reasoningRequested(body) || String(body.model || '').startsWith('qwen.')),
       inputTokens,
       cachedTokens,
       includeUsage: !!(body.stream_options && body.stream_options.include_usage)
