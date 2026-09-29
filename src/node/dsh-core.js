@@ -17,7 +17,7 @@ const { acquireRuntimeLock } = require('./runtime-lock');
 const ROOT = path.resolve(__dirname, '..', '..');
 
 function usage() {
-  return `WebAgent DSH Core\n\nUsage:\n  webagent-dsh [options]\n\nOptions:\n  --workspace <path>          DSH workspace (default: current directory)\n  --port <number>             Local provider API port (default: 5858)\n  --harness-port <number>     DSH WebUI port (default: 3080)\n  --browser-channel <name>    Playwright channel, e.g. msedge or chrome\n  --browser-executable <path> Explicit Chromium-compatible executable\n  --headed-workers            Show provider browser workers\n  --no-open                   Do not open the DSH WebUI\n  -h, --help                  Show this help\n`;
+  return `WebAgent DSH Core\n\nUsage:\n  webagent-dsh [options]\n\nOptions:\n  --workspace <path>          DSH workspace (default: current directory)\n  --port <number>             Local provider API port (default: 5858)\n  --harness-port <number>     DSH WebUI port (default: 3080)\n  --runtime-only              Serve the provider API only; do not start a DSH WebUI\n  --browser-channel <name>    Playwright channel, e.g. msedge or chrome\n  --browser-executable <path> Explicit Chromium-compatible executable\n  --headed-workers            Show provider browser workers\n  --no-open                   Do not open the DSH WebUI\n  -h, --help                  Show this help\n`;
 }
 
 function parseArgs(argv) {
@@ -25,6 +25,7 @@ function parseArgs(argv) {
     workspace: process.cwd(),
     port: 5858,
     harnessPort: 3080,
+    runtimeOnly: false,
     channel: process.platform === 'win32' ? 'msedge' : '',
     executablePath: '',
     headless: true,
@@ -36,6 +37,7 @@ function parseArgs(argv) {
     if (item === '--workspace') result.workspace = path.resolve(String(argv[++index] || ''));
     else if (item === '--port') result.port = Number(argv[++index]) || 5858;
     else if (item === '--harness-port') result.harnessPort = Number(argv[++index]) || 3080;
+    else if (item === '--runtime-only') result.runtimeOnly = true;
     else if (item === '--browser-channel') result.channel = String(argv[++index] || '');
     else if (item === '--browser-executable') result.executablePath = path.resolve(String(argv[++index] || ''));
     else if (item === '--headed-workers') result.headless = false;
@@ -93,16 +95,22 @@ async function main() {
       providerHost,
       createDeepseekServer,
       createQwenServer,
-      dshBin: require.resolve('@deepseek-ai/dsh/lib/bin.js'),
+      // A runtime-only host serves the provider API for a DSH that already
+      // exists, so it must not require a DSH install of its own.
+      dshBin: args.runtimeOnly ? undefined : require.resolve('@deepseek-ai/dsh/lib/bin.js'),
       appVersion: packageInfo.version,
       port: args.port
     });
-    const harness = await runtime.harness.start({ workspace: args.workspace, port: args.harnessPort });
-    const browserTicket = runtime.api.issueHarnessBrowserTicket();
     console.log('[DSH Core] Provider API: http://' + runtime.info.host + ':' + runtime.info.port);
-    console.log('[DSH Core] Harness: ' + browserTicket.url);
     console.log('[DSH Core] Agent owner: DeepSeek Harness (Runtime agent disabled)');
-    if (!args.noOpen) await nativeBridge.openExternal(harness.browser_url);
+    if (args.runtimeOnly) {
+      console.log('[DSH Core] Runtime-only: no DSH WebUI is started; point your own DSH profile at the Provider API.');
+    } else {
+      const harness = await runtime.harness.start({ workspace: args.workspace, port: args.harnessPort });
+      const browserTicket = runtime.api.issueHarnessBrowserTicket();
+      console.log('[DSH Core] Harness: ' + browserTicket.url);
+      if (!args.noOpen) await nativeBridge.openExternal(harness.browser_url);
+    }
 
     const close = async (code) => {
       if (closing) return;
