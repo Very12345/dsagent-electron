@@ -1,12 +1,5 @@
 # WebAgent DSH Core
 
-On a host where the optional TUI profile is installed, launch the terminal UI
-against the active WebAgent Runtime with:
-
-```sh
-webagent-dsh-tui
-```
-
 WebAgent DSH Core 是官方 DeepSeek Harness 的本地网页模型传输层。DSH
 负责会话、规划、工具、Skill、审批、子代理、上下文压缩和工作区策略；本项目只负责：
 
@@ -86,7 +79,9 @@ DeepSeek 每个账号最多承接 2 个同时运行的网页会话。第 3 个�
 ## 安全边界
 
 - Runtime 和 DSH 只监听 loopback；
-- Runtime Bearer Token 只写入用户目录下的 `runtime.json` 并通过子进程环境传给 DSH；
+- Runtime Bearer Token 持久化在 `$WEBAGENT_HOME/runtime-token`（权限 0600），
+  首次启动生成后跨重启复用，并写入 `runtime.json`、通过子进程环境传给 DSH。
+  需要固定某个值时用 `WEBAGENT_RUNTIME_TOKEN` 覆盖（该值不会被写盘）；
 - 网页模型不执行本地工具，工具调用转换后由 DSH 校验和执行；
 - DeepSeek 正文和思考全部来自原始 SSE，不读取或修改系统剪贴板；
 - 付费 `web-search-deepseek` provider 被禁用；DSH 原生 `web_search` 保留，并可在“插件 → 插件配置 → 网页搜索”中选择 DeepSeek 或 Qwen 网页账号。

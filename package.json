@@ -1,13 +1,12 @@
 {
   "name": "webagent-dsh-core",
-  "version": "7.4.3",
+  "version": "7.4.5",
   "description": "DeepSeek Harness core with local DeepSeek and Qwen webpage transports",
   "author": "WebAgent Contributors",
   "main": "src/node/dsh-core.js",
   "bin": {
     "webagent-dsh": "./src/node/dsh-core.js",
     "webagent-dsh-url": "./src/node/dsh-ticket.js",
-    "webagent-dsh-tui": "./src/node/dsh-tui.js",
     "webagent": "./src/node/dsh-core.js"
   },
   "scripts": {
@@ -21,7 +20,6 @@
   "files": [
     "src/node/dsh-core.js",
     "src/node/dsh-ticket.js",
-    "src/node/dsh-tui.js",
     "src/node/native-bridge.js",
     "src/node/playwright-provider-host.js",
     "src/node/provider-worker-factory.js",
