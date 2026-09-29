@@ -22,6 +22,7 @@ const { RogatorService, gatewayModels } = require('./rogator-service');
 const { ModelApiService } = require('./model-api-service');
 const { McpService } = require('./mcp-service');
 const { migrateLegacyHome, migrateRuntimeStores } = require('./brand-migration');
+const { resolveRuntimeToken } = require('./runtime-token');
 
 function atomicJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -37,6 +38,7 @@ function runtimePaths(options) {
     home,
     runtimeRoot,
     infoFile: path.resolve(options.infoFile || path.join(home, 'runtime.json')),
+    tokenFile: path.resolve(options.tokenFile || process.env.WEBAGENT_RUNTIME_TOKEN_FILE || path.join(home, 'runtime-token')),
     legacyInfoFile: options.legacyInfoFile === false ? '' : path.resolve(options.legacyInfoFile || path.join(os.homedir(), '.dsa', 'runtime.json')),
     harnessHome: path.resolve(options.harnessHome || path.join(home, 'deepseek-harness')),
     rogatorHome: path.resolve(options.rogatorHome || path.join(home, 'qwen-gateway')),
@@ -143,7 +145,7 @@ async function createRuntime(options) {
   const bots = new BotGateway({ store, runs, config, providers });
   const capabilities = new CapabilityService({ providers, tools, bots, config });
   const providerConfigs = new ProviderConfigService({ store: apiKeyStore, reload: async () => providers.setApiRegistry(buildRegistry()) });
-  const token = crypto.randomBytes(24).toString('hex');
+  const token = resolveRuntimeToken(paths.tokenFile);
   const modelApi = new ModelApiService({ home: path.join(paths.runtimeRoot, 'model-api'), getModels: () => providers.listModels(), encrypt, decrypt });
   const api = new RuntimeApiServer({
     store, providers, runs, capabilities, config, tools, approvals, mobile, bots,

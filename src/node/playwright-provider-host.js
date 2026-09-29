@@ -75,6 +75,11 @@ function normalizeProvider(value) {
 }
 
 function defaultChromium() {
+  // `playwright-core` is this package's declared dependency and the only one a
+  // plain install guarantees; the other two ship with a full Playwright setup
+  // and are kept as fallbacks for hosts that have one.
+  try { return require('playwright-core').chromium; }
+  catch (_) { /* fall through */ }
   try { return require('playwright').chromium; }
   catch (_) { return require('@playwright/test').chromium; }
 }

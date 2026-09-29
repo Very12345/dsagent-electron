@@ -4,7 +4,6 @@ const http = require('http');
 const os = require('os');
 const crypto = require('crypto');
 const { URL } = require('url');
-const qrcode = require('qrcode-generator');
 
 function json(res, status, value, headers) {
   res.writeHead(status, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, headers || {}));
@@ -27,6 +26,10 @@ function localAddress() {
   return '127.0.0.1';
 }
 function qrData(value) {
+  // Required here rather than at module scope: the pairing QR is the only thing
+  // that needs it, and a top-level require took down the entire local runtime
+  // (bootstrap -> MobileGateway) whenever the package was absent.
+  const qrcode = require('qrcode-generator');
   const qr = qrcode(0, 'M'); qr.addData(value); qr.make();
   return qr.createDataURL(5, 8);
 }
