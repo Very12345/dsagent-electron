@@ -24,9 +24,62 @@ function corePaths(options) {
     home,
     runtimeRoot: path.resolve(options.runtimeRoot || path.join(home, 'transport')),
     infoFile: path.resolve(options.infoFile || path.join(home, 'runtime.json')),
+    tokenFile: path.resolve(options.tokenFile || process.env.WEBAGENT_RUNTIME_TOKEN_FILE || path.join(home, 'runtime-token')),
     harnessHome: path.resolve(options.harnessHome || path.join(home, 'deepseek-harness')),
     rogatorHome: path.resolve(options.rogatorHome || path.join(home, 'qwen-gateway'))
   };
+}
+
+/**
+ * Resolve the runtime's bearer token so it survives restarts.
+ *
+ * The token used to be minted fresh on every boot, which made every client that
+ * had stored it fail with 401 as soon as the service restarted. Precedence:
+ *
+ *   1. `WEBAGENT_RUNTIME_TOKEN` — an explicit operator override.
+ *   2. the persisted token file — read back on every start.
+ *   3. a new random token — written to that file, mode 0600, on first boot.
+ *
+ * A blank or unreadable file falls through to (3) rather than booting with no
+ * usable token, which would lock every client out silently. Persisting is
+ * best-effort: a read-only home still boots with a working in-process token.
+ *
+ * @param {object} options - runtime options carrying `paths`.
+ * @returns {string} the token to authenticate clients with.
+ */
+function resolveRuntimeToken(options) {
+  const fromEnv = String(process.env.WEBAGENT_RUNTIME_TOKEN || '').trim();
+  if (fromEnv) return fromEnv;
+  const file = options.paths.tokenFile;
+  const persisted = readTokenFile(file);
+  if (persisted) return persisted;
+  const token = crypto.randomBytes(24).toString('hex');
+  try {
+    writeTokenFile(file, token);
+  } catch (error) {
+    console.warn('[runtime] could not persist the bearer token to ' + file + ': ' + error.message);
+  }
+  return token;
+}
+
+function readTokenFile(file) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (_error) {
+    return '';
+  }
+  return text.trim();
+}
+
+function writeTokenFile(file, token) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = file + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+  fs.writeFileSync(temporary, token + '\n', { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(temporary, file);
+  // rename() keeps the temporary file's mode, but an existing target on some
+  // platforms is replaced with it; re-assert so the secret stays owner-only.
+  try { fs.chmodSync(file, 0o600); } catch (_error) { /* non-POSIX filesystem */ }
 }
 
 function emptyApiRegistry() {
@@ -74,7 +127,7 @@ async function createDshCoreRuntime(options) {
     accountManager: providerHost
   });
   const runs = new TransportRunService({ store, providers });
-  const token = crypto.randomBytes(24).toString('hex');
+  const token = resolveRuntimeToken({ paths });
   const api = new RuntimeApiServer({
     store, providers, runs, token, providerOnly: true,
     port: Number(options.port || process.env.WEBAGENT_PORT) || 5858
@@ -120,4 +173,4 @@ async function createDshCoreRuntime(options) {
   };
 }
 
-module.exports = { createDshCoreRuntime, emptyApiRegistry, corePaths };
+module.exports = { createDshCoreRuntime, emptyApiRegistry, corePaths, resolveRuntimeToken };

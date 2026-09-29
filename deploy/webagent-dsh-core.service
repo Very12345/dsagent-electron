@@ -10,6 +10,10 @@ Type=simple
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PLAYWRIGHT_BROWSERS_PATH=%h/.cache/ms-playwright
 Environment=WEBAGENT_HOME=%h/.webagent-dsh
+# The bearer token is read from $WEBAGENT_HOME/runtime-token and reused across
+# restarts, so clients that stored it keep working. Uncomment to pin a specific
+# value instead; it then takes precedence and is never written to disk.
+#Environment=WEBAGENT_RUNTIME_TOKEN=
 WorkingDirectory=%h/dsh-workspace
 ExecStart=/usr/bin/bash %h/webagent-dsh-core/node_modules/webagent-dsh-core/deploy/run-linux.sh
 # The browser/runtime can receive SIGTERM from earlyoom and shut down cleanly.
