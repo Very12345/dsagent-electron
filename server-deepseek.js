@@ -107,6 +107,113 @@ function parseDeepseekRawSse(raw) {
     return { markdown, reasoning, status, finished: closed || /FINISHED|COMPLETE|DONE/i.test(status), response };
 }
 
+function deepseekHistoryMessageArray(payload) {
+    const root = payload && payload.data && payload.data.biz_data || payload && payload.biz_data || payload;
+    if (!root || typeof root !== 'object') return [];
+    for (const key of ['chat_messages', 'messages']) {
+        if (Array.isArray(root[key])) return root[key];
+    }
+    return [];
+}
+
+function deepseekHistoryCurrentMessageId(payload) {
+    const roots = [payload, payload && payload.data, payload && payload.data && payload.data.biz_data, payload && payload.biz_data];
+    for (const root of roots) {
+        if (!root || typeof root !== 'object') continue;
+        for (const key of ['current_message_id', 'currentMessageId', 'current_id']) {
+            if (root[key] != null) return String(root[key]);
+        }
+    }
+    return '';
+}
+
+function deepseekHistoryContent(value) {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) return value.map(deepseekHistoryContent).join('');
+    if (typeof value !== 'object') return String(value);
+    for (const key of ['text', 'content', 'value']) {
+        if (typeof value[key] === 'string') return value[key];
+    }
+    return '';
+}
+
+function normalizeDeepseekHistoryMessage(message, order) {
+    if (!message || typeof message !== 'object') return null;
+    const fragments = Array.isArray(message.fragments)
+        ? message.fragments
+        : message.response && Array.isArray(message.response.fragments) ? message.response.fragments : [];
+    const fragmentReasoning = fragments.filter((fragment) => /THINK|REASON/i.test(String(fragment && fragment.type || '')))
+        .map((fragment) => deepseekHistoryContent(fragment && (fragment.content !== undefined ? fragment.content : fragment))).join('');
+    const fragmentAnswer = fragments.filter((fragment) => !/THINK|REASON|SEARCH/i.test(String(fragment && fragment.type || '')))
+        .map((fragment) => deepseekHistoryContent(fragment && (fragment.content !== undefined ? fragment.content : fragment))).join('');
+    const roleValue = String(message.role || message.message_role || message.sender || message.type || '').toLowerCase();
+    const role = /assistant|bot|model/.test(roleValue) ? 'assistant' : /user|human/.test(roleValue) ? 'user' : '';
+    const directContent = deepseekHistoryContent(message.content !== undefined ? message.content : message.text);
+    const reasoning = deepseekHistoryContent(message.thinking_content !== undefined ? message.thinking_content
+        : message.reasoning_content !== undefined ? message.reasoning_content
+          : message.thinking !== undefined ? message.thinking : message.reasoning);
+    return {
+        raw: message,
+        order,
+        id: String(message.message_id || message.id || message.messageId || ''),
+        parentId: String(message.parent_message_id || message.parent_id || message.parentId || ''),
+        role,
+        content: directContent || fragmentAnswer,
+        reasoning: reasoning || fragmentReasoning,
+        status: String(message.status || message.quasi_status || message.response && message.response.status || '')
+    };
+}
+
+function activeDeepseekHistoryMessages(payload) {
+    const normalized = deepseekHistoryMessageArray(payload).map(normalizeDeepseekHistoryMessage).filter(Boolean);
+    const currentId = deepseekHistoryCurrentMessageId(payload);
+    if (!currentId || !normalized.some((message) => message.id === currentId)) return normalized;
+    const byId = new Map(normalized.filter((message) => message.id).map((message) => [message.id, message]));
+    const branch = [];
+    const visited = new Set();
+    let current = byId.get(currentId);
+    while (current && !visited.has(current.id)) {
+        branch.push(current);
+        visited.add(current.id);
+        current = current.parentId && byId.get(current.parentId);
+    }
+    return branch.length ? branch.reverse() : normalized;
+}
+
+function reconcileDeepseekHistory(payload, sentText) {
+    const expected = String(sentText == null ? '' : sentText).replace(/\r\n?/g, '\n').trim();
+    if (!expected) return { matched: false, reason: 'missing_sent_text' };
+    const messages = activeDeepseekHistoryMessages(payload);
+    let userIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message.role !== 'user') continue;
+        const actual = String(message.content || '').replace(/\r\n?/g, '\n').trim();
+        if (actual === expected) { userIndex = index; break; }
+    }
+    if (userIndex < 0) return { matched: false, reason: 'user_turn_not_found', messageCount: messages.length };
+    for (let index = userIndex + 1; index < messages.length; index += 1) {
+        const message = messages[index];
+        if (message.role === 'user') break;
+        if (message.role !== 'assistant') continue;
+        const markdown = String(message.content || '');
+        const reasoning = String(message.reasoning || '');
+        const terminal = !message.status || /FINISHED|COMPLETE|DONE/i.test(message.status);
+        return {
+            matched: true,
+            assistantFound: true,
+            complete: terminal && !!(markdown.trim() || reasoning.trim()),
+            markdown,
+            reasoning,
+            status: message.status,
+            userMessageId: messages[userIndex].id,
+            assistantMessageId: message.id
+        };
+    }
+    return { matched: true, assistantFound: false, complete: false, userMessageId: messages[userIndex].id };
+}
+
 function createRawResponseAggregate() {
     return {
         recordKey: '',
@@ -320,6 +427,7 @@ function createDeepseekServer(deepseekViewRef) {
     let rawResponseCursor = { host: 0, stream: 0 };
     let rawResponseAggregate = createRawResponseAggregate();
     let lastRawResponse = null;
+    let lastSentMessage = '';
 
     async function resetRawResponseCursor() {
         const view = getView();
@@ -351,6 +459,55 @@ function createDeepseekServer(deepseekViewRef) {
             };
         }
         return null;
+    }
+
+    async function recoverFromConversationHistory(conversationUrl) {
+        const view = getView();
+        if (!view || typeof view.reloadConversationHistory !== 'function' || !lastSentMessage || !conversationUrl) return null;
+        let lastReconciliation = null;
+        let historyCaptured = false;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            if (attempt) await new Promise((resolve) => setTimeout(resolve, 1500));
+            let record = null;
+            try { record = await view.reloadConversationHistory(conversationUrl, { timeout: 12000 }); }
+            catch (_) { record = null; }
+            if (!record || record.error || (!record.json && !record.text)) continue;
+            historyCaptured = true;
+            let payload = record.json;
+            if (!payload) {
+                try { payload = JSON.parse(record.text); } catch (_) { continue; }
+            }
+            const reconciled = reconcileDeepseekHistory(payload, lastSentMessage);
+            lastReconciliation = Object.assign({ source: record.source || 'page-history' }, reconciled);
+            if (!reconciled.matched) return lastReconciliation;
+            if (!reconciled.complete) continue;
+            if (typeof view.resetRawCompletionStreams === 'function') {
+                try { rawResponseCursor.stream = await view.resetRawCompletionStreams(); } catch (_) {}
+            }
+            rawResponseAggregate = createRawResponseAggregate();
+            rawResponseAggregate.recordKey = 'history:' + String(record.seq || Date.now());
+            rawResponseAggregate.markdown = reconciled.markdown || '';
+            rawResponseAggregate.reasoning = reconciled.reasoning || '';
+            lastRawResponse = {
+                markdown: rawResponseAggregate.markdown,
+                reasoning: rawResponseAggregate.reasoning,
+                status: reconciled.status || 'FINISHED',
+                finished: true,
+                pending: false,
+                response: null,
+                recordKey: rawResponseAggregate.recordKey,
+                source: 'page-history',
+                seq: record.seq,
+                recoveredFromHistory: true
+            };
+            return Object.assign({}, lastReconciliation, { recovered: true, raw: lastRawResponse });
+        }
+        return lastReconciliation || {
+            attempted: true,
+            matched: false,
+            historyUnavailable: !historyCaptured,
+            reason: historyCaptured ? 'history_payload_invalid' : 'history_response_unavailable'
+        };
     }
 
     async function clickContinueGenerating(allowClick) {
@@ -562,6 +719,7 @@ function createDeepseekServer(deepseekViewRef) {
                 // Workers are reused across sessions. Establish a fresh raw
                 // response boundary before the first request of this chat.
                 await resetRawResponseCursor();
+                lastSentMessage = String(args.userText || '');
                 // 在 DeepSeek 页面新建对话并设置模式/深度思考/联网搜索
                 // 重试等待 inject 脚本就绪（最多 30 秒）
                 var newChatStart = Date.now();
@@ -674,6 +832,7 @@ function createDeepseekServer(deepseekViewRef) {
 
             case 'sendMessage': {
                 await resetRawResponseCursor();
+                lastSentMessage = String(args.text || '');
                 // 文件上传（如果有）
                 if (args.files && args.files.length > 0) {
                     const uploadJs = `(async function(){
@@ -712,7 +871,8 @@ function createDeepseekServer(deepseekViewRef) {
                 const outcome = await waitForDoneSse(timeout, {
                     allowReasoningToolCall: !!args.allowReasoningToolCall,
                     signal: args.signal,
-                    initialActivityTimeout: args.initialActivityTimeout
+                    initialActivityTimeout: args.initialActivityTimeout,
+                    conversationUrl: args._conversationUrl
                 });
                 if (!outcome.done) {
                     const code = outcome.code || (outcome.reason === 'cancelled'
@@ -857,7 +1017,8 @@ function createDeepseekServer(deepseekViewRef) {
                             think: raw.reasoning || '',
                             answerConfirmed: !!String(raw.markdown || reasoningToolCall || '').trim(),
                             reasoningToolCall: !!reasoningToolCall,
-                            rawTransport: true
+                            rawTransport: !raw.recoveredFromHistory,
+                            historyRecovered: !!raw.recoveredFromHistory
                         } };
                     }
                     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -945,13 +1106,15 @@ function createDeepseekServer(deepseekViewRef) {
         }
     }
 
-    // DeepSeek answer/reasoning/completion are sourced exclusively from the
-    // provider SSE. DOM is consulted only for provider controls (rate limit
-    // and Continue generating); it never supplies model content/completion.
+    // Live DeepSeek answer/reasoning comes from the provider SSE. If that
+    // volatile stream is lost, a same-conversation reload may recover the
+    // durable turn from history_messages. DOM is consulted only for provider
+    // controls; it never supplies model content/completion.
     async function waitForDoneSse(timeout, options) {
         options = options || {};
         const start = Date.now();
-        const initialActivityTimeout = Math.max(5000, Number(options.initialActivityTimeout) || 20000);
+        let initialActivityStartedAt = start;
+        const initialActivityTimeout = Math.max(15000, Number(options.initialActivityTimeout) || 45000);
         let rawSeen = false;
         let lastRaw = null;
         let rawMissingSince = 0;
@@ -968,6 +1131,43 @@ function createDeepseekServer(deepseekViewRef) {
         let reasoningLoopRecoveries = 0;
         let lastReasoningLoopFingerprint = '';
         let lastUsageLimitProbeAt = 0;
+        async function historyRecoveryOutcome(reason, code) {
+            const history = await recoverFromConversationHistory(options.conversationUrl);
+            if (!history) return null;
+            if (history.historyUnavailable || history.reason === 'history_payload_invalid') return {
+                done: false,
+                reason: history.reason,
+                code: 'provider_history_unavailable',
+                originalCode: code,
+                continuations
+            };
+            // A valid snapshot that does not contain the exact submitted user
+            // turn proves that resending is safe. Only this case may flow back
+            // to the existing empty-response retry policy.
+            if (!history.matched) return null;
+            if (history.recovered) return {
+                done: true,
+                reason: 'history_recovered_after_' + reason,
+                rawTransport: false,
+                historyRecovered: true,
+                continuations,
+                reasoningLoopRecoveries
+            };
+            let continuation = null;
+            try { continuation = await clickContinueGenerating(true); } catch (_) {}
+            if (continuation && continuation.clicked) return { resume: true, continuationClicked: true };
+            let executing = false;
+            try { executing = !!(await execJs('window.__dsagent_isExecuting ? window.__dsagent_isExecuting() : false;')); } catch (_) {}
+            if (executing) return { resume: true, generating: true };
+            return {
+                done: false,
+                reason: history.assistantFound ? 'history_response_incomplete' : 'history_user_turn_without_response',
+                code: 'provider_history_incomplete',
+                historyMatched: true,
+                originalCode: code,
+                continuations
+            };
+        }
         while (Date.now() - start < timeout) {
             if (options.signal && options.signal.aborted) return { done: false, reason: 'cancelled' };
             let raw = null;
@@ -1111,15 +1311,35 @@ function createDeepseekServer(deepseekViewRef) {
                             await new Promise((resolve) => setTimeout(resolve, COMPLETION_POLL_MS));
                             continue;
                         }
+                        const recovered = await historyRecoveryOutcome('empty_sse', 'provider_sse_empty');
+                        if (recovered && recovered.resume) {
+                            initialActivityStartedAt = Date.now();
+                            rawSeen = false;
+                            lastRaw = null;
+                            finishedRecord = '';
+                            finishedSeenAt = 0;
+                            if (recovered.continuationClicked) continuations += 1;
+                            await new Promise((resolve) => setTimeout(resolve, COMPLETION_POLL_MS));
+                            continue;
+                        }
+                        if (recovered) return recovered;
                         return { done: false, reason: 'empty_sse_response', code: 'provider_sse_empty', continuations };
                     }
                     return { done: true, reason: raw.finished ? 'raw_network_finished' : 'raw_network_ended', rawTransport: true, continuations, reasoningLoopRecoveries };
                 }
                 if (raw.error && !raw.pending) return { done: false, reason: 'sse_capture_error', code: 'provider_sse_error', error: raw.error, continuations };
                 if (Date.now() - lastActivityAt >= 90000) return { done: false, reason: 'sse_stalled', code: 'provider_stream_stalled', continuations };
-            } else if (!rawSeen && Date.now() - start >= initialActivityTimeout) {
+            } else if (!rawSeen && Date.now() - initialActivityStartedAt >= initialActivityTimeout) {
                 const limit = await currentUsageLimit();
                 if (limit) return { done: false, reason: limit.reason || 'rate_limited', code: limit.code || 'out_of_usage', retryAfter: limit.retryAfter || 60 };
+                const recovered = await historyRecoveryOutcome('missing_sse', 'provider_sse_unavailable');
+                if (recovered && recovered.resume) {
+                    initialActivityStartedAt = Date.now();
+                    if (recovered.continuationClicked) continuations += 1;
+                    await new Promise((resolve) => setTimeout(resolve, COMPLETION_POLL_MS));
+                    continue;
+                }
+                if (recovered) return recovered;
                 return { done: false, reason: 'sse_unavailable', code: 'provider_sse_unavailable' };
             }
             await new Promise((resolve) => setTimeout(resolve, COMPLETION_POLL_MS));
@@ -1132,7 +1352,7 @@ function createDeepseekServer(deepseekViewRef) {
     async function waitForDoneInternal(timeout, options) {
         options = options || {};
         const start = Date.now();
-        const initialActivityTimeout = Math.max(5000, Number(options.initialActivityTimeout) || 20000);
+        const initialActivityTimeout = Math.max(15000, Number(options.initialActivityTimeout) || 45000);
         let wasGenerating = false;
         let contentSeen = false;
         let lastSignature = '';
@@ -1364,4 +1584,4 @@ function createDeepseekServer(deepseekViewRef) {
     };
 }
 
-module.exports = { createDeepseekServer, extractDshToolCallsFromReasoning, extractDshToolCallsFromText, parseDshToolCall, normalizeDshToolCall, hasIncompleteDshToolEnvelope, isStableDeepseekCompletion, parseDeepseekRawSse, mergeContinuationText, mergeRawResponseRecord, createRawResponseAggregate, detectReasoningLoop };
+module.exports = { createDeepseekServer, extractDshToolCallsFromReasoning, extractDshToolCallsFromText, parseDshToolCall, normalizeDshToolCall, hasIncompleteDshToolEnvelope, isStableDeepseekCompletion, parseDeepseekRawSse, mergeContinuationText, mergeRawResponseRecord, createRawResponseAggregate, detectReasoningLoop, activeDeepseekHistoryMessages, reconcileDeepseekHistory };

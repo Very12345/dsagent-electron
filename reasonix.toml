@@ -1,2 +1,0 @@
-[permissions]
-allow = ["Bash(find . -maxdepth 2 -type f | head -60)"]

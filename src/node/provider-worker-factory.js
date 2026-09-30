@@ -4,8 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const HOME_URLS = {
   deepseek: 'https://chat.deepseek.com/',
-  qwen: 'https://chat.qwen.ai/',
-  chatgpt: 'https://chatgpt.com/'
+  qwen: 'https://chat.qwen.ai/'
 };
 
 function normalizeConversationUrl(value) {
@@ -25,26 +24,10 @@ function validConversationUrl(provider, value) {
   } catch (_) { return false; }
 }
 
-function buildInject(root, provider, options) {
-  options = options || {};
-  let combined = '';
-  const toolsDir = path.join(root, 'tools');
-  const systemFile = path.join(toolsDir, 'tool-system.js');
-  if (!options.transportOnly && fs.existsSync(systemFile)) combined += fs.readFileSync(systemFile, 'utf8') + '\n';
-  if (provider === 'deepseek') {
-    if (!options.transportOnly) {
-      const toolFiles = fs.readdirSync(toolsDir).filter((file) => file.startsWith('tool-') && file.endsWith('.js') && file !== 'tool-system.js').sort();
-      for (const file of toolFiles) combined += fs.readFileSync(path.join(toolsDir, file), 'utf8') + '\n';
-      const engine = path.join(root, 'agent-engine.js');
-      if (fs.existsSync(engine)) combined += fs.readFileSync(engine, 'utf8') + '\n';
-    }
-    combined += fs.readFileSync(path.join(root, 'inject-deepseek.js'), 'utf8');
-  } else if (provider === 'qwen') {
-    const parser = path.join(toolsDir, 'tool-parser.js');
-    if (fs.existsSync(parser)) combined += fs.readFileSync(parser, 'utf8') + '\n';
-    combined += fs.readFileSync(path.join(root, 'inject-qwen.js'), 'utf8');
-  }
-  return combined;
+function buildInject(root, provider) {
+  if (provider === 'deepseek') return fs.readFileSync(path.join(root, 'inject-deepseek.js'), 'utf8');
+  if (provider === 'qwen') return fs.readFileSync(path.join(root, 'tools', 'tool-parser.js'), 'utf8') + '\n' + fs.readFileSync(path.join(root, 'inject-qwen.js'), 'utf8');
+  throw new Error('Unsupported webpage provider: ' + provider);
 }
 
 function abortError() {
@@ -73,7 +56,7 @@ function authenticationProbeScript(editorSelector) {
 function serverFor(provider, view) {
   if (provider === 'deepseek') return require('../../server-deepseek').createDeepseekServer(() => view);
   if (provider === 'qwen') return require('../../server-qwen').createQwenServer(() => view);
-  return require('../../server-chatgpt').createChatGPTServer(() => view);
+  throw new Error('Unsupported webpage provider: ' + provider);
 }
 
 function createProviderWorkerFactory(host, options) {

@@ -368,6 +368,30 @@ test('DeepSeek raw SSE cursor excludes a response whose request began before res
   assert.match(current.text, /event: close/);
 });
 
+test('DeepSeek reload captures the matching durable conversation history response', async () => {
+  const page = new MockPage({});
+  page.context = () => null;
+  const worker = new PlaywrightProviderWorker({ navigationTimeout: 1000, _forgetWorker: () => {} }, 'deepseek', 'profile', page);
+  await worker.ready();
+  const conversationUrl = 'https://chat.deepseek.com/a/chat/s/session-42';
+  const historyUrl = 'https://chat.deepseek.com/api/v0/chat/history_messages?chat_session_id=session-42';
+  const payload = { code: 0, data: { biz_data: { messages: [{ role: 'user', content: 'hello' }] } } };
+  page.goto = async (url) => {
+    page.currentUrl = url;
+    await worker._captureResponse({
+      url: () => historyUrl,
+      status: () => 200,
+      allHeaders: async () => ({ 'content-type': 'application/json' }),
+      body: async () => Buffer.from(JSON.stringify(payload))
+    });
+    return { ok: () => true };
+  };
+  const recovered = await worker.reloadConversationHistory(conversationUrl, { timeout: 1000 });
+  assert.equal(recovered.sessionId, 'session-42');
+  assert.equal(recovered.source, 'page-history');
+  assert.deepEqual(recovered.json, payload);
+});
+
 test('Qianwen page worker captures its native completion SSE after reset', async () => {
 	const page = new MockPage({});
 	page.context = () => null;

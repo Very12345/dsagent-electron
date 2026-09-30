@@ -8,7 +8,6 @@ const { SessionStore } = require('./session-store');
 const { TransportRunService } = require('./transport-run-service');
 const { RuntimeApiServer } = require('./api-server');
 const { ProviderManager } = require('./provider-manager');
-const { DeepSeekHarnessService } = require('./deepseek-harness-service');
 const { RogatorService, gatewayModels } = require('./rogator-service');
 const { resolveRuntimeToken } = require('./runtime-token');
 
@@ -26,7 +25,6 @@ function corePaths(options) {
     runtimeRoot: path.resolve(options.runtimeRoot || path.join(home, 'transport')),
     infoFile: path.resolve(options.infoFile || path.join(home, 'runtime.json')),
     tokenFile: path.resolve(options.tokenFile || process.env.WEBAGENT_RUNTIME_TOKEN_FILE || path.join(home, 'runtime-token')),
-    harnessHome: path.resolve(options.harnessHome || path.join(home, 'deepseek-harness')),
     rogatorHome: path.resolve(options.rogatorHome || path.join(home, 'qwen-gateway'))
   };
 }
@@ -46,7 +44,8 @@ async function createDshCoreRuntime(options) {
     home: options.home || path.join(os.homedir(), '.webagent'),
     runtimeRoot: options.runtimeRoot,
     infoFile: options.infoFile,
-    harnessHome: options.harnessHome
+    tokenFile: options.tokenFile,
+    rogatorHome: options.rogatorHome
   });
   const providerHost = options.providerHost;
   if (!providerHost || typeof providerHost.createWorker !== 'function') throw new Error('ProviderBrowserHost is required');
@@ -83,20 +82,10 @@ async function createDshCoreRuntime(options) {
   });
   api.rogator = rogator;
   const address = await api.start();
-  const harness = new DeepSeekHarnessService({
-    root,
-    runtimePort: address.port,
-    runtimeToken: token,
-    home: paths.harnessHome,
-    defaultWorkspace: options.workspace || process.cwd(),
-    coreOnly: true,
-    dshBin: options.dshBin
-  });
-  api.harness = harness;
   const info = {
     version: 4,
-    product: 'WebAgent DSH Core',
-    architecture: 'dsh-core-playwright',
+    product: 'DSH Web Model Runtime',
+    architecture: 'dsh-plugin-provider-runtime',
     app_version: String(options.appVersion || '0.0.0'),
     pid: process.pid,
     host: address.host,
@@ -107,9 +96,8 @@ async function createDshCoreRuntime(options) {
   };
   atomicJson(paths.infoFile, info);
   return {
-    root, paths, store, providers, runs, api, harness, rogator, providerHost, info,
+    root, paths, store, providers, runs, api, rogator, providerHost, info,
     async close() {
-      try { await harness.stop(); } catch (_) {}
       try { await rogator.stop(); } catch (_) {}
       try { await api.close(); } catch (_) {}
       try { await providers.close(); } catch (_) {}

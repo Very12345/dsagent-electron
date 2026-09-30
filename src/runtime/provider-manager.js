@@ -3,7 +3,15 @@
 const crypto = require('crypto');
 const { WorkerPool } = require('./worker-pool');
 const { initialEnvelope, continuationEnvelope, stateFor } = require('./dsh-web-codec');
-const { canonicalizeDsml, parseDsmlCalls, dsmlMarkerIndex } = require('./deepseek-dsml');
+const { canonicalizeDsml, parseDsmlCalls, dsmlMarkerIndex, normalizeDsmlOutput } = require('./deepseek-dsml');
+
+// How long the webpage model may take to START streaming before we give up on
+// the turn. 20s proved too tight in production (webserver, 2026-09-18): the page
+// had accepted the action but had not begun emitting yet, so a whole turn was
+// aborted with provider_send_unconfirmed even though nothing was wrong. Fail
+// later, not sooner — a genuinely stuck page still fails, just with a diagnosis
+// the user can act on instead of a lost answer.
+const PAGE_INITIAL_ACTIVITY_TIMEOUT_MS = 45000;
 
 const PROVIDER_BUSY_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 3000, 4000, 5000]);
 const MAX_TOOL_PROTOCOL_REPAIRS = 2;
@@ -83,7 +91,11 @@ function obviousSchemaError(argumentsValue, definition) {
 }
 
 function assessMalformedDshToolCall(output, tools) {
-  const text = String(output || '');
+  // Assessment runs on the LENIENT normalizer (entities decoded, delimiters
+  // canonicalized 1-3 bars fullwidth/ASCII, missing closers auto-inserted), so
+  // a call whose wrapper is slightly off is RECOVERED instead of entering the
+  // repair loop. The strict parse stays with the streaming gate.
+  const text = normalizeDsmlOutput(output);
 	let marker = dsmlMarkerIndex(text);
 	if (marker < 0) {
 	  // Qwen's page model may ignore the supplied DSML contract and emit its
@@ -104,7 +116,33 @@ function assessMalformedDshToolCall(output, tools) {
   const canonical = canonicalizeDsml(text);
   const invokeCount = (canonical.match(/<dsml_invoke\b/gi) || []).length;
   const calls = parseDsmlCalls(text);
-  if (!invokeCount || calls.length !== invokeCount) return { marker, reason: 'incomplete or malformed DSML invoke/parameter tags' };
+  if (!invokeCount || calls.length !== invokeCount) {
+    // The catch-all used to say only "incomplete or malformed DSML
+    // invoke/parameter tags", which gave the model nothing to diff against —
+    // it resubmitted the same bytes until the repair budget ran out. Say what
+    // actually arrived, which tool was intended, and what one specific thing
+    // to fix.
+    const received = (() => {
+      // Echo the model's RAW bytes (doubled bars, ASCII pipes and all) — the
+      // diff against the expected form is the whole point of the echo.
+      const raw = String(output || '');
+      const rawStart = raw.search(/<[｜|]{1,3}\s*DSML|<dsml_/i);
+      return (rawStart >= 0 ? raw.slice(rawStart, rawStart + 400) : text.slice(marker, marker + 400))
+        .replace(/[ \t]+/g, ' ')
+        .trim();
+    })();
+    const invokeName = (/<dsml_invoke\b[^>]*\bname\s*=\s*["']([^"']+)["']/i.exec(canonical.slice(marker))
+      || /name\s*=\s*["']([^"']+)["']/i.exec(received)
+      || [])[1] || '';
+    const definitions = new Map((Array.isArray(tools) ? tools : []).map((item) => [String(item.name || ''), item]));
+    const knownTool = invokeName && definitions.has(invokeName) ? invokeName : '';
+    const reason = !invokeCount
+      ? 'DSML tool_calls markers were found but they contain no <｜DSML｜invoke> block — emit at least one invoke with its parameters inside'
+      : calls.length === 0
+        ? 'DSML invoke tags were found but none parsed into a complete call — close every <｜DSML｜parameter> with </｜DSML｜parameter> and every <｜DSML｜invoke> with </｜DSML｜invoke>, and keep the arguments strict JSON (no raw newlines or unescaped quotes inside strings)'
+        : 'only ' + calls.length + ' of ' + invokeCount + ' DSML invokes parsed into a complete call — fix the closing tags / arguments JSON of the remaining invoke(s)';
+    return { marker, toolName: knownTool, received, reason };
+  }
   const definitions = new Map((Array.isArray(tools) ? tools : []).map((item) => [String(item.name || ''), item]));
   for (const call of calls) {
     const definition = definitions.get(String(call.name || ''));
@@ -242,8 +280,10 @@ ${target ? 'Target tool: ' + target.name + '. Required JSON Schema: ' + schema +
 {"name":"tool_name","arguments":{"required_argument":"value"}}
 </tool_call>
 Use one block per call. The arguments (or parameters) value MUST be a JSON object. Allowed tool names: ${names || '(none)'}. Use exact required field names from the schema. No DSML, Python-like calls, or Markdown fence.`;
-  return `FORMAT_REPAIR ${attempt}/${maxAttempts}: The previous tool call is invalid.
-Exact diagnosis: ${assessment.reason}.
+  const received = assessment && assessment.received ? String(assessment.received).slice(0, 400) : '';
+  return `FORMAT_REPAIR ${attempt}/${maxAttempts}: The previous tool call was REJECTED — it never reached the executor.
+${received ? 'What you actually sent (rejected; shown only so you can diff it — do NOT copy it verbatim):\n' + received + '\n\n' : ''}Why rejected: ${assessment.reason}.
+Fix: the delimiter is exactly ONE ｜ character on each side of DSML (never ｜｜, never the ASCII |), every opening tag must have its closing tag, and the arguments value must be strict JSON.
 ${target ? 'Target tool: ' + target.name + '. Required JSON Schema: ' + schema + '\n' : ''}${attempt > 1 ? 'The previous correction repeated an invalid structure. Rebuild the call from the schema instead of copying it.\n' : ''}Resend ONLY the corrected tool call; do not repeat the task or add prose. Use exactly:
 <｜DSML｜tool_calls>
 <｜DSML｜invoke name="tool_name">
@@ -824,7 +864,7 @@ class ProviderManager {
       try {
         waited = await worker.server.invoke(context.model, 'waitForDone', {
           timeout: context.timeout,
-          initialActivityTimeout: 20000,
+          initialActivityTimeout: PAGE_INITIAL_ACTIVITY_TIMEOUT_MS,
           allowReasoningToolCall: !!context.run.prompt_passthrough,
           signal: context.signal,
           _conversationUrl: url
@@ -837,6 +877,9 @@ class ProviderManager {
       }
       if (waited && waited.success && waited.data && Number(waited.data.reasoningLoopRecoveries) > 0 && context.onStatus) {
         context.onStatus('DeepSeek 已自动终止重复循环并纠偏 ' + String(waited.data.reasoningLoopRecoveries) + ' 次');
+      }
+      if (waited && waited.success && waited.data && waited.data.historyRecovered && context.onStatus) {
+        context.onStatus('DeepSeek 实时流中断，已从同一会话的持久历史补全回复');
       }
 	  if ((provider === 'deepseek' || provider === 'qwen') && context.run.prompt_passthrough) {
         const recoveryDelays = Array.isArray(context.empty_response_recovery_delays)
@@ -869,7 +912,7 @@ class ProviderManager {
           try {
             waited = await worker.server.invoke(context.model, 'waitForDone', {
               timeout: context.timeout,
-              initialActivityTimeout: 20000,
+              initialActivityTimeout: PAGE_INITIAL_ACTIVITY_TIMEOUT_MS,
               allowReasoningToolCall: true,
               signal: context.signal,
               _conversationUrl: url
@@ -981,7 +1024,7 @@ class ProviderManager {
 			try {
 			  finalWaited = await worker.server.invoke(context.model, 'waitForDone', {
 				timeout: Math.min(Number(context.timeout) || 180000, 180000),
-				initialActivityTimeout: 20000,
+				initialActivityTimeout: PAGE_INITIAL_ACTIVITY_TIMEOUT_MS,
 				allowReasoningToolCall: true,
 				signal: context.signal,
 				_conversationUrl: url
@@ -1034,7 +1077,7 @@ class ProviderManager {
             try {
               repairWaited = await worker.server.invoke(context.model, 'waitForDone', {
                 timeout: Math.min(Number(context.timeout) || 180000, 180000),
-                initialActivityTimeout: 20000,
+                initialActivityTimeout: PAGE_INITIAL_ACTIVITY_TIMEOUT_MS,
                 allowReasoningToolCall: true,
                 signal: context.signal,
                 _conversationUrl: url

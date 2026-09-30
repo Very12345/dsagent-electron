@@ -434,12 +434,12 @@
 
     // ==================== P1: JSON 修复（5层修复链） ====================
     // 参考 atomcode 的 json_repair.rs 设计
-    // 核心逻辑抽到 lib/json-repair.js（供 CLI 与 inject 共用），此处仅做 window 适配
+    // 核心逻辑抽到 src/runtime/json-repair.js（供 CLI 与 inject 共用），此处仅做 window 适配
     // 处理：Windows 路径误转义、trailing comma、unquoted key、markdown fence、单引号
 
     // 尝试加载 Node 模块（CLI/主进程环境有 require）；注入环境无 require 时回退到本地实现
     var _nodeRepair = null;
-    try { _nodeRepair = require('../lib/json-repair.js'); } catch(e) { _nodeRepair = null; }
+    try { _nodeRepair = require('../src/runtime/json-repair.js'); } catch(e) { _nodeRepair = null; }
 
     // 第0层：Windows 路径预逃逸
     function preEscapeWindowsPaths(str) {

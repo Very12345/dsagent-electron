@@ -36,14 +36,36 @@ test('Harness title requests are derived locally and never lease a provider page
 
 test('malformed DSML intent is distinguished from a valid schema-shaped tool call', () => {
   const tools = [{ name: 'pwsh', parameters: { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' } }, required: ['command', 'description'] } }];
-  const broken = '<｜DSML｜tool_calls><｜DSML｜invoke name="pwsh"><｜DSML｜parameter name="arguments" string="false">{"command":"pwd"}';
-  assert.match(assessMalformedDshToolCall(broken, tools).reason, /incomplete|malformed/);
+  // Missing closers are AUTO-CLOSED by the lenient normalizer: the call is
+  // recovered instead of burning the repair budget (regression: a page ate the
+  // closing tags and three repairs reproduced the same bytes verbatim).
+  const broken = '<｜DSML｜tool_calls><｜DSML｜invoke name="pwsh"><｜DSML｜parameter name="arguments" string="false">{"command":"pwd","description":"inspect"}';
+  assert.equal(assessMalformedDshToolCall(broken, tools), null);
+  // Delimiter near-misses (doubled fullwidth bars, ASCII pipes) are
+  // canonicalized, never fatal.
+  const doubled = '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="pwsh"><｜｜DSML｜｜parameter name="arguments" string="false">{"command":"pwd","description":"inspect"}</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>';
+  assert.equal(assessMalformedDshToolCall(doubled, tools), null);
+  const asciiPipes = '<|DSML|tool_calls><|DSML|invoke name="pwsh"><|DSML|parameter name="arguments" string="false">{"command":"pwd","description":"inspect"}</|DSML|parameter></|DSML|invoke></|DSML|tool_calls>';
+  assert.equal(assessMalformedDshToolCall(asciiPipes, tools), null);
   const missing = '<｜DSML｜tool_calls><｜DSML｜invoke name="pwsh"><｜DSML｜parameter name="arguments" string="false">{"command":"pwd"}</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
   assert.match(assessMalformedDshToolCall(missing, tools).reason, /description/);
   const valid = '<｜DSML｜tool_calls><｜DSML｜invoke name="pwsh"><｜DSML｜parameter name="arguments" string="false">{"command":"pwd","description":"inspect"}</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
   assert.equal(assessMalformedDshToolCall(valid, tools), null);
+  // When nothing parses, the assessment carries the RAW received fragment and
+  // the intended tool name so the repair prompt can show a diff instead of a
+  // generic verdict.
+  const openerOnly = '<｜DSML｜tool_calls><｜DSML｜invoke name="pwsh">';
+  const openerAssessment = assessMalformedDshToolCall(openerOnly, tools);
+  assert.match(openerAssessment.reason, /closing|parsed|invoke/);
+  assert.equal(openerAssessment.toolName, 'pwsh');
+  assert.match(openerAssessment.received, /DSML/);
   assert.match(dshToolRepairPrompt({ reason: 'bad tags' }, tools), /Resend ONLY/);
   assert.match(dshToolRepairPrompt({ reason: 'bad tags' }, tools), /Allowed tool names: pwsh/);
+  const echoPrompt = dshToolRepairPrompt(openerAssessment, tools, { attempt: 1, maxAttempts: 2 });
+  assert.match(echoPrompt, /What you actually sent/);
+  assert.match(echoPrompt, /Why rejected/);
+  assert.match(echoPrompt, /exactly ONE ｜/);
+  assert.match(echoPrompt, /Required JSON Schema/);
   const readTools = [{ name: 'read', parameters: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } }];
   const stringWrapped = '<｜DSML｜tool_calls><｜DSML｜invoke name="read"><｜DSML｜parameter name="arguments" string="true">{"file_path":"deck.md"}</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
   const wrappedAssessment = assessMalformedDshToolCall(stringWrapped, readTools);

@@ -5,10 +5,9 @@ const crypto = require('crypto');
 const { URL } = require('url');
 const { id } = require('./ids');
 const { parseToolCalls } = require('../../tool-loop');
-const { parseDsmlCalls, dsmlMarkerIndex } = require('./deepseek-dsml');
+const { parseDsmlCalls, dsmlMarkerIndex, normalizeDsmlOutput } = require('./deepseek-dsml');
 const { estimateTokens } = require('./context-manager');
 const { continuationEnvelope } = require('./dsh-web-codec');
-const { dshShellHtml } = require('./dsh-shell');
 const dirtyJson = require('dirty-json');
 
 // Keep only enough uncommitted text to recognize a split Markdown/DSH opener.
@@ -175,7 +174,11 @@ function bridgeCallPayloads(output) {
   // is ever accepted by bridgedToolCalls.
   const pattern = /<dsh[-_]tool[-_]call>\s*([\s\S]*?)(?=<\/dsh[-_]tool[-_]call>|<dsh[-_]tool[-_]call>|$)/gi;
   let match;
-  const source = String(output || '');
+  // Lenient normalization (entities, delimiter variants, AUTO-CLOSED missing
+  // closers) — the same treatment the format assessment applies, so a call the
+  // assessment recovered is also extractable here. Legacy <dsh_tool_call>
+  // markers and fences pass through untouched.
+  const source = normalizeDsmlOutput(output);
   for (const call of parseDsmlCalls(source)) payloads.push({ index: call.index, payload: JSON.stringify({ name: call.name, arguments: call.arguments }) });
   while ((match = pattern.exec(source)) !== null) payloads.push({ index: match.index, payload: match[1].trim() });
   // The webpage Markdown renderer may promote a three-backtick fence to four
@@ -440,12 +443,9 @@ class RuntimeApiServer {
     this.providerConfigs = options.providerConfigs || null;
     this.contextManager = options.contextManager || null;
     this.workMemory = options.workMemory || null;
-    this.harness = options.harness || null;
     this.rogator = options.rogator || null;
     this.modelApi = options.modelApi || null;
     this.providerOnly = !!options.providerOnly;
-    this.harnessBrowserTickets = new Map();
-    this.harnessShellCookie = 'webagent_dsh_shell=' + crypto.randomBytes(24).toString('base64url');
     this.token = options.token;
     this.host = '127.0.0.1';
     this.startPort = options.port === 0 ? 0 : (Number(options.port) || 5858);
@@ -478,7 +478,6 @@ class RuntimeApiServer {
   }
 
   async close() {
-    this.harnessBrowserTickets.clear();
     if (!this.server.listening) return;
     if (typeof this.server.closeAllConnections === 'function') this.server.closeAllConnections();
     await new Promise((resolve) => this.server.close(resolve));
@@ -490,85 +489,9 @@ class RuntimeApiServer {
     return !!this.token && bearer === this.token;
   }
 
-  issueHarnessBrowserTicket(ttlMs = 5 * 60 * 1000) {
-    if (!this.harness || !this.harness.url || !this.harness.browserCookie) throw Object.assign(new Error('DeepSeek Harness browser session is unavailable'), { code: 'harness_browser_unavailable', status: 503 });
-    const ticket = crypto.randomBytes(24).toString('base64url');
-    this.harnessBrowserTickets.set(ticket, { expires: Date.now() + Math.max(10000, Number(ttlMs) || 0) });
-    return { url: 'http://127.0.0.1:' + this.port + '/api/harness/browser?ticket=' + ticket, expires_in: Math.ceil(Math.max(10000, Number(ttlMs) || 0) / 1000) };
-  }
-
-  _redeemHarnessBrowserTicket(res, url) {
-    const ticket = String(url.searchParams.get('ticket') || '');
-    const record = this.harnessBrowserTickets.get(ticket);
-    this.harnessBrowserTickets.delete(ticket);
-    if (!record || record.expires < Date.now() || !this.harness || !this.harness.url || !this.harness.browserCookie) {
-      return json(res, 401, apiError(Object.assign(new Error('Invalid or expired Harness browser ticket'), { code: 'harness_browser_ticket_invalid' })));
-    }
-    res.writeHead(303, {
-      Location: 'http://127.0.0.1:' + this.port + '/dsh',
-      'Set-Cookie': [
-        this.harness.browserCookie + '; Path=/; HttpOnly; SameSite=Strict',
-        this.harnessShellCookie + '; Path=/; HttpOnly; SameSite=Strict'
-      ],
-      'Cache-Control': 'no-store'
-    });
-    res.end();
-  }
-
-  _harnessBrowserAuthorized(req) {
-    const expected = this.harnessShellCookie;
-    if (!expected) return false;
-    return String(req.headers.cookie || '').split(';').map((part) => part.trim()).includes(expected);
-  }
-
-  async _dshShell(req, res, url) {
-    if (!this._harnessBrowserAuthorized(req)) return json(res, 401, apiError(Object.assign(new Error('Open DSH through a fresh webagent-dsh-url ticket'), { code: 'harness_browser_unauthorized' })));
-    if (req.method === 'GET' && url.pathname === '/dsh') return html(res, 200, dshShellHtml({ harnessUrl: this.harness.url + '/' }), {
-      'Content-Security-Policy': "default-src 'self'; frame-src http://127.0.0.1:*; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'",
-      'Permissions-Policy': 'clipboard-read=(self "' + this.harness.url + '"), clipboard-write=(self "' + this.harness.url + '")'
-    });
-    const requestedProvider = (value) => {
-      const provider = String(value || 'deepseek');
-      if (!['deepseek', 'qwen'].includes(provider) || !this.providers.supportedWebProviders().includes(provider)) throw Object.assign(new Error('Provider is unavailable in DSH Core: ' + provider), { code: 'provider_not_found', status: 404 });
-      return provider;
-    };
-    if (req.method === 'GET' && url.pathname === '/api/dsh-shell/status') {
-      const provider = requestedProvider(url.searchParams.get('provider'));
-      return json(res, 200, { provider, accounts: this.providers.listAccounts(provider), workers: this.providers.status()[provider], harness: this.harness.status() });
-    }
-    if (req.method === 'POST' && url.pathname === '/api/dsh-shell/login') {
-      const body = await readBody(req, 1024 * 1024);
-      const provider = requestedProvider(body.provider);
-      return json(res, 202, await this.providers.authenticate(provider, { source: 'dsh-shell', account_id: body.account_id || 'default' }));
-    }
-    if (req.method === 'POST' && url.pathname === '/api/dsh-shell/browser') {
-      const body = await readBody(req, 1024 * 1024);
-      const provider = requestedProvider(body.provider);
-      const visible = body.visible !== false;
-      const accounts = await this.providers.setBrowserVisibility(provider, visible);
-      if (visible) await this.providers.authenticate(provider, { source: 'dsh-shell-view', account_id: body.account_id || accounts.active_account_id || 'default' });
-      return json(res, 200, { provider, accounts, visible });
-    }
-    if (req.method === 'POST' && url.pathname === '/api/dsh-shell/accounts') {
-      const body = await readBody(req, 1024 * 1024);
-      return json(res, 201, this.providers.createAccount(requestedProvider(body.provider), body.name));
-    }
-    if (req.method === 'POST' && url.pathname === '/api/dsh-shell/select') {
-      const body = await readBody(req, 1024 * 1024);
-      return json(res, 200, await this.providers.selectAccount(requestedProvider(body.provider), body.account_id));
-    }
-    if (req.method === 'POST' && url.pathname === '/api/dsh-shell/restart') {
-      const status = await this.harness.restart(await readBody(req, 1024 * 1024));
-      return json(res, 200, status, { 'Set-Cookie': this.harness.browserCookie + '; Path=/; HttpOnly; SameSite=Strict' });
-    }
-    return json(res, 404, apiError(Object.assign(new Error('DSH shell route not found'), { code: 'not_found' })));
-  }
-
   async _handle(req, res) {
     try {
       const inboundUrl = new URL(req.url, 'http://127.0.0.1');
-      if (req.method === 'GET' && inboundUrl.pathname === '/api/harness/browser') return this._redeemHarnessBrowserTicket(res, inboundUrl);
-      if (inboundUrl.pathname === '/dsh' || inboundUrl.pathname.startsWith('/api/dsh-shell/')) return await this._dshShell(req, res, inboundUrl);
       if (!this._authorized(req)) return json(res, 401, apiError(Object.assign(new Error('Invalid runtime token'), { code: 'invalid_api_key' })));
       const url = inboundUrl;
       // DSH's pi-ai adapter emits its stable sessionId as prompt_cache_key only
@@ -576,7 +499,7 @@ class RuntimeApiServer {
       // request field without changing the actual loopback destination.
       const path = url.pathname.replace(/^\/api\.openai\.com(?=\/)/, '');
       if (req.method === 'GET' && (path === '/api/ping' || path === '/health')) {
-        return json(res, 200, { ok: true, product: this.providerOnly ? 'WebAgent DSH Core' : 'WebAgent', version: 2, pid: process.pid, workers: this.providers.status() });
+        return json(res, 200, { ok: true, product: this.providerOnly ? 'DSH Web Model Runtime' : 'WebAgent', version: 2, pid: process.pid, workers: this.providers.status() });
       }
       if (this.providerOnly && /^\/api\/(?:sessions|projects|agents|clusters|tools|approvals|bots|mobile|memory|skills|plugins|plugin-marketplaces|work-memory)(?:\/|$)/.test(path)) {
         return json(res, 404, apiError(Object.assign(new Error('This Runtime is a DSH provider transport; use the Harness for agent sessions and tools'), { code: 'dsh_core_only' })));
@@ -748,37 +671,6 @@ class RuntimeApiServer {
           object: 'list',
           data: this.capabilities.tree(url.searchParams.get('workspace') || process.cwd(), url.searchParams.get('path') || '')
         });
-      }
-      if (path === '/api/harness' && this.harness) {
-        if (req.method === 'GET') return json(res, 200, this.harness.status());
-      }
-      if (path === '/api/harness/start' && this.harness && req.method === 'POST') {
-        return json(res, 200, await this.harness.start(await readBody(req, 1024 * 1024)));
-      }
-      if (path === '/api/harness/browser-ticket' && this.harness && req.method === 'POST') {
-        return json(res, 201, this.issueHarnessBrowserTicket());
-      }
-      if (path === '/api/harness/stop' && this.harness && req.method === 'POST') {
-        return json(res, 200, await this.harness.stop());
-      }
-      if (path === '/api/harness/restart' && this.harness && req.method === 'POST') {
-        return json(res, 200, await this.harness.restart(await readBody(req, 1024 * 1024)));
-      }
-      const harnessArchiveMatch = path.match(/^\/api\/harness\/sessions\/([^/]+)\/archive$/);
-      if (req.method === 'POST' && harnessArchiveMatch) {
-        const externalId = decodeURIComponent(harnessArchiveMatch[1]);
-        const sessionId = harnessSessionId(externalId);
-        const session = sessionId && this.store.get(sessionId);
-        if (!session) return json(res, 200, { archived: externalId, remote_deleted: false, skipped: true });
-        if (this.runs.activeRunForSession(sessionId)) throw Object.assign(new Error('Harness session has an active run'), { code: 'session_busy', status: 409 });
-        const state = session.provider_state || {};
-        const hasRemote = !!state.url || (Array.isArray(state.conversations) && state.conversations.some((item) => item.status !== 'deleted'));
-        if (hasRemote) {
-          const deleted = await this.providers.cleanupSession(session, state.last_run_id, state.last_call_id);
-          if (!deleted) throw Object.assign(new Error('Harness remote conversation was not deleted; mapping was preserved'), { code: 'remote_delete_failed', status: 502 });
-        }
-        this.store.delete(sessionId, { permanent: true });
-        return json(res, 200, { archived: externalId, session_id: sessionId, remote_deleted: hasRemote });
       }
       if (path === '/api/memory' && this.capabilities) {
         if (req.method === 'GET') return json(res, 200, this.capabilities.readMemory(url.searchParams.get('workspace') || process.cwd()));
@@ -1095,18 +987,36 @@ class RuntimeApiServer {
         send({ id: 'chatcmpl-' + runId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, delta: { reasoning_content: delta.slice(offset, offset + STREAM_CHUNK_CHARS) }, finish_reason: null }] });
       }
     };
+    // LAYER BOUNDARY. <dsh_final> belongs to this server's own self-loop codec
+    // (the bridge prompt makes the webpage model wrap its answer in it, and
+    // deepseekFinalEnvelope unwraps it when the Run settles). It is transport
+    // plumbing, never user content, so it must not leave this layer on ANY
+    // channel. The settle path already strips it; the DOM stream did not, which
+    // made every streamed answer fail the desync guard below (the streamed bytes
+    // could never be a prefix of the settled text) and killed the whole turn
+    // with 0 tokens. Streaming the settled shape keeps both channels identical.
+    // Tag-free text is returned untouched, so streams that never carry the
+    // envelope stay byte-for-byte unchanged.
+    const streamText = (value) => {
+      const text = String(value || '');
+      if (!/<\/?dsh_final/i.test(text)) return text;
+      const withoutTags = text.replace(/<\/?dsh_final\s*>/gi, '');
+      const partial = /<\/?dsh_final\s*$/i.exec(withoutTags);
+      return (partial ? withoutTags.slice(0, partial.index) : withoutTags).replace(/^[\s\u00a0]+/, '');
+    };
     const flushText = (final, stableEnd) => {
-      if (!currentText.startsWith(sentText)) return;
-      const marker = options.toolBridge ? toolCallMarkerIndex(currentText) : -1;
-      const safeEnd = marker >= 0 ? marker : currentText.length;
+      const view = streamText(currentText);
+      if (!view.startsWith(sentText)) return;
+      const marker = options.toolBridge ? toolCallMarkerIndex(view) : -1;
+      const safeEnd = marker >= 0 ? marker : view.length;
       // Keep enough uncommitted text to recognize a tool marker split across
       // DOM polls. Long narrative still streams while tool JSON stays hidden.
       const confirmed = stableEnd == null ? safeEnd : Math.min(safeEnd, stableEnd);
       const candidate = final || marker >= 0 ? safeEnd : Math.max(0, confirmed - STREAM_GUARD_CHARS);
-      const limit = final ? candidate : stableMarkdownPrefixLength(currentText, candidate);
+      const limit = final ? candidate : stableMarkdownPrefixLength(view, candidate);
       if (limit <= sentText.length) return;
-      const delta = currentText.slice(sentText.length, limit);
-      sentText = currentText.slice(0, limit);
+      const delta = view.slice(sentText.length, limit);
+      sentText = view.slice(0, limit);
       for (let offset = 0; offset < delta.length; offset += STREAM_CHUNK_CHARS) {
         send({ id: 'chatcmpl-' + runId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, delta: { content: delta.slice(offset, offset + STREAM_CHUNK_CHARS) }, finish_reason: null }] });
       }
@@ -1148,7 +1058,7 @@ class RuntimeApiServer {
       if (event.type === 'response.output_text.done') {
         flushReasoning(true);
         currentText = String(event.data.text || '');
-        if (!options.deferContent && sentText && !currentText.startsWith(sentText)) {
+        if (!options.deferContent && sentText && !streamText(currentText).startsWith(sentText)) {
           send(apiError(Object.assign(new Error('Webpage output changed before already-streamed content; refusing to return a truncated answer'), { code: 'stream_desync' })));
           cleanup();
           return;
@@ -1164,7 +1074,10 @@ class RuntimeApiServer {
         }
         flushReasoning(true);
         currentText = String(event.data.output || currentText);
-        if (sentText && !currentText.startsWith(sentText)) {
+        // The settled output is already envelope-free, so comparing the streamed
+        // VIEW keeps this a genuine "did the page rewrite text we already sent"
+        // check instead of a guaranteed mismatch on the envelope tag.
+        if (sentText && !streamText(currentText).startsWith(sentText)) {
           send(apiError(Object.assign(new Error('Webpage output changed before already-streamed content; refusing to return a truncated answer'), { code: 'stream_desync' })));
           cleanup();
           return;

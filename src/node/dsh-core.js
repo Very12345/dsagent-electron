@@ -7,25 +7,22 @@ const path = require('path');
 const { chromium } = require('playwright-core');
 const packageInfo = require('../../package.json');
 const { createDeepseekServer } = require('../../server-deepseek');
-const { createQwenServer } = require('../../server-qwen');
 const { createDshCoreRuntime } = require('../runtime/dsh-core-runtime');
 const { PlaywrightProviderHost } = require('./playwright-provider-host');
 const { createProviderWorkerFactory } = require('./provider-worker-factory');
-const { NativeBridge } = require('./native-bridge');
 const { acquireRuntimeLock } = require('./runtime-lock');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 
 function usage() {
-  return `WebAgent DSH Core\n\nUsage:\n  webagent-dsh [options]\n\nOptions:\n  --workspace <path>          DSH workspace (default: current directory)\n  --port <number>             Local provider API port (default: 5858)\n  --harness-port <number>     DSH WebUI port (default: 3080)\n  --runtime-only              Serve the provider API only; do not start a DSH WebUI\n  --browser-channel <name>    Playwright channel, e.g. msedge or chrome\n  --browser-executable <path> Explicit Chromium-compatible executable\n  --headed-workers            Show provider browser workers\n  --no-open                   Do not open the DSH WebUI\n  -h, --help                  Show this help\n`;
+  return `DSH Web Model Runtime\n\nUsage:\n  webagent-runtime [options]\n\nOptions:\n  --workspace <path>          Existing workspace (default: current directory)\n  --port <number>             Loopback provider API port (default: 5858)\n  --browser-channel <name>    Playwright channel, e.g. msedge or chrome\n  --browser-executable <path> Explicit Chromium-compatible executable\n  --headed-workers           Show provider browser workers\n  --runtime-only             Compatibility option; runtime is always provider-only\n  --no-open                  Compatibility option; DSH is started separately\n  -h, --help                 Show this help\n`;
 }
 
 function parseArgs(argv) {
   const result = {
     workspace: process.cwd(),
     port: 5858,
-    harnessPort: 3080,
-    runtimeOnly: false,
+    runtimeOnly: true,
     channel: process.platform === 'win32' ? 'msedge' : '',
     executablePath: '',
     headless: true,
@@ -36,7 +33,6 @@ function parseArgs(argv) {
     const item = argv[index];
     if (item === '--workspace') result.workspace = path.resolve(String(argv[++index] || ''));
     else if (item === '--port') result.port = Number(argv[++index]) || 5858;
-    else if (item === '--harness-port') result.harnessPort = Number(argv[++index]) || 3080;
     else if (item === '--runtime-only') result.runtimeOnly = true;
     else if (item === '--browser-channel') result.channel = String(argv[++index] || '');
     else if (item === '--browser-executable') result.executablePath = path.resolve(String(argv[++index] || ''));
@@ -57,7 +53,6 @@ async function main() {
   // default. Deployments that need isolation set WEBAGENT_HOME explicitly.
   const home = path.resolve(process.env.WEBAGENT_HOME || path.join(os.homedir(), '.webagent'));
   const lock = acquireRuntimeLock(path.join(home, 'runtime.lock'));
-  const nativeBridge = new NativeBridge();
   let runtime = null;
   let closing = false;
   try {
@@ -94,23 +89,11 @@ async function main() {
       workspace: args.workspace,
       providerHost,
       createDeepseekServer,
-      createQwenServer,
-      // A runtime-only host serves the provider API for a DSH that already
-      // exists, so it must not require a DSH install of its own.
-      dshBin: args.runtimeOnly ? undefined : require.resolve('@deepseek-ai/dsh/lib/bin.js'),
       appVersion: packageInfo.version,
       port: args.port
     });
     console.log('[DSH Core] Provider API: http://' + runtime.info.host + ':' + runtime.info.port);
-    console.log('[DSH Core] Agent owner: DeepSeek Harness (Runtime agent disabled)');
-    if (args.runtimeOnly) {
-      console.log('[DSH Core] Runtime-only: no DSH WebUI is started; point your own DSH profile at the Provider API.');
-    } else {
-      const harness = await runtime.harness.start({ workspace: args.workspace, port: args.harnessPort });
-      const browserTicket = runtime.api.issueHarnessBrowserTicket();
-      console.log('[DSH Core] Harness: ' + browserTicket.url);
-      if (!args.noOpen) await nativeBridge.openExternal(harness.browser_url);
-    }
+    console.log('[DSH Core] Connect this provider API through @very12345/dsh-webagent-integration in your DSH profile.');
 
     const close = async (code) => {
       if (closing) return;

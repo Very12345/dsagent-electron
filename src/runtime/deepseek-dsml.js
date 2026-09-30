@@ -16,6 +16,59 @@ function canonicalizeDsml(value) {
     (_match, closing, name, attributes) => '<' + (closing ? '/' : '') + 'dsml_' + name.toLowerCase() + (closing ? '' : attributes) + '>');
 }
 
+/**
+ * Rebuild missing closing tags. DeepSeek's markdown renderer can keep an
+ * opening custom tag while consuming its closing tag as DOM (see
+ * bridgeCallPayloads in api-server), and long model outputs sometimes drop
+ * them outright — a fully intact call then dies as "malformed tags" even
+ * though every byte of the arguments is correct. Walk the canonical tags in
+ * order and close whatever the next tag cannot legally contain:
+ * parameter ⊂ invoke ⊂ tool_calls. Stray closers without an opener are
+ * dropped. Content between tags is copied through untouched.
+ */
+function autoCloseDsml(source) {
+  const tagPattern = /<(\/?)dsml_(tool_calls|invoke|parameter)\b[^>]*>/gi;
+  const rank = { tool_calls: 0, invoke: 1, parameter: 2 };
+  const out = [];
+  const open = [];
+  let last = 0;
+  let match;
+  while ((match = tagPattern.exec(source)) !== null) {
+    out.push(source.slice(last, match.index));
+    last = match.index + match[0].length;
+    const kind = match[2].toLowerCase();
+    if (!match[1]) {
+      while (open.length && rank[open[open.length - 1]] >= rank[kind]) {
+        out.push('</dsml_' + open.pop() + '>');
+      }
+      out.push(match[0]);
+      open.push(kind);
+    } else {
+      while (open.length && rank[open[open.length - 1]] > rank[kind]) {
+        out.push('</dsml_' + open.pop() + '>');
+      }
+      if (open.length && open[open.length - 1] === kind) {
+        open.pop();
+        out.push(match[0]);
+      }
+      // else: a closer for a tag that was never opened — drop it
+    }
+  }
+  out.push(source.slice(last));
+  while (open.length) out.push('</dsml_' + open.pop() + '>');
+  return out.join('');
+}
+
+/**
+ * Lenient normalizer for the ASSESSMENT and EXTRACTION paths: decode entities,
+ * canonicalize the delimiters (1-3 bars, fullwidth or ASCII), then auto-close.
+ * NOT used by the streaming gate (completeDsmlSuffix), which keeps its strict
+ * "envelope fully closed" semantics.
+ */
+function normalizeDsmlOutput(value) {
+  return autoCloseDsml(canonicalizeDsml(value));
+}
+
 function attribute(source, name) {
   const pattern = new RegExp('(?:^|\\s)' + name + '\\s*=\\s*["“”\\\']([^"“”\\\']*)["“”\\\']', 'i');
   const match = String(source || '').match(pattern);
@@ -95,4 +148,4 @@ function completeDsmlSuffix(value) {
   return tail ? [] : calls;
 }
 
-module.exports = { canonicalizeDsml, parseDsmlCalls, dsmlMarkerIndex, completeDsmlSuffix };
+module.exports = { canonicalizeDsml, autoCloseDsml, normalizeDsmlOutput, parseDsmlCalls, dsmlMarkerIndex, completeDsmlSuffix };

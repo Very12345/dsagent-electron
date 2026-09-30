@@ -8,9 +8,8 @@
  * profile's `webagent` provider resolves the `WEBAGENT_DSH_TOKEN` credential,
  * and only the Runtime knows the value.
  *
- * Both runtimes — the full one (`bootstrap.js`, driven by `daemon.js`) and the
- * DSH-core one (`dsh-core-runtime.js`, driven by `dsh-core.js`) — resolve their
- * token here so the rule is stated once.
+ * The provider runtime resolves its token here and reuses the persisted value
+ * across launches. Official DSH resolves the matching credential separately.
  *
  * @module webagent-dsh-core/runtime-token
  */

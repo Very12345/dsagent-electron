@@ -32,6 +32,21 @@ function isCompletionUrl(provider, value) {
 	return false;
 }
 
+function isConversationHistoryUrl(provider, value) {
+  const url = String(value || '');
+  return provider === 'deepseek' && /\/api\/v0\/chat\/history_messages(?:\?|$)/i.test(url);
+}
+
+function deepseekConversationId(value) {
+  try {
+    const url = new URL(String(value || ''));
+    const queryId = url.searchParams.get('chat_session_id');
+    if (queryId) return queryId;
+    const match = url.pathname.match(/\/a\/chat\/s\/([^/?#]+)/i);
+    return match ? decodeURIComponent(match[1]) : '';
+  } catch (_) { return ''; }
+}
+
 function completionLooksDone(provider, value) {
 	const text = String(value || '');
 	return provider === 'qwen'
@@ -388,6 +403,8 @@ class PlaywrightProviderWorker {
       navigationTimeout: host.navigationTimeout
     });
     this.rawResponses = [];
+    this.historyResponses = [];
+    this.historySequence = 0;
     this.cdpResponses = [];
     this.cdpRequests = new Map();
     this.cdpSequence = 0;
@@ -487,9 +504,36 @@ class PlaywrightProviderWorker {
   async _captureResponse(response) {
     try {
       const url = String(response.url ? response.url() : '');
-	  if (!url || !isCompletionUrl(this.provider, url)) return;
+	  if (!url) return;
       const headers = typeof response.allHeaders === 'function' ? await response.allHeaders() : (response.headers ? response.headers() : {});
       const contentType = String(headers && headers['content-type'] || '');
+	  if (isConversationHistoryUrl(this.provider, url)) {
+        const record = {
+          seq: ++this.historySequence,
+          url,
+          sessionId: deepseekConversationId(url),
+          status: typeof response.status === 'function' ? response.status() : 0,
+          contentType,
+          text: '',
+          json: null,
+          done: false,
+          capturedAt: Date.now()
+        };
+        this.historyResponses.push(record);
+        if (this.historyResponses.length > 12) this.historyResponses.splice(0, this.historyResponses.length - 12);
+        try {
+          const body = typeof response.body === 'function' ? await response.body() : Buffer.alloc(0);
+          record.text = Buffer.from(body || []).toString('utf8').slice(0, 16 * 1024 * 1024);
+          try { record.json = JSON.parse(record.text); } catch (_) {}
+        } catch (error) {
+          record.error = error && error.message || String(error);
+        } finally {
+          record.done = true;
+          record.finishedAt = Date.now();
+        }
+        return;
+      }
+	  if (!isCompletionUrl(this.provider, url)) return;
 	  const candidate = isCompletionUrl(this.provider, url) && /event-stream/i.test(contentType);
       if (!candidate) return;
       const record = {
@@ -539,6 +583,50 @@ class PlaywrightProviderWorker {
       const page = await this.page.evaluate((value) => window.__webagentRawCompletionAfter ? window.__webagentRawCompletionAfter(value) : null, pageCursor);
       return page ? Object.assign({ source: 'page-fetch' }, page) : null;
     } catch (_) { return null; }
+  }
+
+  historyResponseCursor() { return this.historySequence; }
+
+  conversationHistoryAfter(cursor, sessionId) {
+    const expected = String(sessionId || '');
+    return this.historyResponses.filter((record) => record.seq > (Number(cursor) || 0)
+      && (!expected || record.sessionId === expected)).slice(-1)[0] || null;
+  }
+
+  async reloadConversationHistory(value, options) {
+    if (this.provider !== 'deepseek') return null;
+    const target = String(value || (this.page && this.page.url && this.page.url()) || '');
+    const sessionId = deepseekConversationId(target);
+    if (!sessionId) return null;
+    const cursor = this.historyResponseCursor();
+    const timeout = Math.max(1000, Math.min(30000, Number(options && options.timeout) || 12000));
+    try {
+      if (this.page && typeof this.page.reload === 'function'
+        && deepseekConversationId(this.page.url && this.page.url()) === sessionId) {
+        await this.page.reload({ waitUntil: 'domcontentloaded', timeout: this.host.navigationTimeout });
+      } else if (this.page && typeof this.page.goto === 'function') {
+        await this.page.goto(target, { waitUntil: 'domcontentloaded', timeout: this.host.navigationTimeout });
+      } else return null;
+    } catch (_) {
+      // A history response can still have completed before an unrelated page
+      // resource made navigation report a timeout, so inspect the capture.
+    }
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const record = this.conversationHistoryAfter(cursor, sessionId);
+      if (record && record.done) return {
+        seq: record.seq,
+        url: record.url,
+        sessionId: record.sessionId,
+        status: record.status,
+        text: record.text,
+        json: record.json,
+        error: record.error || '',
+        source: 'page-history'
+      };
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return null;
   }
 
   isDestroyed() { return this.webContents.isDestroyed(); }

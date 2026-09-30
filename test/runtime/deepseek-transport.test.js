@@ -6,154 +6,41 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
-const { pathToFileURL } = require('url');
-const yaml = require('js-yaml');
-const { DeepSeekHarnessService, availablePort } = require('../../src/runtime/deepseek-harness-service');
-const { extractDshToolCallsFromReasoning, extractDshToolCallsFromText, parseDshToolCall, hasIncompleteDshToolEnvelope, isStableDeepseekCompletion, parseDeepseekRawSse, mergeContinuationText, mergeRawResponseRecord, createRawResponseAggregate, createDeepseekServer, detectReasoningLoop } = require('../../server-deepseek');
+const { extractDshToolCallsFromReasoning, extractDshToolCallsFromText, parseDshToolCall, hasIncompleteDshToolEnvelope, isStableDeepseekCompletion, parseDeepseekRawSse, mergeContinuationText, mergeRawResponseRecord, createRawResponseAggregate, createDeepseekServer, detectReasoningLoop, activeDeepseekHistoryMessages, reconcileDeepseekHistory } = require('../../server-deepseek');
 
-test('DeepSeek Harness service writes an isolated WebAgent API provider without storing the bearer token', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-'));
-  const home = path.join(root, 'home');
-  try {
-    fs.mkdirSync(path.join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '', 'utf8');
-    const service = new DeepSeekHarnessService({ root, home, runtimePort: 5858, runtimeToken: 'secret-token' });
-    service._writeSettings();
-    fs.mkdirSync(path.join(root, 'integrations', 'dsh-webagent-plugin'), { recursive: true });
-    const raw = fs.readFileSync(path.join(home, 'settings.yaml'), 'utf8');
-    const settings = yaml.load(raw);
-    const provider = settings['llm-pi-ai'].providers.webagent;
-    assert.equal(provider.baseURL, 'http://127.0.0.1:5858/api.openai.com/v1');
-    assert.equal(provider.apiKeyEnv, 'WEBAGENT_DSH_TOKEN');
-    assert.equal(provider.headers['X-WebAgent-Tool-Bridge'], 'dsh');
-    assert.equal(provider.headers['X-WebAgent-Ephemeral'], undefined);
-    assert.equal(provider.cacheRetention, 'short');
-    assert.equal(provider.reasoning, 'off');
-    assert.deepEqual(provider.compat, { thinkingFormat: 'deepseek', supportsReasoningEffort: true, supportsUsageInStreaming: true });
-    assert.deepEqual(provider.models[0].reasoningEfforts, { off: null, high: 'high' });
-    assert.deepEqual(provider.models[0].input, ['text', 'image']);
-    assert.deepEqual(provider.models.map((model) => model.id), ['deepseek.web', 'qwen.3.7', 'qwen.3.8-max', 'qwen.3.7-max', 'qwen.3.6-flash', 'qwen.gateway.3.8-max', 'qwen.gateway.3.7-max', 'qwen.gateway.3.7-plus', 'qwen.gateway.3.6-plus', 'chatgpt.web']);
-    assert.deepEqual(provider.models.filter((model) => model.id.startsWith('qwen.')).map((model) => model.name), [
-      'Qianwen3.7-Web',
-      'Qianwen3.8Max-Web',
-      'Qianwen3.7Max-Web',
-      'Qianwen3.6Flash-Web',
-      'Qianwen3.8Max-Gate',
-      'Qianwen3.7Max-Gate',
-      'Qianwen3.7Plus-Gate',
-      'Qianwen3.6Plus-Gate'
-    ]);
-    assert.deepEqual(provider.models[1].input, ['text', 'image']);
-    assert.equal(provider.models[1].contextWindow, 32768);
-    assert.deepEqual(provider.models[2].input, ['text', 'image']);
-    assert.equal(provider.models[2].contextWindow, 32768);
-    assert.deepEqual(provider.models[3].input, ['text']);
-    assert.equal(provider.models[3].contextWindow, 32768);
-    assert.deepEqual(provider.models[4].input, ['text', 'image']);
-    assert.equal(provider.models[4].contextWindow, 32768);
-    assert.deepEqual(provider.models[5].input, ['text', 'image']);
-    assert.equal(provider.models[5].contextWindow, 256000);
-    for (const model of provider.models.slice(5, 9)) {
-      assert.deepEqual(model.input, ['text', 'image']);
-      assert.equal(model.contextWindow, 256000);
-      assert.deepEqual(model.reasoningEfforts, { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' });
-    }
-    assert.deepEqual(provider.models[9].input, ['text']);
-    assert.equal(provider.models[9].contextWindow, 128000);
-    assert.equal(settings['agent-default-model'].provider, 'webagent');
-    assert.equal(raw.includes('secret-token'), false);
-    assert.equal(service.status().installed, true);
-    assert.equal(service.status().web_models_registered, false);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+test('DeepSeek history reconciliation follows the active branch and selects the latest exact user turn', () => {
+  const payload = { data: { biz_data: {
+    current_message_id: 'a2',
+    chat_messages: [
+      { message_id: 'u1', role: 'user', content: 'same prompt' },
+      { message_id: 'a1', parent_message_id: 'u1', role: 'assistant', content: 'old answer', status: 'FINISHED' },
+      { message_id: 'u2', parent_message_id: 'a1', role: 'user', content: 'same prompt' },
+      { message_id: 'stale', parent_message_id: 'u2', role: 'assistant', content: 'wrong branch', status: 'FINISHED' },
+      { message_id: 'a2', parent_message_id: 'u2', role: 'assistant', content: 'recovered answer', thinking_content: 'recovered thought', status: 'FINISHED' }
+    ]
+  } } };
+  assert.deepEqual(activeDeepseekHistoryMessages(payload).map((message) => message.id), ['u1', 'a1', 'u2', 'a2']);
+  assert.deepEqual(reconcileDeepseekHistory(payload, 'same prompt'), {
+    matched: true,
+    assistantFound: true,
+    complete: true,
+    markdown: 'recovered answer',
+    reasoning: 'recovered thought',
+    status: 'FINISHED',
+    userMessageId: 'u2',
+    assistantMessageId: 'a2'
+  });
 });
 
-test('DeepSeek Harness host overlay registers the WebAgent provider at boot', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-overlay-'));
-  const home = path.join(root, 'home');
-  const pluginRoot = path.join(root, 'integrations', 'dsh-webagent-plugin');
-  try {
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(pluginRoot, 'package.json'), JSON.stringify({ name: '@webagent/dsh-integration', version: '1.0.0' }), 'utf8');
-    fs.mkdirSync(path.join(home, 'profiles', 'web'), { recursive: true });
-    fs.writeFileSync(path.join(home, 'profiles', 'web', 'package.json'), JSON.stringify({ dependencies: { '@webagent/dsh-integration': 'link:' + pluginRoot } }), 'utf8');
-    const service = new DeepSeekHarnessService({ root, home, runtimePort: 5858, runtimeToken: 'secret-token' });
-    await service._ensurePlugin({});
-    const raw = fs.readFileSync(service._pluginPatch(), 'utf8');
-    const overlay = yaml.load(raw);
-    const adapter = overlay.find((entry) => entry.id === 'llm-pi-ai');
-    const defaultModel = overlay.find((entry) => entry.id === 'agent-default-model');
-    const web = overlay.find((entry) => entry.id === 'web');
-    const paidSearch = overlay.find((entry) => entry.id === 'web-search-deepseek');
-    const webTool = overlay.find((entry) => entry.id === 'tool-web');
-    assert.deepEqual(adapter.config.providers.webagent.models.map((model) => model.id), ['deepseek.web', 'qwen.3.7', 'qwen.3.8-max', 'qwen.3.7-max', 'qwen.3.6-flash', 'qwen.gateway.3.8-max', 'qwen.gateway.3.7-max', 'qwen.gateway.3.7-plus', 'qwen.gateway.3.6-plus', 'chatgpt.web']);
-    assert.equal(adapter.config.providers.webagent.apiKeyEnv, 'WEBAGENT_DSH_TOKEN');
-    assert.deepEqual(defaultModel.config, { provider: 'webagent', model: 'deepseek.web' });
-    assert.deepEqual(web.config, { searchProvider: 'webagent-web-search', fetchProvider: 'http' });
-    assert.equal(paidSearch.disabled, true);
-    assert.deepEqual(webTool.config, { fetch: true, searchTimeoutMs: 180000, searchMaxQueries: 2 });
-    assert.equal(raw.includes('secret-token'), false);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('DeepSeek Harness removes only retired presets previously managed by WebAgent', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-presets-'));
-  const home = path.join(root, 'home');
-  try {
-    const managedRoot = path.join(home, '.agent-presets');
-    for (const id of ['anchored-standard', 'router-standard']) {
-      const preset = path.join(managedRoot, id);
-      fs.mkdirSync(preset, { recursive: true });
-      fs.writeFileSync(path.join(preset, '.webagent-managed.json'), JSON.stringify({ product: 'WebAgent', id }), 'utf8');
-      fs.writeFileSync(path.join(preset, 'preset.yml'), 'name: Retired\n', 'utf8');
-    }
-    const service = new DeepSeekHarnessService({ root, home, runtimePort: 5858, runtimeToken: 'secret-token' });
-    assert.deepEqual(service._removeRetiredManagedPresets(), ['anchored-standard', 'router-standard']);
-    assert.equal(fs.existsSync(path.join(managedRoot, 'anchored-standard')), false);
-    assert.equal(fs.existsSync(path.join(managedRoot, 'router-standard')), false);
-    assert.deepEqual(service.status().presets, []);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('Linux cleanup removes only the WebAgent-owned redundant minimal preset', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-linux-minimal-'));
-  const home = path.join(root, 'home');
-  try {
-    const preset = path.join(home, '.agent-presets', 'webagent-minimal-stable');
-    fs.mkdirSync(preset, { recursive: true });
-    fs.writeFileSync(path.join(preset, '.webagent-managed.json'), JSON.stringify({ product: 'WebAgent', id: 'webagent-minimal-stable' }), 'utf8');
-    fs.writeFileSync(path.join(preset, 'preset.yml'), 'name: managed\n', 'utf8');
-    const service = new DeepSeekHarnessService({ root, home, runtimePort: 5858, runtimeToken: 'token' });
-    const removed = service._removeRetiredManagedPresets(['webagent-minimal-stable']);
-    assert.ok(removed.includes('webagent-minimal-stable'));
-    assert.equal(fs.existsSync(preset), false);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('DeepSeek Harness preserves retired presets it does not own', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-user-preset-'));
-  const home = path.join(root, 'home');
-  try {
-    const custom = path.join(home, '.agent-presets', 'anchored-standard');
-    fs.mkdirSync(custom, { recursive: true });
-    fs.writeFileSync(path.join(custom, 'preset.yml'), 'name: User Custom\n', 'utf8');
-    const service = new DeepSeekHarnessService({ root, home, runtimePort: 5858, runtimeToken: 'secret-token' });
-    const removed = service._removeRetiredManagedPresets();
-    assert.equal(fs.readFileSync(path.join(custom, 'preset.yml'), 'utf8'), 'name: User Custom\n');
-    assert.deepEqual(removed, []);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('WebAgent installs a managed minimal preset backed by fresh-process pwsh', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-stable-minimal-'));
-  const service = new DeepSeekHarnessService({ root: path.join(__dirname, '..', '..'), runtimePort: 5858, runtimeToken: 'test-token', home });
-  try {
-    assert.equal(service._installStableMinimalPreset(), true);
-    const presetRoot = path.join(home, '.agent-presets', 'webagent-minimal-stable');
-    const composition = fs.readFileSync(path.join(presetRoot, 'agent.cordis.yml'), 'utf8');
-    assert.match(composition, /@deepseek-ai\/dsh-tool-pwsh'/);
-    assert.doesNotMatch(composition, /pwsh-persistent/);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(presetRoot, '.webagent-managed.json'), 'utf8')).product, 'WebAgent');
-  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+test('DeepSeek history distinguishes an unpersisted turn from a persisted turn without an answer', () => {
+  const payload = { data: { biz_data: { messages: [{ id: 'u1', role: 'user', content: 'persisted' }] } } };
+  assert.deepEqual(reconcileDeepseekHistory(payload, 'persisted'), {
+    matched: true,
+    assistantFound: false,
+    complete: false,
+    userMessageId: 'u1'
+  });
+  assert.equal(reconcileDeepseekHistory(payload, 'missing').matched, false);
 });
 
 test('DeepSeek webpage new-chat transport bypasses the legacy default prompt builder', () => {
@@ -584,6 +471,87 @@ test('an empty DeepSeek SSE with a visible frequency limit fails over before emp
   assert.equal(limitProbes, 1);
 });
 
+test('an empty DeepSeek SSE is recovered from the exact durable history turn after reload', async () => {
+  const sentText = 'ordered DSH delta';
+  const emptyRaw = ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  let reloads = 0;
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes('__dsagent_sendMessage')) return { success: true };
+        if (source.includes('__dsagent_getUsageLimitState')) return null;
+        if (source.includes("var labels = ['继续生成'")) return { found: false, clicked: false };
+        return null;
+      }
+    },
+    resetRawCompletionStreams: async () => ({ cdp: 0, page: 0 }),
+    completionStreamAfter: async () => reloads ? null : ({ source: 'cdp', seq: 1, text: emptyRaw, done: true, logicalDone: true }),
+    reloadConversationHistory: async () => {
+      reloads += 1;
+      return { seq: reloads, source: 'page-history', json: { data: { biz_data: { messages: [
+        { id: 'u1', role: 'user', content: sentText },
+        { id: 'a1', parent_id: 'u1', role: 'assistant', content: 'history recovered answer', thinking_content: 'history recovered thought', status: 'FINISHED' }
+      ] } } } };
+    }
+  };
+  const server = createDeepseekServer(view);
+  assert.equal((await server.invoke('deepseek.web', 'sendMessage', { text: sentText })).success, true);
+  const waited = await server.invoke('deepseek.web', 'waitForDone', {
+    timeout: 5000,
+    initialActivityTimeout: 1000,
+    _conversationUrl: 'https://chat.deepseek.com/a/chat/s/session-1'
+  });
+  assert.equal(waited.success, true);
+  assert.equal(waited.data.historyRecovered, true);
+  assert.equal(reloads, 1);
+  const extracted = await server.invoke('deepseek.web', 'extractResponse', {});
+  assert.equal(extracted.success, true);
+  assert.equal(extracted.data.markdown, 'history recovered answer');
+  assert.equal(extracted.data.think, 'history recovered thought');
+  assert.equal(extracted.data.historyRecovered, true);
+  assert.equal(extracted.data.rawTransport, false);
+});
+
+test('a persisted DeepSeek user turn without an answer is not classified as safe to resend', async () => {
+  const sentText = 'do not duplicate this turn';
+  const emptyRaw = ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [] } } }), '', 'event: close', 'data: {}', ''].join('\n');
+  let reloads = 0;
+  const view = {
+    webContents: {
+      isDestroyed: () => false,
+      executeJavaScript: async (source) => {
+        if (source === '1') return 1;
+        if (source.includes('__dsagent_sendMessage')) return { success: true };
+        if (source.includes('__dsagent_getUsageLimitState')) return null;
+        if (source.includes('__dsagent_isExecuting')) return false;
+        if (source.includes("var labels = ['继续生成'")) return { found: false, clicked: false };
+        return null;
+      }
+    },
+    resetRawCompletionStreams: async () => ({ cdp: 0, page: 0 }),
+    completionStreamAfter: async () => ({ source: 'cdp', seq: 1, text: emptyRaw, done: true, logicalDone: true }),
+    reloadConversationHistory: async () => {
+      reloads += 1;
+      return { seq: reloads, source: 'page-history', json: { data: { biz_data: { messages: [
+        { id: 'u1', role: 'user', content: sentText }
+      ] } } } };
+    }
+  };
+  const server = createDeepseekServer(view);
+  await server.invoke('deepseek.web', 'sendMessage', { text: sentText });
+  const waited = await server.invoke('deepseek.web', 'waitForDone', {
+    timeout: 6000,
+    _conversationUrl: 'https://chat.deepseek.com/a/chat/s/session-2'
+  });
+  assert.equal(waited.success, false);
+  assert.equal(waited.code, 'provider_history_incomplete');
+  assert.equal(waited.data.historyMatched, true);
+  assert.equal(waited.data.originalCode, 'provider_sse_empty');
+  assert.equal(reloads, 2);
+});
+
 test('the DeepSeek webpage context-limit banner becomes a canonical compaction error', async () => {
   const emptyRaw = ['data: ' + JSON.stringify({ v: { response: { status: 'FINISHED', fragments: [] } } }), '', 'event: close', 'data: {}', ''].join('\n');
   const view = {
@@ -734,327 +702,12 @@ test('DSH repairs malformed web-model JSON before strict tool-call validation', 
   assert.equal(parseDshToolCall('{ definitely not recoverable'), null);
 });
 
-test('WebAgent DSH plugin contributes a provider-scoped webpage transport prompt', async () => {
-  const file = path.join(__dirname, '..', '..', 'integrations', 'dsh-webagent-plugin', 'lib', 'index.js');
-  const plugin = await import(pathToFileURL(file).href + '?test=' + Date.now());
-  let section = null;
-  const tools = [];
-  let searchProvider = null;
-  const ctx = {
-    systemPrompt: { section: (value) => { section = value; return () => {}; } },
-    tools: { register: (value) => { tools.push(value); return () => {}; } },
-    web: { registerSearchProvider: (value) => { searchProvider = value; return () => {}; } },
-    effect: (factory) => factory()
-  };
-  plugin.apply(ctx);
-  assert.equal(section.complete, undefined);
-  const webText = section.text({ agent: { options: { provider: 'webagent', model: 'deepseek.web' } } });
-  assert.match(webText, /WEBAGENT_DSH_BRIDGE_V3/);
-  assert.match(webText, /<｜DSML｜tool_calls>/);
-  assert.doesNotMatch(webText, /dsh-tool-call/);
-  assert.match(webText, /no alternative tool protocol/);
-  assert.match(webText, /Preserve arguments exactly/);
-  assert.ok(webText.length < 2400);
-  const qwenText = section.text({ agent: { options: { provider: 'webagent', model: 'qwen.text.web.3.8-max' } } });
-  assert.match(qwenText, /WEBAGENT_QWEN_NATIVE_TOOLS_V2/);
-  assert.match(qwenText, /<tool_call>/);
-  assert.match(qwenText, /native JSON tool-call form/);
-  assert.doesNotMatch(qwenText, /<｜DSML｜tool_calls>/);
-  assert.equal(section.text({ agent: { options: { provider: 'deepseek-official' } } }), '');
-  assert.deepEqual(tools.map((tool) => tool.name), ['qianwen_text', 'qianwen_search', 'qianwen_image', 'qianwen_voice']);
-  assert.equal(searchProvider.id, 'webagent-web-search');
-});
-
-test('WebAgent image tools are hidden only from minimal preset scopes', async () => {
-  const file = path.join(__dirname, '..', '..', 'integrations', 'dsh-webagent-plugin', 'lib', 'index.js');
-  const plugin = await import(pathToFileURL(file).href + '?minimal-scope=' + Date.now());
-  let createdHandler = null;
-  let preset = 'minimal';
-  const restrictions = [];
-  const agent = { ctx: { tools: { restrict: (value) => { restrictions.push(value); return () => {}; } } } };
-  plugin.apply({
-    systemPrompt: { section: () => () => {} },
-    tools: { register: () => () => {}, get: () => ({}) },
-    web: { registerSearchProvider: () => () => {} },
-    effect: (factory) => factory(),
-    get: (name) => name === 'agentPresets' ? { composedPreset: () => preset } : undefined,
-    on: (event, handler) => { if (event === 'agent/created') createdHandler = handler; return () => {}; }
-  });
-  createdHandler({ agent });
-  assert.deepEqual(restrictions, [{ deny: ['qianwen_text', 'qianwen_search', 'qianwen_image', 'qianwen_voice'] }]);
-  preset = 'standard';
-  createdHandler({ agent });
-  assert.equal(restrictions.length, 1);
-});
-
-test('WebAgent DSH web search uses an ephemeral native webpage search and returns source URLs', async () => {
-  const file = path.join(__dirname, '..', '..', 'integrations', 'dsh-webagent-plugin', 'lib', 'index.js');
-  const plugin = await import(pathToFileURL(file).href + '?search=' + Date.now());
-  let searchProvider = null;
-  let requestBody = null;
-  let requestHeaders = null;
-  const oldFetch = global.fetch;
-  const oldUrl = process.env.WEBAGENT_RUNTIME_URL;
-  const oldToken = process.env.WEBAGENT_DSH_TOKEN;
-  global.fetch = async (_url, options) => {
-    requestBody = JSON.parse(options.body);
-    requestHeaders = options.headers;
-    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Official docs: [Harness](https://github.com/deepseek-ai/deepseek-harness). More at https://deepseek-harness.github.io/deepseek-harness/.' } }] }) };
-  };
-  process.env.WEBAGENT_RUNTIME_URL = 'http://127.0.0.1:5858';
-  process.env.WEBAGENT_DSH_TOKEN = 'test-token';
-  try {
-    plugin.apply({
-      systemPrompt: { section: () => () => {} },
-      tools: { register: () => () => {} },
-      web: { registerSearchProvider: (value) => { searchProvider = value; return () => {}; } },
-      effect: (factory) => factory()
-    });
-    assert.equal(searchProvider.available(), true);
-    const result = await searchProvider.search({ query: 'DeepSeek Harness repository', maxResults: 4 }, new AbortController().signal);
-    assert.equal(requestBody.web_search, true);
-    assert.equal(requestBody.stream, false);
-    assert.equal(requestHeaders['X-WebAgent-Ephemeral'], 'true');
-    assert.deepEqual(result.sources, [
-      { url: 'https://github.com/deepseek-ai/deepseek-harness', title: 'Harness' },
-      { url: 'https://deepseek-harness.github.io/deepseek-harness/' }
-    ]);
-    assert.equal(result.truncated, false);
-  } finally {
-    global.fetch = oldFetch;
-    if (oldUrl === undefined) delete process.env.WEBAGENT_RUNTIME_URL; else process.env.WEBAGENT_RUNTIME_URL = oldUrl;
-    if (oldToken === undefined) delete process.env.WEBAGENT_DSH_TOKEN; else process.env.WEBAGENT_DSH_TOKEN = oldToken;
-  }
-});
-
-test('DSH native web search routes through Qianwen when selected in settings', async () => {
-  const file = path.join(__dirname, '..', '..', 'integrations', 'dsh-webagent-plugin', 'lib', 'index.js');
-  const plugin = await import(pathToFileURL(file).href + '?qwen-native-search=' + Date.now());
-  let searchProvider = null;
-  let requestBody = null;
-  const oldFetch = global.fetch;
-  const oldUrl = process.env.WEBAGENT_RUNTIME_URL;
-  const oldToken = process.env.WEBAGENT_DSH_TOKEN;
-  global.fetch = async (_url, options) => {
-    requestBody = JSON.parse(options.body);
-    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Qwen result [source](https://example.test/qwen)' } }] }) };
-  };
-  process.env.WEBAGENT_RUNTIME_URL = 'http://127.0.0.1:5858';
-  process.env.WEBAGENT_DSH_TOKEN = 'test-token';
-  try {
-    plugin.apply({
-      systemPrompt: { section: () => () => {} },
-      tools: { register: () => () => {} },
-      web: { registerSearchProvider: (value) => { searchProvider = value; return () => {}; } },
-      effect: (factory) => factory(),
-      inject: (_services, callback) => callback({ settings: { installSection: (_owner, _namespace, _schema, _base, hooks) => hooks.setSource(() => ({ provider: 'qianwen' })) } })
-    });
-    const result = await searchProvider.search({ query: 'Qwen route', maxResults: 3 });
-    assert.equal(requestBody.model, 'qwen.search.web');
-    assert.equal(requestBody.web_search, undefined);
-    assert.equal(requestBody.messages[0].content, 'Qwen route');
-    assert.deepEqual(result.sources, [{ url: 'https://example.test/qwen', title: 'source' }]);
-  } finally {
-    global.fetch = oldFetch;
-    if (oldUrl === undefined) delete process.env.WEBAGENT_RUNTIME_URL; else process.env.WEBAGENT_RUNTIME_URL = oldUrl;
-    if (oldToken === undefined) delete process.env.WEBAGENT_DSH_TOKEN; else process.env.WEBAGENT_DSH_TOKEN = oldToken;
-  }
-});
-
-test('Qianwen image tool uses the webpage model and saves generated images in the workspace', async () => {
-  const file = path.join(__dirname, '..', '..', 'integrations', 'dsh-webagent-plugin', 'lib', 'index.js');
-  const plugin = await import(pathToFileURL(file).href + '?qwen-image=' + Date.now());
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-qwen-image-'));
-  const tools = [];
-  let requestBody = null;
-  const oldFetch = global.fetch;
-  const oldUrl = process.env.WEBAGENT_RUNTIME_URL;
-  const oldToken = process.env.WEBAGENT_DSH_TOKEN;
-  const oldCwd = process.cwd();
-  global.fetch = async (url, options) => {
-    if (String(url).startsWith('http://127.0.0.1:5858/')) {
-      requestBody = JSON.parse(options.body);
-      return { ok: true, status: 200, json: async () => ({ images: ['https://workspace-zb-cdn.qianwen.com/generated.png'], choices: [{ message: { content: '图片已生成', images: ['https://workspace-zb-cdn.qianwen.com/generated.png'] } }] }) };
-    }
-    return { ok: true, status: 200, headers: { get: (name) => String(name).toLowerCase() === 'content-type' ? 'image/png' : '' }, arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer };
-  };
-  process.env.WEBAGENT_RUNTIME_URL = 'http://127.0.0.1:5858';
-  process.env.WEBAGENT_DSH_TOKEN = 'test-token';
-  process.chdir(root);
-  try {
-    plugin.apply({
-      systemPrompt: { section: () => () => {} },
-      tools: { register: (value) => { tools.push(value); return () => {}; }, get: () => ({}) },
-      web: { registerSearchProvider: () => () => {} },
-      effect: (factory) => factory()
-    });
-    const tool = tools.find((item) => item.name === 'qianwen_image');
-    assert.ok(tool);
-    const result = await tool.execute({ prompt: 'A clean 16:9 blue technology illustration', output_dir: 'assets', filename_prefix: 'cover' }, { signal: new AbortController().signal });
-    assert.equal(requestBody.model, 'qwen.image.web');
-    assert.match(requestBody.messages[0].content, /<webagent_qwen_image model="qwen-image-3\.0-pro" size="auto">/);
-    assert.equal(result.model, 'qwen.image.web');
-    assert.equal(result.files.length, 1);
-    assert.ok(fs.existsSync(result.files[0]));
-    assert.ok(path.resolve(result.files[0]).startsWith(path.join(root, 'assets') + path.sep));
-  } finally {
-    process.chdir(oldCwd);
-    global.fetch = oldFetch;
-    if (oldUrl === undefined) delete process.env.WEBAGENT_RUNTIME_URL; else process.env.WEBAGENT_RUNTIME_URL = oldUrl;
-    if (oldToken === undefined) delete process.env.WEBAGENT_DSH_TOKEN; else process.env.WEBAGENT_DSH_TOKEN = oldToken;
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('Qianwen text, search and voice tools call their isolated chat.qwen.ai capabilities', async () => {
-  const file = path.join(__dirname, '..', '..', 'integrations', 'dsh-webagent-plugin', 'lib', 'index.js');
-  const plugin = await import(pathToFileURL(file).href + '?qwen-capabilities=' + Date.now());
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-qwen-capabilities-'));
-  const tools = [];
-  const requests = [];
-  const oldFetch = global.fetch;
-  const oldUrl = process.env.WEBAGENT_RUNTIME_URL;
-  const oldToken = process.env.WEBAGENT_DSH_TOKEN;
-  const oldCwd = process.cwd();
-  global.fetch = async (url, options) => {
-    const body = JSON.parse(options.body);
-    requests.push({ url: String(url), body });
-    if (String(url).endsWith('/api/qwen/voice/transcriptions')) return { ok: true, status: 200, json: async () => ({ text: '转写完成', model: 'qwen-asr' }) };
-    const content = body.model === 'qwen.search.web' ? '结果 [来源](https://example.test/source)' : '普通文本结果';
-    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content } }] }) };
-  };
-  process.env.WEBAGENT_RUNTIME_URL = 'http://127.0.0.1:5858';
-  process.env.WEBAGENT_DSH_TOKEN = 'test-token';
-  process.chdir(root);
-  fs.writeFileSync(path.join(root, 'voice.wav'), Buffer.from('RIFF-test'));
-  try {
-    plugin.apply({
-      systemPrompt: { section: () => () => {} },
-      tools: { register: (value) => { tools.push(value); return () => {}; }, get: () => ({}) },
-      web: { registerSearchProvider: () => () => {} },
-      effect: (factory) => factory()
-    });
-    const textTool = tools.find((tool) => tool.name === 'qianwen_text');
-    const searchTool = tools.find((tool) => tool.name === 'qianwen_search');
-    const voiceTool = tools.find((tool) => tool.name === 'qianwen_voice');
-    assert.equal(await textTool.execute({ prompt: '你好', model: 'Qwen3.8-Max' }, {}), '普通文本结果');
-    const searched = await searchTool.execute({ query: '测试', max_results: 4 }, {});
-    assert.deepEqual(searched.sources, [{ url: 'https://example.test/source', title: '来源' }]);
-    const voice = await voiceTool.execute({ audio_path: 'voice.wav', language: 'zh-CN' }, {});
-    assert.equal(voice.text, '转写完成');
-    assert.deepEqual(requests.slice(0, 2).map((item) => item.body.model), ['qwen.text.web.3.8-max', 'qwen.search.web']);
-    assert.match(requests[2].url, /\/api\/qwen\/voice\/transcriptions$/);
-    assert.equal(requests[2].body.filename, 'voice.wav');
-  } finally {
-    process.chdir(oldCwd);
-    global.fetch = oldFetch;
-    if (oldUrl === undefined) delete process.env.WEBAGENT_RUNTIME_URL; else process.env.WEBAGENT_RUNTIME_URL = oldUrl;
-    if (oldToken === undefined) delete process.env.WEBAGENT_DSH_TOKEN; else process.env.WEBAGENT_DSH_TOKEN = oldToken;
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('WebAgent DSH integration contributes a native web-search settings card', () => {
-  const root = path.join(__dirname, '..', '..', 'integrations', 'dsh-webagent-plugin');
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  assert.equal(manifest.dsh.client.platform, 'web');
-  assert.equal(manifest.exports['./client'], './lib/client.js');
-  const client = fs.readFileSync(path.join(root, 'lib', 'client.js'), 'utf8');
-  assert.match(client, /webagent-search/);
-  assert.match(client, /DeepSeek 网页搜索/);
-  assert.match(client, /Qwen 网页搜索/);
-});
-
 test('DeepSeek SSE transport disables legacy clipboard automation', () => {
   const injection = fs.readFileSync(path.join(__dirname, '..', '..', 'inject-deepseek.js'), 'utf8');
   assert.match(injection, /let enableAutoExec = false;/);
   const extractor = injection.slice(injection.indexOf('window.__dsagent_extractLastResponse ='), injection.indexOf('// 上传文件到当前对话'));
   assert.ok(extractor.indexOf('clipboardUsed: false') < extractor.indexOf('clipboardSave()'));
-  const daemon = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'node', 'daemon.js'), 'utf8');
+  const daemon = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'node', 'dsh-core.js'), 'utf8');
   const hostConfig = daemon.slice(daemon.indexOf('const rawHost = new PlaywrightProviderHost'), daemon.indexOf('const createWorker ='));
   assert.doesNotMatch(hostConfig, /clipboardBridge/);
-});
-
-test('DeepSeek Harness resolves the selected session to its owning workspace', async () => {
-  const workspacePath = path.join(os.tmpdir(), 'webagent-current-dsh-workspace');
-  const service = new DeepSeekHarnessService({ root: process.cwd(), runtimePort: 5858, runtimeToken: 'token' });
-  service.url = 'http://127.0.0.1:3080';
-  service._readWorkspaceBaseline = async () => ({ items: [{
-      workspaceId: 'workspace-current',
-      path: workspacePath,
-      title: 'Current project',
-      sessionIds: ['session-current', 'session-other']
-    }], archivedSessionIds: [] });
-  assert.deepEqual(await service.workspaceForSession('session-current'), {
-    session_id: 'session-current', workspace_id: 'workspace-current', path: workspacePath, title: 'Current project'
-  });
-  assert.equal(service.isKnownWorkspace(workspacePath), true);
-  assert.equal(await service.workspaceForSession('session-missing'), null);
-});
-
-test('Harness archive synchronization uses the official external API without a client plugin', async () => {
-  const http = require('http');
-  const archivedId = 'session-upstream-archive';
-  const received = [];
-  const runtime = http.createServer((req, res) => {
-    received.push({ url: req.url, authorization: req.headers.authorization });
-    req.resume();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ archived: archivedId, remote_deleted: true }));
-  });
-  const archived = [];
-  await new Promise((resolve) => runtime.listen(0, '127.0.0.1', resolve));
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-archive-'));
-  const service = new DeepSeekHarnessService({ root, runtimePort: runtime.address().port, runtimeToken: 'archive-token' });
-  service.url = 'http://127.0.0.1:3080';
-  service._readWorkspaceBaseline = async () => ({ items: [], archivedSessionIds: [...archived] });
-  try {
-    service._startArchiveSync();
-    const baselineDeadline = Date.now() + 3000;
-    while (!service.archiveSyncInitialized && Date.now() < baselineDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
-    archived.push(archivedId);
-    const deadline = Date.now() + 3000;
-    while (!received.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(received.length, 1);
-    assert.equal(received[0].url, '/api/harness/sessions/' + archivedId + '/archive');
-    assert.equal(received[0].authorization, 'Bearer archive-token');
-  } finally {
-    service._stopArchiveSync();
-    await new Promise((resolve) => runtime.close(resolve));
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('DeepSeek Harness port selection stays on loopback and skips occupied ports', async () => {
-  const net = require('net');
-  const blocker = net.createServer();
-  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
-  const occupied = blocker.address().port;
-  try { assert.equal(await availablePort(occupied), occupied + 1); }
-  finally { await new Promise((resolve) => blocker.close(resolve)); }
-});
-
-test('DeepSeek Harness recovers a deleted requested workspace before spawning', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-dsh-workspace-recovery-'));
-  const fallback = path.join(root, 'fallback');
-  fs.mkdirSync(fallback, { recursive: true });
-  const service = new DeepSeekHarnessService({
-    root,
-    defaultWorkspace: fallback,
-    runtimePort: 5858,
-    runtimeToken: 'token'
-  });
-  const missing = path.join(root, 'deleted-acceptance-project');
-  assert.equal(service._isDirectory(missing), false);
-  assert.equal(service._isDirectory(fallback), true);
-
-  service.workspace = service._resolveWorkspace(missing);
-
-  assert.equal(service.status().workspace, fallback);
-  assert.deepEqual(service.status().workspace_recovery, {
-    code: 'harness_workspace_recovered',
-    requested: missing,
-    fallback
-  });
-  fs.rmSync(root, { recursive: true, force: true });
 });

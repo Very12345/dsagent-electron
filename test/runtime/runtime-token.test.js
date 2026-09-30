@@ -7,7 +7,6 @@ const os = require('os');
 const path = require('path');
 const { resolveRuntimeToken } = require('../../src/runtime/runtime-token');
 const { corePaths } = require('../../src/runtime/dsh-core-runtime');
-const { runtimePaths } = require('../../src/runtime/bootstrap');
 
 function withHome(run) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-token-'));
@@ -25,13 +24,10 @@ function clearEnvToken() {
   };
 }
 
-test('both runtimes place the token file under the runtime home', () => {
+test('the provider runtime places its token file under the configured home', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'webagent-token-'));
   try {
-    // The DSH-core runtime and the full runtime must agree, or a machine that
-    // switches between them would rotate the token on every switch.
     assert.equal(corePaths({ home }).tokenFile, path.join(home, 'runtime-token'));
-    assert.equal(runtimePaths({ home }).tokenFile, path.join(home, 'runtime-token'));
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 

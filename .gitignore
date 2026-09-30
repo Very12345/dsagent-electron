@@ -1,14 +1,13 @@
 node_modules/
-dist/
-dist-renderer/
-dist-cli/
-.artifacts/
-*.exe
 *.log
+*.tgz
 .env
-fingerprints.json
-qqbot1.js
+.env.*
 __pycache__/
 *.pyc
-test-results/
-playwright-report/
+
+# DSH credential stores are runtime data.
+.credentials.yaml
+.credentials.yaml.*
+**/.credentials.yaml
+**/.credentials.yaml.*

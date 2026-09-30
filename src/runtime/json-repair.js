@@ -1,7 +1,7 @@
-// json-repair.js — 工具调用 JSON 修复链（P0: CLI 与 inject 共用）
+// JSON repair for webpage tool-call transport.
 // 参考 atomcode 的 turn/json_repair.rs 设计
 // 处理：Windows 路径误转义、trailing comma、unquoted key、markdown fence、单引号
-// 纯 Node 模块，无 window/DOM 依赖，供 bin/dsagent-cli.js 与 tools/tool-parser.js 复用
+// Shared Node parser; injected browser code retains its browser-safe fallback.
 'use strict';
 
 // 第0层：Windows 路径预逃逸

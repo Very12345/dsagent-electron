@@ -34,6 +34,5 @@ fi
 exec node "$HOME/webagent-dsh-core/node_modules/webagent-dsh-core/src/node/dsh-core.js" \
   --workspace "$workspace" \
   --port "${WEBAGENT_PORT:-5858}" \
-  --harness-port "${WEBAGENT_HARNESS_PORT:-3080}" \
   "${browser_args[@]}" \
   --no-open
