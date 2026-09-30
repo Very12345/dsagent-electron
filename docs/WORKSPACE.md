@@ -1,6 +1,6 @@
 # DSH 插件项目总览
 
-这组项目维护四个独立的 DeepSeek Harness 插件，以及网页模型插件所需的浏览器传输后端。DSH 由官方桌面版或 CLI 提供；这些仓库不维护 DSH 本体，旧 WebAgent 独立应用已退出维护。
+这组项目维护五个独立的 DeepSeek Harness 插件，以及网页模型插件所需的浏览器传输后端。DSH 由官方桌面版或 CLI 提供；这些仓库不维护 DSH 本体，旧 WebAgent 独立应用已退出维护。
 
 ## 仓库与职责
 
@@ -10,6 +10,7 @@
 | [dsh-lark-link](https://github.com/Very12345/dsh-lark-link) | 飞书/Lark 桥接、流式卡片、多应用隔离及会话管理 |
 | [dsh-archive-delete](https://github.com/Very12345/dsh-archive-delete) | 已归档会话的查看、删除及归档登记同步 |
 | [dsh-bash-windows](https://github.com/Very12345/dsh-bash-windows) | Windows Git Bash 终端执行器及会话 preset |
+| [dsh-computer-use-windows](https://github.com/Very12345/dsh-computer-use-windows) | Windows 桌面应用操作、窗口绑定、截图及输入验证；不包含浏览器操作 |
 | [dsagent-electron](https://github.com/Very12345/dsagent-electron) | DeepSeek/Qwen 网页模型传输后端；沿用历史目录及 npm 包名 |
 
 每个插件都有自己的 Git 仓库、依赖清单和分发文件，分别维护版本。它们不组成 npm monorepo，也不要求安装旧 WebAgent 应用。

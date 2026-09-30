@@ -10,6 +10,7 @@
 | 飞书/Lark 桥接 | [dsh-lark-link](https://github.com/Very12345/dsh-lark-link) |
 | 已归档会话删除 | [dsh-archive-delete](https://github.com/Very12345/dsh-archive-delete) |
 | Windows Git Bash 终端及会话 preset | [dsh-bash-windows](https://github.com/Very12345/dsh-bash-windows) |
+| Windows 桌面应用操作与输入验证（不含浏览器） | [dsh-computer-use-windows](https://github.com/Very12345/dsh-computer-use-windows) |
 
 项目总体关系、兼容目标和各仓库的验证入口见 [项目总览](https://github.com/Very12345/dsagent-electron/blob/main/docs/WORKSPACE.md)。
 
