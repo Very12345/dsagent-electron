@@ -2,7 +2,7 @@
 
 此仓库为独立插件 [@very12345/dsh-webagent-integration](https://github.com/Very12345/dsh-webagent-integration) 提供 DeepSeek / Qwen 浏览器传输。历史目录 `dsagent-electron` 和 npm 包名 `webagent-dsh-core` 暂时保留，便于已有安装衔接。
 
-旧 WebAgent 独立应用已退出维护。当前入口只启动 provider API；DSH 使用官方桌面版或 CLI 单独运行，并通过独立插件接入。后端不捆绑 DSH，不安装插件、不写 DSH profile、不执行本地 Agent 工具。工作区的插件分别维护，职责如下：
+旧 WebAgent 独立应用已退出维护。当前入口只启动 provider API；DSH 使用官方桌面版或 CLI 单独运行，并通过独立插件接入。后端不捆绑 DSH，不安装插件、不写 DSH profile、不执行本地 Agent 工具。工作区的七个插件分别维护，职责如下：
 
 | 插件 | 仓库 |
 | --- | --- |
@@ -11,6 +11,8 @@
 | 已归档会话删除 | [dsh-archive-delete](https://github.com/Very12345/dsh-archive-delete) |
 | Windows Git Bash 终端及会话 preset | [dsh-bash-windows](https://github.com/Very12345/dsh-bash-windows) |
 | Windows 桌面应用操作与输入验证（不含浏览器） | [dsh-computer-use-windows](https://github.com/Very12345/dsh-computer-use-windows) |
+| SSH Linux/macOS 远程工作区、文件与 Bash、原生终端及会话权限衔接 | [dsh-ssh-workspace](https://github.com/Very12345/dsh-ssh-workspace) |
+| Windows 透明悬浮宠物、任务通知与原生交互、本地识别及系统语音通话 | [dsh-codex-pet](https://github.com/Very12345/dsh-codex-pet) |
 
 项目总体关系、兼容目标和各仓库的验证入口见 [项目总览](https://github.com/Very12345/dsagent-electron/blob/main/docs/WORKSPACE.md)。
 
