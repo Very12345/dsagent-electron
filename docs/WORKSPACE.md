@@ -1,6 +1,6 @@
 # DSH 插件项目总览
 
-这组项目维护七个独立的 DeepSeek Harness 插件，以及网页模型插件所需的浏览器传输后端。DSH 由官方桌面版或 CLI 提供；这些仓库不维护 DSH 本体，旧 WebAgent 独立应用已退出维护。
+这组项目维护八个独立的 DeepSeek Harness 插件，以及网页模型插件所需的浏览器传输后端。DSH 由官方桌面版或 CLI 提供；这些仓库不维护 DSH 本体，旧 WebAgent 独立应用已退出维护。
 
 ## 仓库与职责
 
@@ -13,6 +13,7 @@
 | [dsh-computer-use-windows](https://github.com/Very12345/dsh-computer-use-windows) | Windows 桌面应用操作、窗口绑定、截图及输入验证；不包含浏览器操作 |
 | [dsh-ssh-workspace](https://github.com/Very12345/dsh-ssh-workspace) | SSH Linux/macOS 远程工作区、文件与 Bash、原生终端及会话权限衔接 |
 | [dsh-codex-pet](https://github.com/Very12345/dsh-codex-pet) | Windows 透明悬浮宠物、任务通知与原生交互、本地识别及系统语音通话 |
+| [dsh-skill-manager](https://github.com/Very12345/dsh-skill-manager) | 多来源技能安装、完整资源、文件级更新合并与回退 |
 | [dsagent-electron](https://github.com/Very12345/dsagent-electron) | DeepSeek/Qwen 网页模型传输后端；沿用历史目录及 npm 包名 |
 
 每个插件都有自己的 Git 仓库、依赖清单和分发文件，分别维护版本。它们不组成 npm monorepo，也不要求安装旧 WebAgent 应用。
@@ -27,7 +28,8 @@
   ├─ dsh-bash-windows         → Windows Git Bash
   ├─ dsh-computer-use-windows → Windows 桌面应用
   ├─ dsh-ssh-workspace        → SSH Linux/macOS 项目
-  └─ dsh-codex-pet            → Windows 悬浮宠物与本地语音通话
+  ├─ dsh-codex-pet            → Windows 悬浮宠物与本地语音通话
+  └─ dsh-skill-manager        → 技能安装、更新与回退
 ```
 
 网页模型插件需要单独运行传输后端；其他插件可独立使用，Bash 插件限定 Windows。后端只启动 provider API，不捆绑、启动或管理 DSH，也不执行本地 Agent 工具。
