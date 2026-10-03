@@ -13,7 +13,7 @@
 | Windows 桌面应用操作与输入验证（不含浏览器） | [dsh-computer-use-windows](https://github.com/Very12345/dsh-computer-use-windows) |
 | SSH Linux/macOS 远程工作区、文件与 Bash、原生终端及会话权限衔接 | [dsh-ssh-workspace](https://github.com/Very12345/dsh-ssh-workspace) |
 | Windows 透明悬浮宠物、任务通知与原生交互、本地识别及系统语音通话 | [dsh-codex-pet](https://github.com/Very12345/dsh-codex-pet) |
-| 多来源技能安装、完整资源、文件级更新合并与回退 | [dsh-skill-manager](https://github.com/Very12345/dsh-skill-manager) |
+| 技能商店、Agent 技能库导入、多来源安装与回退 | [dsh-skill-manager](https://github.com/Very12345/dsh-skill-manager) |
 
 项目总体关系、兼容目标和各仓库的验证入口见 [项目总览](https://github.com/Very12345/dsagent-electron/blob/main/docs/WORKSPACE.md)。
 
